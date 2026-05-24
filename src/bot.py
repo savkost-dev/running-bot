@@ -145,15 +145,20 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
 
     if all_set:
+        recovery_name = 'Whoop' if whoop else 'Garmin'
         text = (
-            f"Привет, {user.first_name}!\n\n"
+            f"Привет, {user.first_name}! 👋\n\n"
             "✅ Профиль заполнен\n"
             "✅ Strava подключена\n"
-            f"✅ {'Whoop' if whoop else 'Garmin'} подключён\n\n"
-            "Готов к работе:\n"
-            "/workout — рекомендация на ближайшую тренировку\n"
-            "/long — рекомендация на Long Run\n"
-            "/morning — утренняя проверка восстановления\n\n"
+            f"✅ {recovery_name} подключён\n\n"
+            "Что умею:\n"
+            "🏃 /workout — анализирую форму (CTL/ATL/TSB), восстановление "
+            "и рекомендую группу для тренировки вт/пт со шкалой подходимости\n"
+            "🕐 /long — то же самое для воскресного Long Run "
+            "с рекомендацией стратегии (ровный темп или прогрессия)\n"
+            "☀️ /morning — утром в день тренировки проверяю "
+            f"{recovery_name} и корректирую план\n"
+            "📢 Автоматически уведомляю когда выходит новый анонс тренировки\n\n"
             "Выбери действие 👇"
         )
     else:
