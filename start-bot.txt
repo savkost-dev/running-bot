@@ -1,0 +1,14 @@
+cd D:\
+cd running-bot
+python -m venv venv
+venv\Scripts\activate
+python src/bot.py
+
+
+ssh root@167.172.185.88
+
+systemctl restart running-bot
+journalctl -u running-bot -f
+
+bash
+! cd 'D:\running-bot' ; claude --resume 877b7dee-dc04-4dba-aba2-93a27fd2e937
