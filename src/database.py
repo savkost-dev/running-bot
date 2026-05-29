@@ -140,6 +140,25 @@ def init_db():
                 FOREIGN KEY (user_id) REFERENCES users(id)
             );
 
+            CREATE TABLE IF NOT EXISTS workout_analysis (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                post_id INTEGER UNIQUE NOT NULL,
+                workout_date TEXT,
+                workout_type TEXT,
+                is_valid INTEGER DEFAULT 0,
+                raw_text TEXT,
+                analyzed_json TEXT,
+                extra_groups_json TEXT,
+                analysis_mode TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS bot_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            );
+
         """)
     # Миграции для старых БД
     with get_connection() as conn:
@@ -181,6 +200,12 @@ def init_db():
                 conn.execute(f"ALTER TABLE user_profile ADD COLUMN {col}")
             except Exception:
                 pass
+
+    # Дефолт глобальной настройки режима анализа тренировок
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO bot_settings (key, value) VALUES ('preprocess_mode', 'deep')"
+        )
 
     print("✅ База данных инициализирована")
 
@@ -928,6 +953,108 @@ def get_recent_ratings(limit: int = 20) -> list:
             ORDER BY r.created_at DESC
             LIMIT ?
         """, (limit,)).fetchall()
+
+
+# ── workout_analysis ──────────────────────────────────────────
+
+import logging as _logging
+_db_logger = _logging.getLogger(__name__)
+
+
+def save_workout_analysis(
+    post_id: int,
+    workout_date: str,
+    workout_type: str,
+    is_valid: int,
+    raw_text: str,
+    analyzed_json: str,
+    analysis_mode: str,
+) -> None:
+    """Сохраняет или обновляет анализ тренировки."""
+    now = datetime.now().isoformat()
+    with get_connection() as conn:
+        conn.execute("""
+            INSERT INTO workout_analysis
+                (post_id, workout_date, workout_type, is_valid, raw_text,
+                 analyzed_json, analysis_mode, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(post_id) DO UPDATE SET
+                workout_date   = excluded.workout_date,
+                workout_type   = excluded.workout_type,
+                is_valid       = excluded.is_valid,
+                raw_text       = excluded.raw_text,
+                analyzed_json  = excluded.analyzed_json,
+                analysis_mode  = excluded.analysis_mode,
+                updated_at     = excluded.updated_at
+        """, (post_id, workout_date, workout_type, is_valid, raw_text,
+              analyzed_json, analysis_mode, now, now))
+    _db_logger.info(
+        f"Анализ тренировки сохранён: post_id={post_id}, "
+        f"type={workout_type}, valid={is_valid}, mode={analysis_mode}"
+    )
+
+
+def get_workout_analysis(post_id: int) -> dict | None:
+    """Возвращает анализ по post_id или None."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM workout_analysis WHERE post_id = ?", (post_id,)
+        ).fetchone()
+    if not row:
+        return None
+    cols = ["id", "post_id", "workout_date", "workout_type", "is_valid",
+            "raw_text", "analyzed_json", "extra_groups_json",
+            "analysis_mode", "created_at", "updated_at"]
+    return dict(zip(cols, row))
+
+
+def get_latest_workout_analysis(workout_type: str) -> dict | None:
+    """Последний валидный анализ нужного типа ('interval' или 'long')."""
+    with get_connection() as conn:
+        row = conn.execute("""
+            SELECT * FROM workout_analysis
+            WHERE workout_type = ? AND is_valid = 1
+            ORDER BY workout_date DESC, created_at DESC
+            LIMIT 1
+        """, (workout_type,)).fetchone()
+    if not row:
+        return None
+    cols = ["id", "post_id", "workout_date", "workout_type", "is_valid",
+            "raw_text", "analyzed_json", "extra_groups_json",
+            "analysis_mode", "created_at", "updated_at"]
+    return dict(zip(cols, row))
+
+
+def update_extra_groups(post_id: int, extra_groups_json: str) -> None:
+    """Обновляет extra_groups_json для существующего анализа."""
+    with get_connection() as conn:
+        conn.execute("""
+            UPDATE workout_analysis
+            SET extra_groups_json = ?, updated_at = datetime('now')
+            WHERE post_id = ?
+        """, (extra_groups_json, post_id))
+    _db_logger.info(f"extra_groups обновлены: post_id={post_id}")
+
+
+# ── Глобальные настройки бота ─────────────────────────────────
+
+def get_preprocess_mode() -> str:
+    """Режим анализа тренировок (deep/smart). Глобальная настройка."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT value FROM bot_settings WHERE key = 'preprocess_mode'"
+        ).fetchone()
+    return row[0] if row else "deep"
+
+
+def set_preprocess_mode(mode: str) -> None:
+    """Устанавливает режим анализа тренировок (deep/smart)."""
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO bot_settings (key, value) VALUES ('preprocess_mode', ?)",
+            (mode,)
+        )
+    _db_logger.info(f"preprocess_mode установлен: {mode}")
 
 
 if __name__ == "__main__":

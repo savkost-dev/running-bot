@@ -5,6 +5,19 @@
 
 ---
 
+## [0.14.0] 2026-05-30 — БД для двухшаговой обработки тренировок
+
+### Добавлено
+- Таблица `workout_analysis`: `post_id UNIQUE`, `workout_date`, `workout_type`, `is_valid`, `raw_text`, `analyzed_json`, `extra_groups_json`, `analysis_mode`, `created_at`, `updated_at`
+- Таблица `bot_settings`: глобальные key-value настройки бота
+- `save_workout_analysis(post_id, ...)` — INSERT OR REPLACE с логированием
+- `get_workout_analysis(post_id)` → dict или None
+- `get_latest_workout_analysis(workout_type)` → последний валидный анализ
+- `update_extra_groups(post_id, extra_groups_json)` — обновление доп-групп из комментариев
+- `get_preprocess_mode()` / `set_preprocess_mode(mode)` — глобальный переключатель режима анализа (deep/smart), дефолт `deep`
+
+---
+
 ## [0.13.2] 2026-05-29 — COROS и Polar: сохранение VO2max при обновлении данных
 
 ### Исправлено / Добавлено

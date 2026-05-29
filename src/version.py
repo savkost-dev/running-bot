@@ -1,5 +1,7 @@
-VERSION = "0.13.2"
-BUILD_DATE = "2026-05-29"
+VERSION = "0.14.0"
+BUILD_DATE = "2026-05-30"
 CHANGES = [
-    "fix: кнопка Обновить данные — COROS и Polar сохраняют VO2max в профиль (если не manual)",
+    "feat: таблица workout_analysis и bot_settings в БД — основа двухшаговой обработки тренировок",
+    "feat: save/get/get_latest/update_extra_groups для workout_analysis",
+    "feat: get/set_preprocess_mode — глобальная настройка режима анализа (deep/smart)",
 ]
