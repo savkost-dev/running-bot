@@ -3,11 +3,14 @@ import json
 import math
 import html as _html
 import time as _time
+import logging
 from openai import OpenAI
 from dotenv import load_dotenv
 from version import VERSION
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 MODEL_DEEP  = "deepseek-v4-pro"    # thinking=True  — 🧠 Глубокое
 MODEL_SMART = "deepseek-v4-flash"  # thinking=True  — ⚡ Умное
@@ -547,6 +550,173 @@ Garmin Body Battery (если нет Training Readiness): >= 70 → "go", >= 40 
 Если спортсмен восстанавливается после соревнования — статус не выше "adjust".
 
 Отвечай только JSON, без лишнего текста."""
+
+
+def _build_analyze_prompt(raw_text: str, comments_text: str) -> str:
+    """Промпт для предварительного анализа анонса тренировки."""
+    return (
+        "Ты анализируешь анонс тренировки бегового клуба Dusty Dumbbells.\n\n"
+        "ТЕКСТ ПОСТА:\n"
+        f"{raw_text}\n\n"
+        "КОММЕНТАРИИ К ПОСТУ:\n"
+        f"{comments_text}\n\n"
+        "ЗАДАЧА 1 — Валидация:\n"
+        "Определи, является ли это РЕАЛЬНЫМ анонсом будущей тренировки.\n"
+        "Анонс: есть дата, расписание (сбор/старт), описание работы с группами.\n"
+        "НЕ анонс: фото-отчёт о прошедшей ('в прошлое воскресенье бежали', 'спасибо команде'),\n"
+        "новости клуба, реклама.\n\n"
+        "ЗАДАЧА 2 — Тип тренировки:\n"
+        "'interval' — вт/пт, отрезки (200м, 500м, 1км и тд)\n"
+        "'long' — воскресенье, Long Run 100 минут по темпу\n\n"
+        "ЗАДАЧА 3 — Разбор групп:\n"
+        "Для каждой группы извлеки: номер, рабочие отрезки (дистанция + темп или время),\n"
+        "восстановительные отрезки.\n"
+        "Если восстановление задано временем ('300м – 1:30') — пересчитай в темп:\n"
+        "90сек / 0.3км = 5:00 мин/км. Пометь active_recovery=true если темп быстрее 5:30.\n\n"
+        "ЗАДАЧА 4 — Дополнительные группы из комментариев:\n"
+        "Извлеки ТОЛЬКО описания доп. групп с темпом/отрезками (например группа 3.5, группа 5).\n"
+        "ИГНОРИРУЙ: индивидуальные советы ('кому отдохнуть'), упоминания конкретных\n"
+        "соревнований с датами, 'переходим в'.\n\n"
+        "ЗАДАЧА 5 — Для long run:\n"
+        "Определи есть ли прогрессия (вторая половина быстрее) и опция ровного темпа.\n\n"
+        "Верни строго JSON:\n"
+        "{\n"
+        '  "is_valid": true/false,\n'
+        '  "reject_reason": "почему не анонс (если is_valid=false)",\n'
+        '  "workout_type": "interval" или "long",\n'
+        '  "workout_date": "YYYY-MM-DD если смог определить",\n'
+        '  "summary": "суть тренировки 1-2 предложения",\n'
+        '  "groups": [\n'
+        "    {\n"
+        '      "number": "3",\n'
+        '      "work": "описание рабочих отрезков с темпом",\n'
+        '      "recovery": "описание восстановления",\n'
+        '      "recovery_pace": "5:00 или null",\n'
+        '      "active_recovery": true/false\n'
+        "    }\n"
+        "  ],\n"
+        '  "extra_groups": [\n'
+        '    {"number": "3.5", "description": "темп и отрезки", "source": "комментарий"}\n'
+        "  ],\n"
+        '  "has_progression": true/false,\n'
+        '  "even_pace_available": true/false,\n'
+        '  "coach_notes": "уточнения для ВСЕХ участников (не индивидуальные)",\n'
+        '  "ignored": "что проигнорировано и почему"\n'
+        "}\n"
+        "Отвечай только JSON."
+    )
+
+
+def analyze_workout(raw_text: str, comments_text: str = "", mode: str = "deep") -> dict | None:
+    """Шаг 1 двухшаговой обработки: анализ анонса тренировки через DeepSeek.
+
+    mode="deep"  → deepseek-v4-pro,   max_tokens=8000, timeout=300s
+    mode="smart" → deepseek-v4-flash, max_tokens=8000, timeout=180s
+
+    Возвращает структурированный dict с разбором тренировки или None при ошибке.
+    """
+    import re as _re
+
+    prompt = _build_analyze_prompt(raw_text, comments_text or "(нет комментариев)")
+
+    if mode == "deep":
+        model, api_timeout = MODEL_DEEP, 300
+    else:
+        model, api_timeout = MODEL_SMART, 180
+    max_tok = 8000
+
+    t0 = _time.time()
+    raw = ""
+
+    for attempt in range(2):
+        try:
+            response = _get_client().chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=max_tok,
+                temperature=0,
+                timeout=api_timeout,
+            )
+            usage = response.usage
+            in_tok = usage.prompt_tokens if usage else None
+            out_tok = usage.completion_tokens if usage else None
+
+            msg = response.choices[0].message
+            reasoning = getattr(msg, "reasoning_content", None)
+            raw = (msg.content or "").strip()
+
+            # Fallback: пустой content → ищем JSON в reasoning_content
+            if not raw and reasoning:
+                m = _re.search(r'\{[\s\S]*\}', reasoning)
+                if m:
+                    raw = m.group(0)
+                    logger.info("analyze_workout: JSON извлечён из reasoning_content")
+
+            if not raw:
+                if attempt == 0:
+                    logger.warning("analyze_workout: пустой ответ (попытка 1), повтор через 3 сек")
+                    _time.sleep(3)
+                    continue
+                logger.error("analyze_workout: пустой ответ (попытка 2)")
+                return None
+            break
+
+        except Exception as e:
+            err_type = type(e).__name__
+            if "Timeout" in err_type or "timeout" in str(e).lower():
+                logger.error(f"analyze_workout: timeout после {round(_time.time() - t0, 1)}s (limit={api_timeout}s)")
+                return None
+            if attempt == 0:
+                logger.warning(f"analyze_workout: ошибка API (попытка 1): {e}, повтор через 3 сек")
+                _time.sleep(3)
+                continue
+            logger.error(f"analyze_workout: ошибка API: {e}")
+            return None
+
+    elapsed = round(_time.time() - t0, 1)
+
+    # ── Парсинг JSON ──────────────────────────────────────────
+    raw = _re.sub(r"<think>.*?</think>", "", raw, flags=_re.DOTALL).strip()
+    raw = raw.replace("```json", "").replace("```", "").strip()
+
+    parsed = None
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as e:
+        logger.warning(f"analyze_workout: полный JSON невалиден ({e}), пробую вырезать {{...}}")
+        m = _re.search(r'\{[\s\S]*\}', raw)
+        if m:
+            try:
+                parsed = json.loads(m.group(0))
+                logger.info("analyze_workout: JSON извлечён regex-ом")
+            except json.JSONDecodeError as e2:
+                logger.error(f"analyze_workout: regex JSON тоже невалиден: {e2} | raw[:300]={raw[:300]!r}")
+                return None
+        else:
+            logger.error(f"analyze_workout: JSON не найден | raw[:300]={raw[:300]!r}")
+            return None
+
+    if not isinstance(parsed, dict):
+        logger.error(f"analyze_workout: результат не dict: {type(parsed).__name__}")
+        return None
+
+    parsed["_stats"] = {
+        "time_sec": elapsed,
+        "input_tokens": in_tok,
+        "output_tokens": out_tok,
+        "mode": mode,
+        "model": model,
+    }
+
+    logger.info(
+        f"analyze_workout: valid={parsed.get('is_valid')}, "
+        f"type={parsed.get('workout_type')}, "
+        f"groups={len(parsed.get('groups') or [])}, "
+        f"extra={len(parsed.get('extra_groups') or [])}, "
+        f"mode={mode}, time={elapsed}s, "
+        f"tokens={in_tok}/{out_tok}"
+    )
+    return parsed
 
 
 def ask_groq(prompt: str, mode: str = "smart") -> dict | None:

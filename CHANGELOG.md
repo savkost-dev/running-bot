@@ -5,6 +5,19 @@
 
 ---
 
+## [0.14.1] 2026-05-30 — analyze_workout: анализ анонса через DeepSeek
+
+### Добавлено
+- `claude_advisor.analyze_workout(raw_text, comments_text, mode='deep')` — Шаг 1 двухшаговой обработки
+  - Валидация (реальный анонс vs фото-отчёт/реклама), тип (interval/long), разбор групп с пересчётом восстановления в темп, доп-группы из комментариев, прогрессия для long run
+  - deep → deepseek-v4-pro, smart → deepseek-v4-flash; `max_tokens=8000`
+  - Fallback: извлечение JSON из `reasoning_content` и regex `{...}`
+  - Логирование: `analyze_workout: valid=…, type=…, groups=…, mode=…, time=…s, tokens=…`
+- `src/test_analyze.py` — тест на реальном анонсе (12 по 500/300м)
+- Пока НЕ интегрировано в bot.py — только функция и тест
+
+---
+
 ## [0.14.0] 2026-05-30 — БД для двухшаговой обработки тренировок
 
 ### Добавлено
