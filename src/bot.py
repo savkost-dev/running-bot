@@ -2681,15 +2681,7 @@ async def scheduled_strava_cache(context: ContextTypes.DEFAULT_TYPE):
         if delta >= 2:
             save_user_profile(db_user_id, vo2max=new_vo2max, vo2max_source=tracker_key)
             vo2max_changed += 1
-            try:
-                await context.bot.send_message(
-                    telegram_id,
-                    f"📊 Твой VO2max обновился: {float(old_vo2max):.0f} → {new_vo2max:.0f} мл/кг/мин ({tracker_name})"
-                )
-            except Forbidden:
-                _mark_user_inactive(telegram_id)
-            except Exception as e:
-                logger.warning(f"VO2max notify error for {telegram_id}: {e}")
+            logger.info(f"VO2max обновлён для {telegram_id}: {float(old_vo2max):.0f} → {new_vo2max:.0f} ({tracker_name})")
 
         await asyncio.sleep(1)
     logger.info(f"VO2max: проверено {len(users)}, уведомлено об изменении {vo2max_changed}")
