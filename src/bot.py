@@ -1146,12 +1146,13 @@ def _format_analysis_result(result: dict, mode: str) -> str:
     groups = result.get("groups") or []
     lines.append(f"\nГруппы ({len(groups)}):")
     for g in groups:
-        ar = " 🟢актив.восст." if g.get("active_recovery") else ""
-        rec_pace = g.get("recovery_pace") or "—"
-        lines.append(
-            f"  {g.get('number', '?')}. {g.get('work', '—')}"
-            f"\n     ↻ восст: {g.get('recovery', '—')} ({rec_pace}){ar}"
-        )
+        recovery = g.get("recovery")
+        line = f"  {g.get('number', '?')}. {g.get('work', '—')}"
+        if recovery and str(recovery).lower() != "none":
+            ar = " 🟢актив.восст." if g.get("active_recovery") else ""
+            rec_pace = g.get("recovery_pace") or "—"
+            line += f"\n     ↻ восст: {recovery} ({rec_pace}){ar}"
+        lines.append(line)
 
     extra = result.get("extra_groups") or []
     if extra:
