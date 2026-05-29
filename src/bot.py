@@ -28,6 +28,8 @@ from database import (
     delete_token,
     get_all_users_with_details, get_users_with_service_full, get_users_with_profile_full,
     save_feedback, save_rating, get_recent_ratings, get_recent_feedbacks,
+    save_workout_analysis, get_workout_analysis, get_latest_workout_analysis,
+    get_preprocess_mode, set_preprocess_mode,
 )
 from strava import (
     get_auth_url, get_recent_runs, analyze_fitness,
@@ -36,11 +38,13 @@ from strava import (
 from telegram_reader import (
     find_next_workout, find_next_long_run, format_workout_message,
     get_latest_workout_post_id, get_latest_long_run_post_id, get_extra_groups_for_post,
+    get_latest_workout_post_full,
 )
 import claude_advisor
 from claude_advisor import (
     build_evening_prompt, build_morning_prompt, build_long_run_prompt,
     ask_groq, format_evening_message, format_morning_message, format_long_run_message,
+    analyze_workout,
 )
 
 ADMIN_TELEGRAM_IDS = {273726778}
@@ -862,7 +866,9 @@ def _build_help_text(is_admin: bool) -> str:
             "/debug — разбор последней тренировки\n"
             "/debug_long — разбор последнего Long Run\n"
             "/ratings — последние оценки рекомендаций\n"
-            "/feedbacks — последние сообщения обратной связи"
+            "/feedbacks — последние сообщения обратной связи\n"
+            "/analyze — анализ последней тренировки через DeepSeek\n"
+            "/preprocess_mode — режим анализа тренировок (deep/smart)"
         )
     return text
 
@@ -1119,6 +1125,134 @@ async def cmd_feedbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = "\n\n".join(lines)
     for i in range(0, len(text), 4096):
         await update.message.reply_text(text[i:i + 4096])
+
+
+# ── ДВУХШАГОВАЯ ОБРАБОТКА (анализ тренировок) ────────────────
+
+def _format_analysis_result(result: dict, mode: str) -> str:
+    """Красиво форматирует результат analyze_workout для админа."""
+    stats = result.get("_stats", {})
+    time_sec = stats.get("time_sec", "?")
+    lines = [f"🔬 Анализ тренировки (режим {mode}, {time_sec}с)\n"]
+
+    if result.get("is_valid"):
+        lines.append("✅ Валидный анонс")
+    else:
+        lines.append(f"❌ Не анонс: {result.get('reject_reason') or '—'}")
+
+    lines.append(f"Тип: {result.get('workout_type', '—')} | Дата: {result.get('workout_date', '—')}")
+    lines.append(f"\n📋 Суть: {result.get('summary', '—')}")
+
+    groups = result.get("groups") or []
+    lines.append(f"\nГруппы ({len(groups)}):")
+    for g in groups:
+        ar = " 🟢актив.восст." if g.get("active_recovery") else ""
+        rec_pace = g.get("recovery_pace") or "—"
+        lines.append(
+            f"  {g.get('number', '?')}. {g.get('work', '—')}"
+            f"\n     ↻ восст: {g.get('recovery', '—')} ({rec_pace}){ar}"
+        )
+
+    extra = result.get("extra_groups") or []
+    if extra:
+        lines.append(f"\nДоп. группы ({len(extra)}):")
+        for e in extra:
+            lines.append(f"  {e.get('number', '?')}: {e.get('description', '—')} [{e.get('source', '—')}]")
+    else:
+        lines.append("\nДоп. группы: нет")
+
+    if result.get("workout_type") == "long":
+        prog = "да" if result.get("has_progression") else "нет"
+        even = "да" if result.get("even_pace_available") else "нет"
+        lines.append(f"\nПрогрессия: {prog} | Ровный темп: {even}")
+
+    lines.append(f"\n📝 Заметки тренера: {result.get('coach_notes') or '—'}")
+    lines.append(f"🗑 Проигнорировано: {result.get('ignored') or '—'}")
+    return "\n".join(lines)
+
+
+async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Анализирует последний пост тренировки через DeepSeek (только для админов)."""
+    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+        await update.message.reply_text("Нет доступа.")
+        return
+
+    msg = await update.message.reply_text("🔬 Ищу последний пост тренировки в канале...")
+    post = await get_latest_workout_post_full()
+    if not post:
+        await msg.edit_text("😔 Не нашёл пост тренировки в канале.")
+        return
+
+    mode = get_preprocess_mode()
+    await msg.edit_text(
+        f"⏳ Анализирую через DeepSeek (режим {mode})...\nМожет занять 1-2 минуты."
+    )
+
+    import functools
+    result = await asyncio.get_event_loop().run_in_executor(
+        None, functools.partial(analyze_workout, post["text"], post["comments_text"], mode)
+    )
+
+    if not result:
+        await msg.edit_text("❌ Анализ не удался (пустой ответ модели). Попробуй ещё раз.")
+        return
+
+    # Сохраняем результат в БД
+    try:
+        import json as _json
+        save_workout_analysis(
+            post_id=post["id"],
+            workout_date=result.get("workout_date", ""),
+            workout_type=result.get("workout_type", ""),
+            is_valid=1 if result.get("is_valid") else 0,
+            raw_text=post["text"],
+            analyzed_json=_json.dumps(result, ensure_ascii=False),
+            analysis_mode=mode,
+        )
+    except Exception as e:
+        logger.error(f"save_workout_analysis error: {e}")
+
+    text = _format_analysis_result(result, mode)
+    first = True
+    for i in range(0, len(text), 4096):
+        chunk = text[i:i + 4096]
+        if first:
+            await msg.edit_text(chunk)
+            first = False
+        else:
+            await update.message.reply_text(chunk)
+
+
+def _build_preprocess_text(current: str) -> str:
+    label = "🧠 deep (deepseek-v4-pro)" if current == "deep" else "⚡ smart (deepseek-v4-flash)"
+    return (
+        "🔬 Режим анализа тренировок (preprocess)\n\n"
+        f"Текущий: {label}\n\n"
+        "🧠 deep — медленнее, максимальное качество\n"
+        "⚡ smart — быстрее, чуть проще\n\n"
+        "Выбери режим:"
+    )
+
+
+def _build_preprocess_keyboard(current: str) -> InlineKeyboardMarkup:
+    def btn(key, label):
+        mark = "✓ " if key == current else ""
+        return InlineKeyboardButton(f"{mark}{label}", callback_data=f"preprocess_set_{key}")
+    return InlineKeyboardMarkup([
+        [btn("deep", "🧠 deep"), btn("smart", "⚡ smart")],
+    ])
+
+
+async def cmd_preprocess_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Переключатель режима анализа тренировок deep/smart (только для админов)."""
+    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+        await update.message.reply_text("Нет доступа.")
+        return
+    current = get_preprocess_mode()
+    await update.message.reply_text(
+        _build_preprocess_text(current),
+        reply_markup=_build_preprocess_keyboard(current),
+    )
 
 
 # ── КНОПКИ ───────────────────────────────────────────────────
@@ -1554,6 +1688,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "help":
         back_btn = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")]])
         await query.edit_message_text(_build_help_text(user.id in ADMIN_TELEGRAM_IDS), reply_markup=back_btn)
+
+    elif query.data.startswith("preprocess_set_"):
+        if user.id not in ADMIN_TELEGRAM_IDS:
+            return
+        new_mode = query.data.replace("preprocess_set_", "")
+        set_preprocess_mode(new_mode)
+        await query.edit_message_text(
+            _build_preprocess_text(new_mode),
+            reply_markup=_build_preprocess_keyboard(new_mode),
+        )
 
     # ── ОБРАТНАЯ СВЯЗЬ ────────────────────────────────────────
 
@@ -2911,6 +3055,8 @@ def main():
     app.add_handler(CommandHandler("feedback",  cmd_feedback))
     app.add_handler(CommandHandler("ratings",   cmd_ratings))
     app.add_handler(CommandHandler("feedbacks", cmd_feedbacks))
+    app.add_handler(CommandHandler("analyze",   cmd_analyze))
+    app.add_handler(CommandHandler("preprocess_mode", cmd_preprocess_mode))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     app.add_error_handler(global_error_handler)

@@ -562,6 +562,35 @@ async def get_latest_long_run_post_id() -> int | None:
     return None
 
 
+async def get_latest_workout_post_full() -> dict | None:
+    """Последний пост тренировки (интервальная вт/пт или Long Run вс) с текстом и комментариями.
+    Используется командой /analyze. Возвращает {id, text, comments_text} или None.
+    """
+    posts = await get_recent_posts(limit=30)  # от новых к старым
+    for post in posts:
+        text_lower = post["text"].lower()
+
+        matches = sum(1 for kw in WORKOUT_KEYWORDS if kw in text_lower)
+        is_workout = matches >= 3 and parse_workout(post["text"], post["date"]) is not None
+
+        is_long = (
+            ("100 минут" in text_lower or "ddlong" in text_lower)
+            and _parse_long_run_post(post["text"], post["date"]) is not None
+        )
+
+        if not (is_workout or is_long):
+            continue
+
+        comments = await get_post_comments(post["id"])
+        comments_text = "\n".join(c["text"] for c in comments if c.get("text"))
+        return {
+            "id": post["id"],
+            "text": post["text"],
+            "comments_text": comments_text,
+        }
+    return None
+
+
 async def get_extra_groups_for_post(post_id: int) -> list:
     """Возвращает список доп. групп из комментариев к посту."""
     comments = await get_post_comments(post_id)
