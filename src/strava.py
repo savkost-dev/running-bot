@@ -24,11 +24,14 @@ RACE_DISTANCES = {
 }
 
 
+OAUTH_REDIRECT_BASE = "http://167.172.185.88:8080"
+
+
 def get_auth_url(telegram_id: int) -> str:
     params = (
         f"client_id={STRAVA_CLIENT_ID}"
         f"&response_type=code"
-        f"&redirect_uri=http://localhost"
+        f"&redirect_uri={OAUTH_REDIRECT_BASE}/strava/callback"
         f"&approval_prompt=auto"
         f"&scope=read,activity:read_all"
         f"&state={telegram_id}"
@@ -121,6 +124,47 @@ async def get_activity_detail(access_token: str, activity_id: int) -> dict | Non
             if resp.status != 200:
                 return None
             return await resp.json()
+
+
+async def get_recent_48h_load(access_token: str) -> dict:
+    """Острая нагрузка за последние 48 часов — всегда свежие данные (1 запрос к API)."""
+    after = int((datetime.now() - timedelta(hours=48)).timestamp())
+    headers = {"Authorization": f"Bearer {access_token}"}
+    activities = []
+
+    async with aiohttp.ClientSession() as session:
+        async with session.get(
+            f"{STRAVA_API_BASE}/athlete/activities",
+            headers=headers,
+            params={"after": after, "per_page": 30, "page": 1}
+        ) as resp:
+            if resp.status == 200:
+                activities = await resp.json()
+
+    runs = [a for a in activities if a.get("type") == "Run"]
+    if not runs:
+        return {"total_km_48h": 0.0, "sessions_48h": 0, "suffer_48h": 0,
+                "last_activity_hours_ago": None}
+
+    total_km = round(sum(a.get("distance", 0) for a in runs) / 1000, 1)
+    suffer   = sum(a.get("suffer_score") or 0 for a in runs)
+
+    # Сколько часов назад последняя активность
+    last_date_str = runs[0].get("start_date", "")
+    hours_ago = None
+    if last_date_str:
+        try:
+            last_dt = datetime.strptime(last_date_str[:19], "%Y-%m-%dT%H:%M:%S")
+            hours_ago = round((datetime.now() - last_dt).total_seconds() / 3600, 1)
+        except Exception:
+            pass
+
+    return {
+        "total_km_48h":          total_km,
+        "sessions_48h":          len(runs),
+        "suffer_48h":            suffer,
+        "last_activity_hours_ago": hours_ago,
+    }
 
 
 async def get_recent_runs(access_token: str, days: int = 14) -> list:
@@ -325,67 +369,20 @@ def _calculate_riegels_predictions(best: dict) -> dict:
     return predictions
 
 
-async def get_last_race(access_token: str, days: int = 90) -> dict | None:
-    """
-    Находит последнее соревнование и считает рекомендуемый период восстановления.
-    workout_type=1 в Strava означает Race.
-    """
-    activities = await get_recent_activities(access_token, days=days)
-
-    races = [
-        a for a in activities
-        if a.get("type") == "Run" and a.get("workout_type") == 1
-    ]
-
-    if not races:
-        return None
-
-    # Сортируем по дате — берём последнее
-    races.sort(key=lambda x: x.get("start_date", ""), reverse=True)
-    last = races[0]
-
-    distance_km = round(last.get("distance", 0) / 1000, 1)
-    race_date = last.get("start_date_local", "")[:10]
-
-    recovery_days = max(2, round(distance_km / 3))
-
-    try:
-        race_dt = datetime.strptime(race_date, "%Y-%m-%d")
-        recovery_until = (race_dt + timedelta(days=recovery_days)).strftime("%Y-%m-%d")
-        days_since = (datetime.now() - race_dt).days
-        still_recovering = days_since < recovery_days
-    except ValueError:
-        recovery_until = None
-        days_since = None
-        still_recovering = False
-
-    return {
-        "name": last.get("name", "Соревнование"),
-        "date": race_date,
-        "distance_km": distance_km,
-        "days_since": days_since,
-        "recovery_days": recovery_days,
-        "recovery_until": recovery_until,
-        "still_recovering": still_recovering,
-    }
-
-
 async def get_full_athlete_data(access_token: str) -> dict:
     """
     Собирает все данные атлета для передачи в AI:
     - Последние пробежки (14 дней)
     - CTL/ATL/TSB с трендом
     - Best efforts + прогнозы по Риегелю
-    - Последнее соревнование
     """
     import asyncio
 
     # Запускаем параллельно
     runs_task = get_recent_runs(access_token, days=14)
     load_task = get_training_load(access_token)
-    race_task = get_last_race(access_token, days=90)
 
-    runs, load, last_race = await asyncio.gather(runs_task, load_task, race_task)
+    runs, load = await asyncio.gather(runs_task, load_task)
     fitness = analyze_fitness(runs)
 
     # Best efforts — отдельно (много запросов, не параллелим)
@@ -397,7 +394,7 @@ async def get_full_athlete_data(access_token: str) -> dict:
         "training_load": load,
         "best_efforts": efforts.get("best_efforts", {}),
         "predictions": efforts.get("predictions", {}),
-        "last_race": last_race,
+        "last_race": None,  # Strava workout_type ненадёжен; гонки определяются только по Garmin
     }
 
 

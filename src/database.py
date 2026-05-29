@@ -46,7 +46,9 @@ def init_db():
                 default_group TEXT,
                 notify_evening INTEGER DEFAULT 1,
                 notify_morning INTEGER DEFAULT 1,
-                ai_mode TEXT DEFAULT 'deep',
+                ai_mode TEXT DEFAULT 'smart',
+                is_active INTEGER DEFAULT 1,
+                deactivated_at TEXT,
                 FOREIGN KEY (user_id) REFERENCES users(id)
             );
                            
@@ -110,6 +112,34 @@ def init_db():
                 FOREIGN KEY (user_id) REFERENCES users(id)
             );
 
+            CREATE TABLE IF NOT EXISTS user_activity (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                command TEXT NOT NULL,
+                created_at TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS feedback (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                type TEXT NOT NULL,
+                text TEXT NOT NULL,
+                created_at TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS recommendation_ratings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                workout_date TEXT,
+                rating INTEGER NOT NULL,
+                ai_mode TEXT,
+                comment TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            );
+
         """)
     # Миграции для старых БД
     with get_connection() as conn:
@@ -119,7 +149,7 @@ def init_db():
             pass
     with get_connection() as conn:
         try:
-            conn.execute("ALTER TABLE user_preferences ADD COLUMN ai_mode TEXT DEFAULT 'deep'")
+            conn.execute("ALTER TABLE user_preferences ADD COLUMN ai_mode TEXT DEFAULT 'smart'")
         except Exception:
             pass
     with get_connection() as conn:
@@ -127,6 +157,12 @@ def init_db():
             conn.execute("ALTER TABLE user_preferences ADD COLUMN use_garmin_recovery INTEGER DEFAULT 1")
         except Exception:
             pass
+    for col in ("is_active INTEGER DEFAULT 1", "deactivated_at TEXT"):
+        with get_connection() as conn:
+            try:
+                conn.execute(f"ALTER TABLE user_preferences ADD COLUMN {col}")
+            except Exception:
+                pass
     for col in ("notify_interval INTEGER DEFAULT 1",
                 "notify_interval_extra INTEGER DEFAULT 1",
                 "notify_long INTEGER DEFAULT 1"):
@@ -137,7 +173,9 @@ def init_db():
                 pass
     for col in ("garmin_email TEXT", "garmin_password TEXT",
                 "vo2max_source TEXT", "vo2max_updated_at TEXT",
-                "lactate_source TEXT"):
+                "lactate_source TEXT",
+                "coros_email TEXT", "coros_password TEXT",
+                "polar_user_id TEXT"):
         with get_connection() as conn:
             try:
                 conn.execute(f"ALTER TABLE user_profile ADD COLUMN {col}")
@@ -171,6 +209,14 @@ def get_or_create_user(telegram_id: int, name: str, username: str = None) -> int
         return cursor.lastrowid
 
 
+def user_exists(telegram_id: int) -> bool:
+    """Проверяет, зарегистрирован ли пользователь."""
+    with get_connection() as conn:
+        return bool(conn.execute(
+            "SELECT 1 FROM users WHERE telegram_id = ?", (telegram_id,)
+        ).fetchone())
+
+
 def get_all_users() -> list:
     """Список всех пользователей (для рассылки)"""
     with get_connection() as conn:
@@ -179,14 +225,28 @@ def get_all_users() -> list:
         ).fetchall()
 
 
+def get_active_users() -> list:
+    """Список активных пользователей (is_active=1) для рассылки."""
+    with get_connection() as conn:
+        return conn.execute("""
+            SELECT u.telegram_id, u.name, u.username
+            FROM users u
+            LEFT JOIN user_preferences p ON u.id = p.user_id
+            WHERE p.is_active IS NULL OR p.is_active = 1
+        """).fetchall()
+
+
 def get_users_for_notification(notify_key: str) -> list:
-    """Пользователи у которых включён данный тип уведомлений (notify_interval / notify_interval_extra / notify_long)."""
+    """Пользователи у которых включён данный тип уведомлений (notify_interval / notify_interval_extra / notify_long).
+    Автоматически фильтрует неактивных пользователей (is_active=0).
+    """
     with get_connection() as conn:
         return conn.execute(f"""
             SELECT u.telegram_id, u.name, u.username
             FROM users u
             LEFT JOIN user_preferences p ON u.id = p.user_id
-            WHERE p.{notify_key} IS NULL OR p.{notify_key} = 1
+            WHERE (p.{notify_key} IS NULL OR p.{notify_key} = 1)
+              AND (p.is_active IS NULL OR p.is_active = 1)
         """).fetchall()
 
 
@@ -267,7 +327,8 @@ def get_preferences(user_id: int) -> dict | None:
     with get_connection() as conn:
         row = conn.execute("""
             SELECT default_group, notify_evening, notify_morning, ai_mode, use_garmin_recovery,
-                   notify_interval, notify_interval_extra, notify_long
+                   notify_interval, notify_interval_extra, notify_long,
+                   is_active, deactivated_at
             FROM user_preferences WHERE user_id = ?
         """, (user_id,)).fetchone()
 
@@ -278,12 +339,157 @@ def get_preferences(user_id: int) -> dict | None:
         "default_group": row[0],
         "notify_evening": bool(row[1]),
         "notify_morning": bool(row[2]),
-        "ai_mode": row[3] or "deep",
+        "ai_mode": row[3] or "smart",
         "use_garmin_recovery": bool(row[4]) if row[4] is not None else True,
         "notify_interval": bool(row[5]) if row[5] is not None else True,
         "notify_interval_extra": bool(row[6]) if row[6] is not None else True,
         "notify_long": bool(row[7]) if row[7] is not None else True,
+        "is_active": bool(row[8]) if row[8] is not None else True,
+        "deactivated_at": row[9],
     }
+
+def log_activity(user_id: int, command: str) -> None:
+    """Логирует вызов команды пользователем."""
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO user_activity (user_id, command) VALUES (?, ?)",
+            (user_id, command)
+        )
+
+
+def get_bot_stats() -> dict:
+    """Возвращает агрегированную статистику для команды /stats."""
+    with get_connection() as conn:
+        total = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        new_7d = conn.execute(
+            "SELECT COUNT(*) FROM users WHERE created_at >= datetime('now', '-7 days')"
+        ).fetchone()[0]
+        active_7d = conn.execute(
+            "SELECT COUNT(DISTINCT user_id) FROM user_activity "
+            "WHERE created_at >= datetime('now', '-7 days')"
+        ).fetchone()[0]
+        active_bot = conn.execute(
+            "SELECT COUNT(*) FROM user_preferences WHERE is_active IS NULL OR is_active = 1"
+        ).fetchone()[0]
+        inactive_bot = conn.execute(
+            "SELECT COUNT(*) FROM user_preferences WHERE is_active = 0"
+        ).fetchone()[0]
+        strava = conn.execute(
+            "SELECT COUNT(*) FROM user_tokens WHERE service = 'strava'"
+        ).fetchone()[0]
+        whoop = conn.execute(
+            "SELECT COUNT(*) FROM user_tokens WHERE service = 'whoop'"
+        ).fetchone()[0]
+        garmin = conn.execute(
+            "SELECT COUNT(*) FROM user_tokens WHERE service = 'garmin'"
+        ).fetchone()[0]
+        coros = conn.execute(
+            "SELECT COUNT(*) FROM user_tokens WHERE service = 'coros'"
+        ).fetchone()[0]
+        polar = conn.execute(
+            "SELECT COUNT(*) FROM user_tokens WHERE service = 'polar'"
+        ).fetchone()[0]
+        profile = conn.execute(
+            "SELECT COUNT(*) FROM user_profile WHERE vo2max IS NOT NULL"
+        ).fetchone()[0]
+        workout_7d = conn.execute(
+            "SELECT COUNT(*) FROM user_activity "
+            "WHERE command = '/workout' AND created_at >= datetime('now', '-7 days')"
+        ).fetchone()[0]
+        long_7d = conn.execute(
+            "SELECT COUNT(*) FROM user_activity "
+            "WHERE command = '/long' AND created_at >= datetime('now', '-7 days')"
+        ).fetchone()[0]
+        morning_7d = conn.execute(
+            "SELECT COUNT(*) FROM user_activity "
+            "WHERE command = '/morning' AND created_at >= datetime('now', '-7 days')"
+        ).fetchone()[0]
+        avg_rating_row = conn.execute(
+            "SELECT AVG(rating), COUNT(*) FROM recommendation_ratings "
+            "WHERE created_at >= datetime('now', '-30 days')"
+        ).fetchone()
+        avg_rating = round(avg_rating_row[0], 1) if avg_rating_row[0] else None
+        ratings_30d = avg_rating_row[1] if avg_rating_row[1] else 0
+        feedback_total = conn.execute("SELECT COUNT(*) FROM feedback").fetchone()[0]
+        feedback_bugs = conn.execute(
+            "SELECT COUNT(*) FROM feedback WHERE type = 'bug'"
+        ).fetchone()[0]
+        feedback_features = conn.execute(
+            "SELECT COUNT(*) FROM feedback WHERE type = 'feature'"
+        ).fetchone()[0]
+    return {
+        "total": total, "new_7d": new_7d, "active_7d": active_7d,
+        "active_bot": active_bot, "inactive_bot": inactive_bot,
+        "strava": strava, "whoop": whoop, "garmin": garmin, "coros": coros, "polar": polar,
+        "profile": profile,
+        "workout_7d": workout_7d, "long_7d": long_7d, "morning_7d": morning_7d,
+        "avg_rating": avg_rating, "ratings_30d": ratings_30d,
+        "feedback_total": feedback_total, "feedback_bugs": feedback_bugs,
+        "feedback_features": feedback_features,
+    }
+
+
+def get_all_users_with_details() -> list:
+    """Все пользователи с деталями: (db_id, telegram_id, name, username, created_at), сортировка по id."""
+    with get_connection() as conn:
+        return conn.execute(
+            "SELECT id, telegram_id, name, username, created_at FROM users ORDER BY id"
+        ).fetchall()
+
+
+def get_users_with_service_full(service: str) -> list:
+    """Пользователи с подключённым сервисом: (telegram_id, name, username)."""
+    with get_connection() as conn:
+        return conn.execute("""
+            SELECT u.telegram_id, u.name, u.username
+            FROM users u
+            JOIN user_tokens ut ON u.id = ut.user_id
+            WHERE ut.service = ?
+            ORDER BY u.id
+        """, (service,)).fetchall()
+
+
+def get_users_with_profile_full() -> list:
+    """Пользователи с заполненным профилем: (telegram_id, name, username)."""
+    with get_connection() as conn:
+        return conn.execute("""
+            SELECT u.telegram_id, u.name, u.username
+            FROM users u
+            JOIN user_profile up ON u.id = up.user_id
+            WHERE up.vo2max IS NOT NULL OR up.lactate_threshold_pace IS NOT NULL
+            ORDER BY u.id
+        """).fetchall()
+
+
+def delete_token(user_id: int, service: str) -> None:
+    """Удаляет токен сервиса для пользователя (отключение сервиса)."""
+    with get_connection() as conn:
+        conn.execute(
+            "DELETE FROM user_tokens WHERE user_id = ? AND service = ?",
+            (user_id, service)
+        )
+
+
+def count_users_with_service(service: str) -> int:
+    """Количество пользователей с подключённым сервисом."""
+    with get_connection() as conn:
+        return conn.execute(
+            "SELECT COUNT(*) FROM user_tokens WHERE service = ?", (service,)
+        ).fetchone()[0]
+
+
+def get_user_display(telegram_id: int) -> str:
+    """Возвращает 'Имя (@username)' или просто 'Имя' для telegram_id."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT name, username FROM users WHERE telegram_id = ?", (telegram_id,)
+        ).fetchone()
+    if not row:
+        return str(telegram_id)
+    name = row[0] or "Unknown"
+    suffix = f" (@{row[1]})" if row[1] else ""
+    return f"{name}{suffix}"
+
 
 def save_athlete_cache(user_id: int, training_load: dict, predictions: dict, last_race: dict | None):
     """Сохраняет кэш данных атлета"""
@@ -359,7 +565,10 @@ def save_user_profile(user_id: int, vo2max: float | None = None,
                       garmin_email: str | None = None,
                       garmin_password: str | None = None,
                       vo2max_source: str | None = None,
-                      lactate_source: str | None = None):
+                      lactate_source: str | None = None,
+                      coros_email: str | None = None,
+                      coros_password: str | None = None,
+                      polar_user_id: str | None = None):
     """Сохраняет или обновляет профиль спортсмена. None-поля не перезаписывают существующие."""
     from datetime import datetime as _dt
     now = _dt.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -367,7 +576,8 @@ def save_user_profile(user_id: int, vo2max: float | None = None,
     with get_connection() as conn:
         existing = conn.execute(
             "SELECT vo2max, lactate_threshold_pace, lactate_threshold_hr, gender, "
-            "garmin_email, garmin_password, vo2max_source, vo2max_updated_at, lactate_source "
+            "garmin_email, garmin_password, vo2max_source, vo2max_updated_at, lactate_source, "
+            "coros_email, coros_password, polar_user_id "
             "FROM user_profile WHERE user_id = ?",
             (user_id,)
         ).fetchone()
@@ -382,23 +592,30 @@ def save_user_profile(user_id: int, vo2max: float | None = None,
             new_vo2max_source = vo2max_source if vo2max_source is not None else existing[6]
             new_vo2max_updated_at = now if vo2max is not None else (existing[7] or now)
             new_lactate_source = lactate_source if lactate_source is not None else existing[8]
+            new_coros_email = _encrypt(coros_email) if coros_email is not None else existing[9]
+            new_coros_password = _encrypt(coros_password) if coros_password is not None else existing[10]
+            new_polar_user_id = polar_user_id if polar_user_id is not None else (existing[11] if len(existing) > 11 else None)
             conn.execute("""
                 UPDATE user_profile
                 SET vo2max = ?, lactate_threshold_pace = ?, lactate_threshold_hr = ?,
                     gender = ?, garmin_email = ?, garmin_password = ?,
                     vo2max_source = ?, vo2max_updated_at = ?, lactate_source = ?,
+                    coros_email = ?, coros_password = ?, polar_user_id = ?,
                     updated_at = datetime('now')
                 WHERE user_id = ?
             """, (new_vo2max, new_pace, new_hr, new_gender, new_garmin_email, new_garmin_password,
-                  new_vo2max_source, new_vo2max_updated_at, new_lactate_source, user_id))
+                  new_vo2max_source, new_vo2max_updated_at, new_lactate_source,
+                  new_coros_email, new_coros_password, new_polar_user_id, user_id))
         else:
             conn.execute("""
                 INSERT INTO user_profile (user_id, vo2max, lactate_threshold_pace, lactate_threshold_hr,
-                    gender, garmin_email, garmin_password, vo2max_source, vo2max_updated_at, lactate_source)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    gender, garmin_email, garmin_password, vo2max_source, vo2max_updated_at, lactate_source,
+                    coros_email, coros_password, polar_user_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (user_id, vo2max, lactate_threshold_pace, lactate_threshold_hr, gender,
                   _encrypt(garmin_email), _encrypt(garmin_password), vo2max_source,
-                  now if vo2max is not None else None, lactate_source))
+                  now if vo2max is not None else None, lactate_source,
+                  _encrypt(coros_email), _encrypt(coros_password), polar_user_id))
 
 
 
@@ -407,7 +624,8 @@ def get_user_profile(user_id: int) -> dict | None:
     with get_connection() as conn:
         row = conn.execute("""
             SELECT vo2max, lactate_threshold_pace, lactate_threshold_hr, gender, updated_at,
-                   garmin_email, garmin_password, vo2max_source, vo2max_updated_at, lactate_source
+                   garmin_email, garmin_password, vo2max_source, vo2max_updated_at, lactate_source,
+                   coros_email, coros_password, polar_user_id
             FROM user_profile WHERE user_id = ?
         """, (user_id,)).fetchone()
 
@@ -425,6 +643,9 @@ def get_user_profile(user_id: int) -> dict | None:
         "vo2max_source": row[7],
         "vo2max_updated_at": row[8],
         "lactate_source": row[9],
+        "coros_email": _decrypt(row[10]) if len(row) > 10 else None,
+        "coros_password": _decrypt(row[11]) if len(row) > 11 else None,
+        "polar_user_id": row[12] if len(row) > 12 else None,
     }
 
 
@@ -619,6 +840,55 @@ def get_last_workout_notification() -> dict | None:
         "notified_at": row[3],
         "users_notified": row[4],
     }
+
+
+# ── Обратная связь ────────────────────────────────────────────
+
+def save_feedback(user_id: int, feedback_type: str, text: str) -> None:
+    """Сохраняет сообщение обратной связи (bug / feature)."""
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO feedback (user_id, type, text) VALUES (?, ?, ?)",
+            (user_id, feedback_type, text)
+        )
+
+
+def get_recent_feedbacks(limit: int = 20) -> list:
+    """Последние N сообщений обратной связи с данными пользователя."""
+    with get_connection() as conn:
+        return conn.execute("""
+            SELECT f.id, f.type, f.text, f.created_at, u.name, u.username
+            FROM feedback f
+            JOIN users u ON f.user_id = u.id
+            ORDER BY f.created_at DESC
+            LIMIT ?
+        """, (limit,)).fetchall()
+
+
+# ── Оценки рекомендаций ───────────────────────────────────────
+
+def save_rating(user_id: int, workout_date: str, rating: int,
+                ai_mode: str, comment: str = None) -> None:
+    """Сохраняет оценку рекомендации."""
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO recommendation_ratings (user_id, workout_date, rating, ai_mode, comment) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (user_id, workout_date, rating, ai_mode, comment)
+        )
+
+
+def get_recent_ratings(limit: int = 20) -> list:
+    """Последние N оценок с данными пользователя."""
+    with get_connection() as conn:
+        return conn.execute("""
+            SELECT r.id, r.rating, r.ai_mode, r.comment, r.created_at, r.workout_date,
+                   u.name, u.username
+            FROM recommendation_ratings r
+            JOIN users u ON r.user_id = u.id
+            ORDER BY r.created_at DESC
+            LIMIT ?
+        """, (limit,)).fetchall()
 
 
 if __name__ == "__main__":

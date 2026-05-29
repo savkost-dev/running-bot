@@ -9,14 +9,18 @@ from version import VERSION
 
 load_dotenv()
 
-MODEL_DEEP = "deepseek-v4-pro"
-MODEL_FAST = "deepseek-chat"
+MODEL_DEEP  = "deepseek-v4-pro"    # thinking=True  — 🧠 Глубокое
+MODEL_SMART = "deepseek-v4-flash"  # thinking=True  — ⚡ Умное
+MODEL_FAST  = "deepseek-v4-flash"  # thinking=False — 🔥 Быстрое
+
+_MODE_LABELS = {"deep": "🧠 Глубокое", "smart": "⚡ Умное", "fast": "🔥 Быстрое"}
 
 
 def _get_client() -> OpenAI:
     return OpenAI(
         api_key=os.getenv("DEEPSEEK_API_KEY"),
         base_url="https://api.deepseek.com",
+        timeout=300.0,  # максимальный из всех режимов (deep=300s)
     )
 
 last_prompt: str = ""
@@ -109,9 +113,17 @@ def build_evening_prompt(workout: dict, fitness: dict, recovery: dict | None = N
             pred_lines.append(f"  {d}: {p['time']} ({p['pace']} мин/км) [{src}]")
     pred_text = ("Прогнозные времена:\n" + "\n".join(pred_lines)) if pred_lines else ""
 
-    # Нагрузка CTL/ATL/TSB
+    # Нагрузка CTL/ATL/TSB или Training Load (Garmin)
     load = fitness.get("training_load", {})
-    load_text = load.get("summary", "") if load else ""
+    if load:
+        load_src = load.get("source", "strava")
+        load_summary = load.get("summary", "")
+        if load_src == "garmin" and load_summary:
+            load_text = f"Training Load (Garmin): {load_summary}"
+        else:
+            load_text = load_summary
+    else:
+        load_text = ""
 
     # Восстановление
     recovery_parts = []
@@ -160,11 +172,18 @@ def build_evening_prompt(workout: dict, fitness: dict, recovery: dict | None = N
     elif gender == "female":
         gender_line = "Пол: женский (нормы VO2max для женщин ниже на ~10%, учти при интерпретации уровня)"
 
+    profile_only = fitness.get("profile_only", False)
+    profile_only_note = (
+        "\n⚠️ ВАЖНО: Данные только из профиля пользователя — нет данных о текущей нагрузке "
+        "и восстановлении. Рекомендация основана только на VO2max и лактатном пороге. "
+        "Дай наиболее консервативную безопасную рекомендацию.\n"
+    ) if profile_only else ""
+
     parts = [
         "Отвечай последовательно и детерминированно. При одинаковых входных данных давай одинаковый ответ.",
         "",
         f"Ты тренер бегового клуба Dusty Dumbbells. Помоги участнику выбрать группу для завтрашней {type_label}.",
-        "",
+        profile_only_note,
         f"ТРЕНИРОВКА: {workout.get('workout_date', '—')}  |  {workout.get('location', '—')}",
         f"Объём: {total_volume}",
         "",
@@ -189,6 +208,55 @@ def build_evening_prompt(workout: dict, fitness: dict, recovery: dict | None = N
         parts.append(recovery_line)
     if fitness.get("summary"):
         parts.append(fitness["summary"])
+
+    # Острая нагрузка за 48 ч — всегда свежие данные
+    load_48h = fitness.get("load_48h")
+    if load_48h and load_48h.get("sessions_48h", 0) > 0:
+        h = load_48h.get("last_activity_hours_ago")
+        last_str = f"{h} ч назад" if h is not None else "недавно"
+        suffer = load_48h.get("suffer_48h") or 0
+        km_48h = load_48h.get("total_km_48h", load_48h.get("km_48h", "?"))
+
+        # Оцениваем интенсивность по suffer_score; если недоступен — по темпу vs лактатный порог
+        if suffer > 0:
+            if suffer < 50:
+                intensity_note = f"suffer score {suffer} — восстановительная нагрузка, не влияет на выбор группы"
+            elif suffer <= 150:
+                intensity_note = f"suffer score {suffer} — умеренная нагрузка, учти при выборе группы"
+            else:
+                intensity_note = f"suffer score {suffer} — тяжёлая нагрузка, снизь рекомендуемую группу"
+        else:
+            avg_pace_48h = load_48h.get("avg_pace")
+            if avg_pace_48h and lt_pace:
+                def _p2s(p: str) -> int | None:
+                    try:
+                        m, s = p.split(":")
+                        return int(m) * 60 + int(s)
+                    except Exception:
+                        return None
+                p_sec = _p2s(avg_pace_48h)
+                lt_sec = _p2s(lt_pace)
+                if p_sec and lt_sec:
+                    if p_sec < lt_sec * 0.97:
+                        intensity_note = f"темп {avg_pace_48h} мин/км — выше ПАНО, тяжёлая нагрузка, снизь группу"
+                    elif p_sec < lt_sec * 1.05:
+                        intensity_note = f"темп {avg_pace_48h} мин/км — около ПАНО, умеренная нагрузка"
+                    else:
+                        intensity_note = f"темп {avg_pace_48h} мин/км — ниже ПАНО, восстановительная нагрузка"
+                else:
+                    intensity_note = "интенсивность недоступна"
+            else:
+                intensity_note = "интенсивность недоступна (нет suffer score и данных о темпе)"
+
+        parts += [
+            "",
+            "НАГРУЗКА ЗА ПОСЛЕДНИЕ 48 ЧАСОВ:",
+            f"Тренировок: {load_48h.get('sessions_48h', '?')}, "
+            f"Километраж: {km_48h} км, "
+            f"Последняя: {last_str}",
+            f"Интенсивность: {intensity_note}.",
+        ]
+
     if race_text:
         parts.append(f"\n{race_text}")
 
@@ -212,6 +280,26 @@ def build_evening_prompt(workout: dict, fitness: dict, recovery: dict | None = N
         "Если темп группы БОЛЬШЕ порогового — работа НИЖЕ ПАНО (аэробная зона, умеренная интенсивность).",
         "Используй это при оценке подходимости групп и расчёте suitability_percentages.",
         "",
+        "ВАЖНО про прогрессию темпа:",
+        "Темп 4:05 → 3:40 — это УСКОРЕНИЕ (спортсмен бежит БЫСТРЕЕ).",
+        "Темп уменьшается в минутах = скорость увеличивается.",
+        "НЕ писать 'темп снижается' когда цифры уменьшаются — писать 'темп растёт' или 'ускорение'.",
+        "Правильно: 'каждые 2 отрезка темп растёт: 4:05 → 4:00 → 3:55 → 3:50 → 3:45 → 3:40'",
+        "Неправильно: 'темп снижается: 4:05 → 3:40'",
+        "",
+        "АНАЛИЗ ВОССТАНОВИТЕЛЬНЫХ ОТРЕЗКОВ:",
+        "Формат '300м – 1:30' означает ВРЕМЯ прохождения отрезка, не темп.",
+        "Расчёт темпа: время_в_секундах / дистанция_в_км = секунд на км → переведи в мин:сек.",
+        "Пример: '300м – 1:30' → 90 сек / 0.3 км = 300 сек/км = 5:00 мин/км.",
+        "",
+        "Формат '500м – 1:52-1:42' = диапазон времени:",
+        "медленный: 112 сек / 0.5 км = 224 сек/км = 3:44 мин/км",
+        "быстрый: 102 сек / 0.5 км = 204 сек/км = 3:24 мин/км",
+        "",
+        "Если темп восстановления быстрее 5:30 мин/км — активное восстановление.",
+        "Укажи рассчитанный темп в поле warning: 'темп ~X:XX мин/км'.",
+        "Учти в suitability_percentages: нагрузка группы выше на 15%.",
+        "",
         "ЗАДАЧА: дай рекомендацию по группе с учётом ощущений на разминке.",
         "",
         *(["ПОГОДА НА ТРЕНИРОВКУ:", weather_prompt,
@@ -233,6 +321,20 @@ def build_evening_prompt(workout: dict, fitness: dict, recovery: dict | None = N
         "5. В suitability_percentages оцени подходимость КАЖДОЙ группы из раздела ГРУППЫ",
         "   (включая дополнительные). 100 = идеально, 0 = совсем не подходит.",
         "   Группа с максимальным процентом ДОЛЖНА совпадать с recommended_group.",
+        "   ВАЖНО: поле 'group' в suitability_percentages — ТОЛЬКО номер группы.",
+        "   Допустимо: '1', '2', '3', '3.5', '4', '5'. ЗАПРЕЩЕНО: 'Группа 3', '3 быстрая', '5 (537м)'.",
+        "6. garmin_workout: сгенерируй JSON тренировки для Garmin Connect API.",
+        f"   workoutName: \"DD_{workout.get('workout_date','').replace('-','')}-{{recommended_group}}_lvl\"",
+        "   Скорость в м/с: 1000/(M*60+SS) для темпа M:SS мин/км.",
+        "   Если темп задан как время на отрезок (напр. '2:10 на 500 м') → 500/(2*60+10).",
+        "   targetValueOne = БЫСТРЕЕ (большее м/с), targetValueTwo = МЕДЛЕННЕЕ.",
+        "   Рабочие отрезки: stepTypeKey='interval', endCondition='distance' (метры), targetType='pace.zone'.",
+        "   Восстановление: stepTypeKey='recovery'.",
+        "   Если время задано явно (напр. '300м — 1:30') → targetType='pace.zone',",
+        "   targetValueOne=targetValueTwo=dist_m/total_sec (напр. 300/90=3.3333333 м/с).",
+        "   Если времени нет ('200м лёгкий бег') → targetType='no.target', targetValueOne/Two=null.",
+        "   Повторы: RepeatGroupDTO с numberOfIterations.",
+        "   stepOrder: сквозная нумерация с 1. У шагов внутри RepeatGroup childStepId=1, у остальных null.",
         "",
         "Дай ответ строго в формате JSON:",
         """{
@@ -246,7 +348,29 @@ def build_evening_prompt(workout: dict, fitness: dict, recovery: dict | None = N
     {"group": "номер группы", "percentage": число_от_0_до_100, "comment": "СТРОГО 1-2 слова (примеры: идеально, запасной, быстро, легко, опасно, на грани)"}
   ],
   "preparation_tips": ["совет 1", "совет 2"],
-  "warning": "предупреждение или null"
+  "warning": "предупреждение или null",
+  "garmin_workout": {
+    "workoutName": "DD_YYYYMMDD-GROUP_lvl",
+    "description": null,
+    "sportType": {"sportTypeId": 1, "sportTypeKey": "running", "displayOrder": 1},
+    "subSportType": null,
+    "workoutSegments": [{"segmentOrder": 1, "sportType": {"sportTypeId": 1, "sportTypeKey": "running", "displayOrder": 1}, "poolLengthUnit": null, "poolLength": null, "workoutSteps": [
+      {
+        "type": "RepeatGroupDTO",
+        "stepOrder": 1,
+        "stepType": {"stepTypeId": 6, "stepTypeKey": "repeat", "displayOrder": 6},
+        "childStepId": null,
+        "numberOfIterations": 12,
+        "workoutSteps": [
+          {"type": "ExecutableStepDTO", "stepOrder": 2, "stepType": {"stepTypeId": 3, "stepTypeKey": "interval", "displayOrder": 3}, "childStepId": 1, "description": null, "endCondition": {"conditionTypeId": 3, "conditionTypeKey": "distance", "displayOrder": 3, "displayable": true}, "endConditionValue": 500.0, "preferredEndConditionUnit": null, "endConditionCompare": null, "targetType": {"workoutTargetTypeId": 6, "workoutTargetTypeKey": "pace.zone", "displayOrder": 6}, "targetValueOne": 3.8461538, "targetValueTwo": 3.6496351, "targetValueUnit": null, "zoneNumber": null, "secondaryTargetType": null, "secondaryTargetValueOne": null, "secondaryTargetValueTwo": null, "secondaryTargetValueUnit": null, "secondaryZoneNumber": null, "endConditionZone": null, "strokeType": {"strokeTypeId": 0, "strokeTypeKey": null, "displayOrder": 0}, "equipmentType": {"equipmentTypeId": 0, "equipmentTypeKey": null, "displayOrder": 0}, "category": null, "exerciseName": null, "workoutProvider": null, "providerExerciseSourceId": null, "weightValue": null, "weightUnit": null},
+          {"type": "ExecutableStepDTO", "stepOrder": 3, "stepType": {"stepTypeId": 4, "stepTypeKey": "recovery", "displayOrder": 4}, "childStepId": 1, "description": null, "endCondition": {"conditionTypeId": 3, "conditionTypeKey": "distance", "displayOrder": 3, "displayable": true}, "endConditionValue": 300.0, "preferredEndConditionUnit": null, "endConditionCompare": null, "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target", "displayOrder": 1}, "targetValueOne": null, "targetValueTwo": null, "targetValueUnit": null, "zoneNumber": null, "secondaryTargetType": null, "secondaryTargetValueOne": null, "secondaryTargetValueTwo": null, "secondaryTargetValueUnit": null, "secondaryZoneNumber": null, "endConditionZone": null, "strokeType": {"strokeTypeId": 0, "strokeTypeKey": null, "displayOrder": 0}, "equipmentType": {"equipmentTypeId": 0, "equipmentTypeKey": null, "displayOrder": 0}, "category": null, "exerciseName": null, "workoutProvider": null, "providerExerciseSourceId": null, "weightValue": null, "weightUnit": null}
+        ],
+        "endConditionValue": 12.0, "preferredEndConditionUnit": null, "endConditionCompare": null,
+        "endCondition": {"conditionTypeId": 7, "conditionTypeKey": "iterations", "displayOrder": 7, "displayable": false},
+        "skipLastRestStep": false, "smartRepeat": false
+      }
+    ]}]
+  }
 }""",
         "",
         "Отвечай только JSON, без лишнего текста.",
@@ -425,64 +549,319 @@ Garmin Body Battery (если нет Training Readiness): >= 70 → "go", >= 40 
 Отвечай только JSON, без лишнего текста."""
 
 
-def ask_groq(prompt: str, mode: str = "deep") -> dict | None:
-    """Возвращает {"advice": {...}, "stats": {"time_sec", "input_tokens", "output_tokens", "mode"}} или None."""
+def ask_groq(prompt: str, mode: str = "smart") -> dict | None:
+    """Возвращает {"advice": {...}, "stats": {...}, "garmin_workout": ...} или None.
+    При timeout возвращает {"advice": None, "timeout": True, "stats": {...}}.
+
+    mode="deep"  → deepseek-v4-pro,   max_tokens=16000, timeout=300s  (~2-3 мин)
+    mode="smart" → deepseek-v4-flash, max_tokens=12000, timeout=180s  (~1-2 мин)
+    mode="fast"  → deepseek-v4-flash, max_tokens=8000,  timeout=60s   (~30 сек)
+    """
     global last_prompt
     last_prompt = prompt
     print(f"=== PROMPT ===\n{prompt}\n=== END PROMPT ===")
     import re as _re
-    raw = ""
+
+    if mode == "deep":
+        model, max_tok, api_timeout = MODEL_DEEP, 16000, 300
+    elif mode == "smart":
+        model, max_tok, api_timeout = MODEL_SMART, 12000, 180
+    else:
+        model, max_tok, api_timeout = MODEL_FAST, 8000, 60
+
     t0 = _time.time()
-    model = MODEL_DEEP if mode == "deep" else MODEL_FAST
+    raw = ""
+    stats = {"time_sec": 0, "input_tokens": None, "output_tokens": None, "mode": mode}
+
+    for attempt in range(2):
+        try:
+            create_kwargs = dict(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=max_tok,
+                temperature=0,
+                timeout=api_timeout,
+            )
+            response = _get_client().chat.completions.create(**create_kwargs)
+            elapsed = round(_time.time() - t0, 1)
+            usage = response.usage
+            stats = {
+                "time_sec": elapsed,
+                "input_tokens": usage.prompt_tokens if usage else None,
+                "output_tokens": usage.completion_tokens if usage else None,
+                "mode": mode,
+            }
+            print(f"Stats attempt {attempt + 1}: {stats}")
+
+            msg = response.choices[0].message
+            reasoning = getattr(msg, "reasoning_content", None)
+            if reasoning:
+                reasoning_tokens = getattr(usage, "completion_tokens_details", None)
+                effort_info = ""
+                if reasoning_tokens:
+                    rt = getattr(reasoning_tokens, "reasoning_tokens", None)
+                    effort_info = f", reasoning_tokens={rt}" if rt else ""
+                reasoning_effort = (getattr(response, "reasoning_effort", None)
+                                    or getattr(usage, "reasoning_effort", None))
+                if reasoning_effort:
+                    effort_info += f", reasoning_effort={reasoning_effort}"
+                print(f"=== THINKING ({len(reasoning)} chars{effort_info}) ===\n{reasoning[:800]}\n=== END THINKING ===")
+
+            raw = (msg.content or "").strip()
+            print(f"=== CONTENT attempt {attempt + 1} ({len(raw)} chars) ===\n{raw[:300]}\n===")
+
+            if not raw and reasoning:
+                m = _re.search(r'\{[\s\S]*\}', reasoning)
+                if m:
+                    raw = m.group(0)
+                    print("Fallback: JSON извлечён из reasoning_content")
+
+            if not raw:
+                if attempt == 0:
+                    print("Пустой ответ на попытке 1, повтор через 3 сек...")
+                    _time.sleep(3)
+                    continue
+                print("Пустой ответ на попытке 2")
+                return None
+
+            break  # получили непустой ответ — выходим из retry-цикла
+
+        except Exception as e:
+            # Проверяем timeout через имя класса (совместимо с разными версиями openai SDK)
+            err_type = type(e).__name__
+            if "Timeout" in err_type or "timeout" in str(e).lower():
+                elapsed = round(_time.time() - t0, 1)
+                print(f"DeepSeek API timeout after {elapsed}s (limit={api_timeout}s): {e}")
+                return {
+                    "advice": None,
+                    "stats": {"time_sec": elapsed, "mode": mode},
+                    "timeout": True,
+                }
+            if attempt == 0:
+                print(f"Ошибка DeepSeek API (попытка 1): {e}, повтор через 3 сек...")
+                _time.sleep(3)
+                continue
+            print(f"Ошибка DeepSeek API: {e}")
+            return None
+
+    # ── Парсинг JSON ──────────────────────────────────────────
+    raw = _re.sub(r"<think>.*?</think>", "", raw, flags=_re.DOTALL).strip()
+    raw = raw.replace("```json", "").replace("```", "").strip()
+
+    # Попытка 1: парсим весь JSON целиком
+    try:
+        parsed = json.loads(raw)
+        garmin_workout = parsed.pop('garmin_workout', None)
+        return {"advice": parsed, "stats": stats, "garmin_workout": garmin_workout}
+    except json.JSONDecodeError as e:
+        print(f"Полный JSON невалиден: {e} | raw[:200]={raw[:200]!r}")
+
+    # Попытка 2: обрезаем на позиции "garmin_workout" — основная причина truncation
+    # (модель обрывает JSON прямо в reason/suitability ДО garmin_workout — это не поможет)
+    # Ищем ключ garmin_workout и обрезаем там
+    gw_match = _re.search(r',?\s*"garmin_workout"\s*:', raw)
+    if gw_match:
+        raw_cut = raw[:gw_match.start()].rstrip().rstrip(',')
+        if not raw_cut.endswith('}'):
+            raw_cut += '}'
+        try:
+            parsed = json.loads(raw_cut)
+            parsed.pop('garmin_workout', None)
+            print("Fallback cut: advice-поля извлечены, garmin_workout обрезан")
+            return {"advice": parsed, "stats": stats, "garmin_workout": None}
+        except json.JSONDecodeError as e2:
+            print(f"Cut fallback невалиден: {e2} | raw_cut[:200]={raw_cut[:200]!r}")
+
+    # Попытка 3: старый regex-подход — стрип garmin_workout с конца
+    raw_no_garmin = _re.sub(
+        r',?\s*"garmin_workout"\s*:\s*\{[\s\S]*?\}\s*(?=\}?\s*$)',
+        '',
+        raw,
+        flags=_re.DOTALL,
+    )
+    raw_no_garmin = raw_no_garmin.strip().rstrip(',').rstrip()
+    if not raw_no_garmin.endswith('}'):
+        raw_no_garmin += '}'
+    try:
+        parsed = json.loads(raw_no_garmin)
+        parsed.pop('garmin_workout', None)
+        print("Fallback regex-strip: advice-поля извлечены (garmin_workout вырезан regex)")
+        return {"advice": parsed, "stats": stats, "garmin_workout": None}
+    except json.JSONDecodeError as e3:
+        print(f"Regex fallback тоже невалиден: {e3} | raw_no_garmin[:200]={raw_no_garmin[:200]!r}")
+
+    # Попытка 4: извлекаем ключевые поля regex'ом по одному (JSON обрезан в advice-полях)
+    print("Попытка 4: индивидуальное извлечение полей...")
+    group_m = _re.search(r'"recommended_group"\s*:\s*"([^"]*)"', raw)
+    pace_m  = _re.search(r'"recommended_pace"\s*:\s*"([^"]*)"', raw)
+    if group_m and pace_m:
+        minimal = {
+            "recommended_group": group_m.group(1),
+            "recommended_pace": pace_m.group(1),
+            "reason": "—",
+            "if_feeling_good": "—",
+            "if_tired": "—",
+            "gap_note": "",
+            "suitability_percentages": [],
+            "preparation_tips": [],
+            "warning": None,
+        }
+        print(f"Fallback minimal: group={minimal['recommended_group']}, pace={minimal['recommended_pace']}")
+        return {"advice": minimal, "stats": stats, "garmin_workout": None}
+
+    print("Все попытки парсинга JSON не удались")
+    return None
+
+
+def ask_deepseek_garmin(workout: dict, group: str, pace: str) -> dict | None:
+    """Просим DeepSeek сгенерировать JSON тренировки для Garmin Connect.
+
+    Возвращает готовый dict (workoutName, sportType, workoutSegments, ...)
+    или None при ошибке. Использует быструю модель — задача детерминированная.
+    """
+    import re as _re
+    from datetime import datetime as _dt
+
+    date = workout.get('workout_date', _dt.now().strftime('%Y-%m-%d'))
+    date_compact = date.replace('-', '')
+    work_text  = workout.get('work_text', '')
+    groups_raw = workout.get('groups_raw', '')
+    for extra in (workout.get('extra_groups_raw') or []):
+        groups_raw += '\n' + extra
+
+    prompt = f"""Сгенерируй JSON тренировки для загрузки в Garmin Connect API.
+
+ТРЕНИРОВКА: {work_text}
+ДАТА: {date}
+РЕКОМЕНДУЕМАЯ ГРУППА: {group}
+РЕКОМЕНДУЕМЫЙ ТЕМП: {pace}
+
+ОПИСАНИЕ ВСЕХ ГРУПП:
+{groups_raw}
+
+ТРЕБОВАНИЯ К JSON:
+- workoutName: "DD_{date_compact}-{group}_lvl"
+- sportType: {{"sportTypeId": 1, "sportTypeKey": "running", "displayOrder": 1}}
+- Скорость в м/с: для темпа M:SS мин/км → speed = 1000 / (M*60+SS)
+  Пример: 4:20/км → 1000/260 = 3.8461538 м/с
+  Если темп задан как время на отрезок (напр. 2:10 на 500 м) → speed = 500 / (2*60+10) = 500/130 = 3.8461538 м/с
+- targetValueOne = БЫСТРЕЕ (большее значение м/с)
+- targetValueTwo = МЕДЛЕННЕЕ (меньшее значение м/с)
+- Для восстановительного бега: targetType.workoutTargetTypeKey = "no.target", targetValueOne/Two = null
+- Дистанция в метрах (endConditionValue)
+- stepOrder нумеруется с 1, последовательно по всем шагам включая шаги внутри RepeatGroup
+- childStepId у шагов внутри RepeatGroup = 1, у верхнеуровневых шагов = null
+
+ПРИМЕР структуры для "12 по 500/300 м" в темпе 4:20–4:34 мин/км:
+```json
+{{
+  "workoutName": "DD_{date_compact}-{group}_lvl",
+  "description": null,
+  "sportType": {{"sportTypeId": 1, "sportTypeKey": "running", "displayOrder": 1}},
+  "subSportType": null,
+  "workoutSegments": [{{
+    "segmentOrder": 1,
+    "sportType": {{"sportTypeId": 1, "sportTypeKey": "running", "displayOrder": 1}},
+    "poolLengthUnit": null,
+    "poolLength": null,
+    "workoutSteps": [
+      {{
+        "type": "RepeatGroupDTO",
+        "stepOrder": 1,
+        "stepType": {{"stepTypeId": 6, "stepTypeKey": "repeat", "displayOrder": 6}},
+        "childStepId": null,
+        "numberOfIterations": 12,
+        "workoutSteps": [
+          {{
+            "type": "ExecutableStepDTO",
+            "stepOrder": 2,
+            "stepType": {{"stepTypeId": 3, "stepTypeKey": "interval", "displayOrder": 3}},
+            "childStepId": 1,
+            "description": null,
+            "endCondition": {{"conditionTypeId": 3, "conditionTypeKey": "distance", "displayOrder": 3, "displayable": true}},
+            "endConditionValue": 500.0,
+            "preferredEndConditionUnit": null,
+            "endConditionCompare": null,
+            "targetType": {{"workoutTargetTypeId": 6, "workoutTargetTypeKey": "pace.zone", "displayOrder": 6}},
+            "targetValueOne": 3.8461538,
+            "targetValueTwo": 3.6496351,
+            "targetValueUnit": null,
+            "zoneNumber": null,
+            "secondaryTargetType": null,
+            "secondaryTargetValueOne": null,
+            "secondaryTargetValueTwo": null,
+            "secondaryTargetValueUnit": null,
+            "secondaryZoneNumber": null,
+            "endConditionZone": null,
+            "strokeType": {{"strokeTypeId": 0, "strokeTypeKey": null, "displayOrder": 0}},
+            "equipmentType": {{"equipmentTypeId": 0, "equipmentTypeKey": null, "displayOrder": 0}},
+            "category": null, "exerciseName": null, "workoutProvider": null,
+            "providerExerciseSourceId": null, "weightValue": null, "weightUnit": null
+          }},
+          {{
+            "type": "ExecutableStepDTO",
+            "stepOrder": 3,
+            "stepType": {{"stepTypeId": 4, "stepTypeKey": "recovery", "displayOrder": 4}},
+            "childStepId": 1,
+            "description": null,
+            "endCondition": {{"conditionTypeId": 3, "conditionTypeKey": "distance", "displayOrder": 3, "displayable": true}},
+            "endConditionValue": 300.0,
+            "preferredEndConditionUnit": null,
+            "endConditionCompare": null,
+            "targetType": {{"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target", "displayOrder": 1}},
+            "targetValueOne": null,
+            "targetValueTwo": null,
+            "targetValueUnit": null,
+            "zoneNumber": null,
+            "secondaryTargetType": null,
+            "secondaryTargetValueOne": null,
+            "secondaryTargetValueTwo": null,
+            "secondaryTargetValueUnit": null,
+            "secondaryZoneNumber": null,
+            "endConditionZone": null,
+            "strokeType": {{"strokeTypeId": 0, "strokeTypeKey": null, "displayOrder": 0}},
+            "equipmentType": {{"equipmentTypeId": 0, "equipmentTypeKey": null, "displayOrder": 0}},
+            "category": null, "exerciseName": null, "workoutProvider": null,
+            "providerExerciseSourceId": null, "weightValue": null, "weightUnit": null
+          }}
+        ],
+        "endConditionValue": 12.0,
+        "preferredEndConditionUnit": null,
+        "endConditionCompare": null,
+        "endCondition": {{"conditionTypeId": 7, "conditionTypeKey": "iterations", "displayOrder": 7, "displayable": false}},
+        "skipLastRestStep": false,
+        "smartRepeat": false
+      }}
+    ]
+  }}]
+}}
+```
+
+Возьми темп из РЕКОМЕНДУЕМЫЙ ТЕМП (приоритет) и/или описания выбранной группы.
+Верни ТОЛЬКО JSON в блоке ```json```, без пояснений."""
+
     try:
         response = _get_client().chat.completions.create(
-            model=model,
+            model=MODEL_FAST,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=8000,
+            max_tokens=4000,
             temperature=0,
         )
-        elapsed = round(_time.time() - t0, 1)
-        usage = response.usage
-        stats = {
-            "time_sec": elapsed,
-            "input_tokens": usage.prompt_tokens if usage else None,
-            "output_tokens": usage.completion_tokens if usage else None,
-            "mode": mode,
-        }
-        print(f"Stats: {stats}")
-
-        msg = response.choices[0].message
-        reasoning = getattr(msg, "reasoning_content", None)
-        if reasoning:
-            # Логируем reasoning_effort / reasoning_tokens если доступны
-            reasoning_tokens = getattr(usage, "completion_tokens_details", None)
-            effort_info = ""
-            if reasoning_tokens:
-                rt = getattr(reasoning_tokens, "reasoning_tokens", None)
-                effort_info = f", reasoning_tokens={rt}" if rt else ""
-            reasoning_effort = getattr(response, "reasoning_effort", None) or getattr(usage, "reasoning_effort", None)
-            if reasoning_effort:
-                effort_info += f", reasoning_effort={reasoning_effort}"
-            print(f"=== THINKING ({len(reasoning)} chars{effort_info}) ===\n{reasoning[:800]}\n=== END THINKING ===")
-
-        raw = (msg.content or "").strip()
-        print(f"=== CONTENT ({len(raw)} chars) ===\n{raw[:300]}\n===")
-
-        if not raw and reasoning:
-            m = _re.search(r'\{[\s\S]*\}', reasoning)
-            if m:
-                raw = m.group(0)
-                print("Fallback: JSON извлечён из reasoning_content")
-
-        raw = _re.sub(r"<think>.*?</think>", "", raw, flags=_re.DOTALL).strip()
-        raw = raw.replace("```json", "").replace("```", "").strip()
-        advice = json.loads(raw)
-        return {"advice": advice, "stats": stats}
-    except json.JSONDecodeError as e:
-        print(f"Ошибка парсинга JSON: {e} | raw[:200]={raw[:200]!r}")
-        return None
+        raw = (response.choices[0].message.content or "").strip()
+        # Извлекаем JSON из блока ```json ... ```
+        m = _re.search(r'```json\s*([\s\S]*?)```', raw)
+        if m:
+            raw = m.group(1).strip()
+        else:
+            # Пробуем найти объект напрямую
+            m2 = _re.search(r'\{[\s\S]*\}', raw)
+            if m2:
+                raw = m2.group(0)
+        result = json.loads(raw)
+        print(f"[garmin_json] OK: {result.get('workoutName', '?')}")
+        return result
     except Exception as e:
-        print(f"Ошибка DeepSeek API: {e}")
+        print(f"[garmin_json] Ошибка: {e}")
         return None
 
 
@@ -511,12 +890,24 @@ def _shorten_group_label(g: str) -> str:
     return s[:13]
 
 
+def _sanitize_group_name(name: str) -> str:
+    """Extract only the group number from any model-generated group label."""
+    import re as _re
+    s = str(name).strip()
+    # Remove "Группа" / "группа" prefix
+    s = _re.sub(r'[Гг]руппа\s*', '', s).strip()
+    # Take only the first token (number, possibly with decimal like "3.5")
+    m = _re.match(r'[\d]+(?:[.,][\d]+)?', s)
+    return m.group(0).replace(',', '.') if m else s[:5]
+
+
 def _pct_bar(pct: int, width: int = 8) -> str:
     filled = max(0, min(width, round(pct / 100 * width)))
     return '🟩' * filled + '⬜' * (width - filled)
 
 
-def format_evening_message(advice: dict, workout: dict, stats: dict | None = None, weather_line: str = "") -> str:
+
+def format_evening_message(advice: dict, workout: dict, stats: dict | None = None, weather_line: str = "", profile_only: bool = False, has_tracker: bool = True) -> str:
     if not advice:
         return "Не удалось получить рекомендацию. Попробуй позже."
 
@@ -566,8 +957,11 @@ def format_evening_message(advice: dict, workout: dict, stats: dict | None = Non
         if weather_line:
             lines.append(weather_line)
 
-    if stats and stats.get("mode") == "fast":
-        lines.append("⚡ <i>Быстрый режим — рекомендация приблизительная, возможно смещение на соседнюю группу</i>")
+    if stats and stats.get("mode") == "fast" and not profile_only:
+        lines.append("🔥 Быстрый режим — без глубокого анализа")
+
+    if not has_tracker:
+        lines.append("⚠️ Рекомендация без данных о нагрузке — подключи Garmin, COROS или Polar для точного анализа")
 
     lines.append(sep)
 
@@ -576,12 +970,12 @@ def format_evening_message(advice: dict, workout: dict, stats: dict | None = Non
         sorted_s = sorted(suitability, key=lambda x: x.get("percentage", 0), reverse=True)
         lines.append("📊 <b>Подходимость групп:</b>")
         for item in sorted_s:
-            g = item.get("group", "?")
+            g = _sanitize_group_name(str(item.get("group", "?")))
             pct = int(item.get("percentage", 0))
             bar = _pct_bar(pct)
-            label = ("Группа " + str(g)).ljust(10)
-            comment_str = f" — {_html.escape(item.get('comment', ''))}" if item.get("comment") else ""
-            lines.append(f"<code>{label} {bar} {pct}%{comment_str}</code>")
+            comment = (item.get('comment') or '')[:12]
+            comment_str = f" — {_html.escape(comment)}" if comment else ""
+            lines.append(f"<code>Гр.{g:<4} {bar} {pct:>3}%{comment_str}</code>")
         lines.append(sep)
 
     # Основная рекомендация
@@ -590,24 +984,34 @@ def format_evening_message(advice: dict, workout: dict, stats: dict | None = Non
     if reason:
         lines.append(f"<i>{reason}</i>")
 
-    # Альтернативы по ощущениям
-    if if_good or if_tired:
+    # Классифицируем warning: "восстановл" / "300м" / "темп ~" → сразу после группы, остальные → внизу
+    warning_str = str(warning).strip() if warning and str(warning).lower() not in ("null", "none", "") else ""
+    _recovery_kw = ("восстановл", "300м", "темп ~")
+    is_recovery_warning = bool(warning_str and any(kw in warning_str.lower() for kw in _recovery_kw))
+
+    # ⚡ Активное восстановление — сразу после группы
+    if is_recovery_warning:
+        lines.append(f"\n⚡ <b>Активное восстановление</b>\n<i>{_html.escape(warning_str)}</i>")
+
+    # Оцени на разминке (+ gap_note внутри блока)
+    if if_good or if_tired or gap_note:
         lines += [sep, "<b>Оцени на разминке:</b>"]
         if if_good:
             lines.append(f"🟢 Легко → {if_good}")
         if if_tired:
             lines.append(f"🔴 Тяжело → {if_tired}")
+        if gap_note:
+            lines.append(f"📐 {gap_note}")
 
-    if gap_note:
-        lines.append(f"\n📐 {gap_note}")
-
+    # Подготовка
     if tips:
         lines += [sep, "<b>Подготовка:</b>"]
         for tip in tips:
             lines.append(f"• {tip}")
 
-    if warning and str(warning).lower() != "null":
-        lines.append(f"\n⚠️ <i>{_html.escape(str(warning))}</i>")
+    # ⚠️ Остальные предупреждения (соревнование, усталость) — перед «Удачи»
+    if warning_str and not is_recovery_warning:
+        lines.append(f"\n⚠️ <i>{_html.escape(warning_str)}</i>")
 
     lines.append("\n<i>Анонс следующей тренировки выходит накануне утром.</i>" if is_past
                  else "\nУдачи на тренировке! 💪\nНо главное помни:\nПриходи - не бойся, уходи - не плачь!")
@@ -616,7 +1020,7 @@ def format_evening_message(advice: dict, workout: dict, stats: dict | None = Non
         t = stats.get("time_sec", "?")
         inp = stats.get("input_tokens", "?")
         out = stats.get("output_tokens", "?")
-        mode_str = "🧠 Глубокое" if stats.get("mode", "deep") == "deep" else "⚡ Быстрое"
+        mode_str = _MODE_LABELS.get(stats.get("mode"), "⚡ Умное")
         lines.append(f"\n<i>⏱ {t}с | {mode_str} | 📥 {inp} / 📤 {out} | v{VERSION}</i>")
 
     return '\n'.join(lines)
@@ -814,6 +1218,8 @@ def build_long_run_prompt(workout: dict, fitness: dict, recovery: dict | None = 
         "- second_half_pace = pace_end выбранной группы (или null при ровном темпе)",
         "",
         "В suitability_percentages включи КАЖДУЮ группу из раздела ГРУППЫ (все без исключения).",
+        "ВАЖНО: поле 'group' — ТОЛЬКО номер группы. Допустимо: '1', '2', '3', '3.5', '4', '5'.",
+        "ЗАПРЕЩЕНО: 'Группа 3', '3 быстрая', '5 (537м)'. Только цифра или цифра с точкой.",
         "",
         "ЯЗЫК: все текстовые поля ТОЛЬКО на русском языке. Не используй английский.",
         "",
@@ -838,7 +1244,7 @@ def build_long_run_prompt(workout: dict, fitness: dict, recovery: dict | None = 
     return "\n".join(parts)
 
 
-def format_long_run_message(advice: dict, workout: dict, stats: dict | None = None, weather_line: str = "") -> str:
+def format_long_run_message(advice: dict, workout: dict, stats: dict | None = None, weather_line: str = "", profile_only: bool = False, has_tracker: bool = True) -> str:
     if not advice:
         return "Не удалось получить рекомендацию. Попробуй позже."
 
@@ -870,8 +1276,11 @@ def format_long_run_message(advice: dict, workout: dict, stats: dict | None = No
     if weather_line:
         lines.append(weather_line)
 
-    if stats and stats.get("mode") == "fast":
-        lines.append("⚡ <i>Быстрый режим — рекомендация приблизительная</i>")
+    if stats and stats.get("mode") == "fast" and not profile_only:
+        lines.append("🔥 Быстрый режим — без глубокого анализа")
+
+    if not has_tracker:
+        lines.append("⚠️ Рекомендация без данных о нагрузке — подключи Garmin, COROS или Polar для точного анализа")
 
     lines.append(sep)
 
@@ -879,26 +1288,14 @@ def format_long_run_message(advice: dict, workout: dict, stats: dict | None = No
     suitability = advice.get("suitability_percentages") or []
     if suitability:
         sorted_s = sorted(suitability, key=lambda x: x.get("percentage", 0), reverse=True)
-        # Build lookup: num_str → group dict (for pace); parser uses key "number"
-        import re as _re2
-        _groups_lookup = {}
-        for _g in (workout.get("groups") or []):
-            _num = _g.get("number") or _g.get("group_num")
-            if _num is not None:
-                _groups_lookup[str(_num)] = _g
         lines.append("📊 <b>Подходимость групп:</b>")
         for item in sorted_s:
-            g = str(item.get("group", "?"))
+            g = _sanitize_group_name(str(item.get("group", "?")))
             pct = int(item.get("percentage", 0))
             bar = _pct_bar(pct)
-            num_m = _re2.search(r'\d+', g)
-            num_str = num_m.group(0) if num_m else g
-            grp_data = _groups_lookup.get(num_str, {})
-            grp_pace = grp_data.get("pace_start") or ""
-            label_short = (f"Гр.{num_str} ({grp_pace})" if grp_pace else f"Гр.{num_str}")
-            label_padded = label_short.ljust(13)
-            comment_str = f" — {_html.escape(item.get('comment', ''))}" if item.get("comment") else ""
-            lines.append(f"<code>{label_padded} {bar} {pct}%{comment_str}</code>")
+            comment = (item.get('comment') or '')[:12]
+            comment_str = f" — {_html.escape(comment)}" if comment else ""
+            lines.append(f"<code>Гр.{g:<4} {bar} {pct:>3}%{comment_str}</code>")
         lines.append(sep)
 
     group_raw = str(advice.get("recommended_group", "—"))
@@ -960,7 +1357,7 @@ def format_long_run_message(advice: dict, workout: dict, stats: dict | None = No
         t = stats.get("time_sec", "?")
         inp = stats.get("input_tokens", "?")
         out = stats.get("output_tokens", "?")
-        mode_str = "🧠 Глубокое" if stats.get("mode", "deep") == "deep" else "⚡ Быстрое"
+        mode_str = _MODE_LABELS.get(stats.get("mode"), "⚡ Умное")
         lines.append(f"\n<i>⏱ {t}с | {mode_str} | 📥 {inp} / 📤 {out} | v{VERSION}</i>")
 
     return '\n'.join(lines)

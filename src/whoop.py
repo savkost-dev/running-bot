@@ -12,6 +12,8 @@ WHOOP_AUTH_URL = "https://api.prod.whoop.com/oauth/oauth2/auth"
 WHOOP_TOKEN_URL = "https://api.prod.whoop.com/oauth/oauth2/token"
 WHOOP_API_BASE = "https://api.prod.whoop.com/developer/v2"
 
+WHOOP_REDIRECT_URI = "https://httpbin.org/get"
+
 _TIMEOUT = aiohttp.ClientTimeout(total=15)
 _MAX_RETRIES = 3
 
@@ -21,7 +23,7 @@ def get_auth_url(telegram_id: int) -> str:
     params = urllib.parse.urlencode({
         "client_id": WHOOP_CLIENT_ID,
         "response_type": "code",
-        "redirect_uri": "https://httpbin.org/get",
+        "redirect_uri": WHOOP_REDIRECT_URI,
         "scope": "offline read:recovery read:sleep read:profile read:cycles",
         "state": str(telegram_id),
     })
@@ -55,7 +57,7 @@ async def exchange_code(code: str) -> dict:
         async with session.post(WHOOP_TOKEN_URL, data={
             "grant_type": "authorization_code",
             "code": code,
-            "redirect_uri": "https://httpbin.org/get",
+            "redirect_uri": WHOOP_REDIRECT_URI,
             "client_id": WHOOP_CLIENT_ID,
             "client_secret": WHOOP_CLIENT_SECRET,
         }, timeout=_TIMEOUT) as resp:

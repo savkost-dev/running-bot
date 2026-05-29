@@ -6,3 +6,6 @@ src/__pycache__/
 uploads/
 *.pyc
 .claude/
+venv/
+.garmin_token
+test_*.py

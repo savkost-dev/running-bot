@@ -30,6 +30,15 @@ WORKOUT_KEYWORDS = [
     'работа', 'заминка', 'объём', 'объем', 'км', 'ddlong'
 ]
 
+# Паттерны для фильтрации индивидуальных рекомендаций / анонсов гонок из комментариев
+_NOISE_KEYWORDS_RE = re.compile(
+    r'забег|гонка|соревнование|старт|'
+    r'переходим в|переходите в|'
+    r'кому нужно|кто хочет|для тех кто',
+    re.IGNORECASE
+)
+_DATE_DD_MM_RE = re.compile(r'\b\d{1,2}\.\d{2}\b')
+
 
 def get_client() -> TelegramClient:
     return TelegramClient(SESSION_FILE, API_ID, API_HASH)
@@ -104,8 +113,13 @@ async def find_next_workout(only_interval: bool = True) -> dict | None:
 
         if extra_groups:
             parsed["extra_groups"] = extra_groups
-            parsed["extra_groups_raw"] = [c["text"] for c in comments
-                                          if parse_extra_group_from_comment(c["text"])]
+            filtered_raws = []
+            for c in comments:
+                if parse_extra_group_from_comment(c["text"]):
+                    filtered = _filter_extra_group_comment(c["text"])
+                    if filtered:
+                        filtered_raws.append(filtered)
+            parsed["extra_groups_raw"] = filtered_raws
 
         try:
             workout_date = datetime.strptime(parsed["workout_date"], "%Y-%m-%d").date()
@@ -217,6 +231,37 @@ def _extract_groups_block(text: str) -> str:
                 groups_lines.append(clean)
 
     return '\n'.join(groups_lines) if groups_lines else ""
+
+
+def _line_has_group_desc(line: str) -> bool:
+    """True если строка описывает группу с эмодзи-номером или 'группа N + темп'."""
+    if any(emoji in line for emoji in EMOJI_NUMBERS):
+        return True
+    line_lower = line.lower()
+    if re.search(r'группа\s*\d', line_lower) and re.search(r'\d:\d{2}', line):
+        return True
+    return False
+
+
+def _filter_extra_group_comment(text: str) -> str | None:
+    """
+    Оставляет только строки с описанием группы, убирает анонсы гонок
+    и индивидуальные рекомендации. Возвращает None если ничего не осталось.
+    """
+    result = []
+    for line in text.split('\n'):
+        line_s = line.strip()
+        if not line_s:
+            continue
+        # Строки с описанием группы всегда сохраняем
+        if _line_has_group_desc(line_s):
+            result.append(line_s)
+            continue
+        # Шумовые строки убираем
+        if _NOISE_KEYWORDS_RE.search(line_s) or _DATE_DD_MM_RE.search(line_s):
+            continue
+        result.append(line_s)
+    return '\n'.join(result) if result else None
 
 
 def parse_extra_group_from_comment(text: str) -> dict | None:

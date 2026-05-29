@@ -12,3 +12,8 @@ journalctl -u running-bot -f
 
 bash
 ! cd 'D:\running-bot' ; claude --resume 877b7dee-dc04-4dba-aba2-93a27fd2e937
+
+-- powerShell
+cd D:\running-bot
+C:\nodejs\node.exe C:\nodejs\node_modules\@anthropic-ai\claude-code\cli-wrapper.cjs
+

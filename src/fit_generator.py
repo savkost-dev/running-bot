@@ -61,16 +61,54 @@ def _group_block(groups_raw: str, group_num: str) -> str:
 
 
 def _interval_speeds(block: str, dist_m: float) -> tuple[float, float]:
-    """Extract (slow_mps, fast_mps) for interval from group block."""
+    """Extract (slow_mps, fast_mps) for interval from group block.
+
+    Handles three formats:
+    1. '137–130 сек'           — explicit seconds
+    2. '2:17–2:10'             — M:SS as time for the interval (not pace/km)
+    3. '4:05–3:40' / '4.05–3.40' — pace per km (colon or dot notation)
+    """
+    # 1. Explicit seconds: "137–130 сек"
     m = re.search(r'(\d{2,3})\s*[-–]\s*(\d{2,3})\s*сек', block)
     if m:
         t1, t2 = float(m.group(1)), float(m.group(2))
         t_slow, t_fast = max(t1, t2), min(t1, t2)
         return dist_m / t_slow, dist_m / t_fast
-    paces = re.findall(r'\b(\d:\d{2})\b', block)
-    speeds = sorted([_pace_to_ms(p) for p in paces if _pace_to_ms(p) > 0])
-    if speeds:
-        return speeds[0], speeds[-1]
+
+    # 2 & 3. M:SS format — determine if it's pace/km or time for the interval
+    paces = re.findall(r'\b(\d+:\d{2})\b', block)
+    if paces:
+        raw_speeds = [_pace_to_ms(p) for p in paces if _pace_to_ms(p) > 0]
+        if raw_speeds:
+            # Running pace faster than 5.5 m/s (~3:02/km) is implausible →
+            # values are interval TIMES (e.g. "2:17 for 500 m"), not pace/km
+            if max(raw_speeds) > 5.5 and dist_m > 0:
+                time_speeds = []
+                for p in paces:
+                    parts = p.split(':')
+                    sec = int(parts[0]) * 60 + int(parts[1])
+                    if sec > 0:
+                        time_speeds.append(round(dist_m / sec, 7))
+                if time_speeds:
+                    time_speeds.sort()
+                    return time_speeds[0], time_speeds[-1]
+            else:
+                raw_speeds.sort()
+                return raw_speeds[0], raw_speeds[-1]
+
+    # 4. Dot notation pace: "4.05–3.40" (M.SS min/km, M in range 3–7)
+    dot_paces = re.findall(r'\b([3-7]\.\d{2})\b', block)
+    if dot_paces:
+        speeds = []
+        for p in dot_paces:
+            mins_s, secs_s = p.split('.')
+            sec = int(mins_s) * 60 + int(secs_s)
+            if sec > 0:
+                speeds.append(round(1000.0 / sec, 7))
+        if speeds:
+            speeds.sort()
+            return speeds[0], speeds[-1]
+
     return 0.0, 0.0
 
 
@@ -83,6 +121,29 @@ def _tempo_speeds(block: str) -> tuple[float, float]:
         if speeds:
             return speeds[0], speeds[-1]
     return _interval_speeds(block, 1000.0)
+
+
+def _rest_speed(block: str, rest_m: float) -> float:
+    """Parse recovery speed from patterns like '300м — 1:30' in group block.
+
+    Examples:
+      '10x500/300м — 1:30'  → 300 / 90 = 3.333 m/s  (tempo 5:00 /km)
+      '6x1000/400м — 2:30'  → 400 / 150 = 2.667 m/s  (tempo 6:15 /km)
+      '300м лёгкий бег'     → 0.0  (no time → no.target)
+    Returns m/s or 0.0 if no timed recovery found.
+    """
+    rest_int = int(rest_m)
+    # Match: {rest_m}м — M:SS  (accepts —, –, -)
+    for pat in [
+        rf'\b{rest_int}\s*м\s*[—–\-]\s*(\d+):(\d{{2}})',
+        rf'[/,]\s*{rest_int}\s*м\s*[—–\-]\s*(\d+):(\d{{2}})',
+    ]:
+        m = re.search(pat, block, re.IGNORECASE)
+        if m:
+            total_sec = int(m.group(1)) * 60 + int(m.group(2))
+            if total_sec > 0:
+                return round(rest_m / total_sec, 7)
+    return 0.0
 
 
 def _tempo_pace_list(block: str) -> list[float]:
@@ -247,7 +308,7 @@ def _build_interval_json(workout: dict, group: str, recommended_pace: str = '') 
     tempo_km = st.get('tempo_km')
 
     int_slow, int_fast = _interval_speeds(block, work_m)
-    if int_slow == 0.0 and recommended_pace:
+    if (int_slow == 0.0 or int_fast == 0.0) and recommended_pace:
         paces = re.findall(r'(\d+:\d{2})', recommended_pace)
         speeds = sorted([_pace_to_ms(p) for p in paces if _pace_to_ms(p) > 0])
         if len(speeds) >= 2:
@@ -286,9 +347,13 @@ def _build_interval_json(workout: dict, group: str, recommended_pace: str = '') 
     # RepeatGroupDTO — step order before inner steps
     repeat_order = order
     inner_order = order + 1
+    rest_speed = _rest_speed(block, rest_m)
     inner = [
         _step(inner_order, dist_m=work_m, v_fast=int_fast, v_slow=int_slow, child_id=1),
-        _step(inner_order + 1, dist_m=rest_m, stype='recovery', child_id=1),
+        _step(inner_order + 1, dist_m=rest_m, stype='recovery',
+              v_fast=rest_speed if rest_speed > 0 else None,
+              v_slow=rest_speed if rest_speed > 0 else None,
+              child_id=1),
     ]
     wkt_steps.append(_repeat_group(repeat_order, reps, inner))
 
