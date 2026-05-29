@@ -1271,31 +1271,73 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif query.data == "refresh_cache":
         db_user_id = get_or_create_user(user.id, user.full_name, user.username)
-        access_token = await ensure_valid_token(db_user_id)
-        if not access_token:
-            await query.edit_message_text(
-                "❌ Strava не подключена.",
-                reply_markup=_build_screen3_keyboard(db_user_id)
-            )
-            return
-        await query.edit_message_text("⏳ Обновляю данные из Strava (~1 мин)...")
-        athlete_data = await refresh_athlete_cache(db_user_id, access_token)
-        if athlete_data:
-            load = athlete_data["training_load"]
-            await query.edit_message_text(
-                f"✅ Данные обновлены!\n\n"
-                f"CTL: {load.get('ctl', '—')} | "
-                f"ATL: {load.get('atl', '—')} | "
-                f"TSB: {load.get('tsb', '—')}\n"
-                f"{load.get('form_text', '—')}\n"
-                f"Тренд: {load.get('trend_text', '—')}",
-                reply_markup=get_main_keyboard()
-            )
-        else:
-            await query.edit_message_text(
-                "❌ Не удалось обновить. Попробуй позже.",
-                reply_markup=get_main_keyboard()
-            )
+        await query.edit_message_text("⏳ Обновляю данные из всех подключённых сервисов...")
+
+        result_lines = ["✅ Данные обновлены!\n"]
+
+        # Strava
+        try:
+            access_token = await ensure_valid_token(db_user_id)
+            if access_token:
+                athlete_data = await refresh_athlete_cache(db_user_id, access_token)
+                if athlete_data:
+                    load = athlete_data["training_load"]
+                    result_lines.append(
+                        f"🟠 Strava: CTL {load.get('ctl', '—')}, "
+                        f"ATL {load.get('atl', '—')}, TSB {load.get('tsb', '—')}"
+                    )
+        except Exception as e:
+            logger.error(f"Strava refresh error (button) for {user.id}: {e}")
+            result_lines.append("🟠 Strava: ❌ ошибка")
+
+        # Garmin
+        if get_token(db_user_id, "garmin"):
+            try:
+                from garmin import get_vo2max as _garmin_vo2max, get_training_readiness
+                vo2max_val, readiness = await asyncio.gather(
+                    _garmin_vo2max(db_user_id),
+                    get_training_readiness(db_user_id),
+                    return_exceptions=True,
+                )
+                garmin_parts = []
+                if not isinstance(vo2max_val, Exception) and vo2max_val is not None:
+                    save_user_profile(db_user_id, vo2max=float(vo2max_val), vo2max_source="garmin")
+                    garmin_parts.append(f"VO2max {float(vo2max_val):.0f}")
+                if not isinstance(readiness, Exception) and readiness and readiness.get("score") is not None:
+                    garmin_parts.append(f"TR {readiness['score']}")
+                result_lines.append(f"🔵 Garmin: {', '.join(garmin_parts) if garmin_parts else 'обновлено'}")
+            except Exception as e:
+                logger.error(f"Garmin refresh error (button) for {user.id}: {e}")
+                result_lines.append("🔵 Garmin: ❌ ошибка")
+
+        # COROS
+        if get_token(db_user_id, "coros"):
+            try:
+                import coros as _coros
+                coros_data = await _coros.get_full_data(db_user_id)
+                load = (coros_data or {}).get("training_load") or {}
+                ctl = load.get("ctl")
+                result_lines.append(
+                    f"🔴 COROS: Training Load CTL {ctl}" if ctl is not None else "🔴 COROS: обновлено"
+                )
+            except Exception as e:
+                logger.error(f"COROS refresh error (button) for {user.id}: {e}")
+                result_lines.append("🔴 COROS: ❌ ошибка")
+
+        # Polar
+        if get_token(db_user_id, "polar"):
+            try:
+                import polar as _polar
+                await _polar.get_full_data(db_user_id)
+                result_lines.append("❄️ Polar: обновлено")
+            except Exception as e:
+                logger.error(f"Polar refresh error (button) for {user.id}: {e}")
+                result_lines.append("❄️ Polar: ❌ ошибка")
+
+        if len(result_lines) == 1:
+            result_lines.append("Нет подключённых сервисов.\nПодключи трекер в Настройках → Сервисы.")
+
+        await query.edit_message_text("\n".join(result_lines), reply_markup=get_main_keyboard())
 
     elif query.data == "my_profile":
         db_user_id = get_or_create_user(user.id, user.full_name, user.username)
@@ -2639,52 +2681,75 @@ async def _get_vo2max_from_tracker(db_user_id: int) -> tuple:
     return None, None, None
 
 
-async def scheduled_strava_cache(context: ContextTypes.DEFAULT_TYPE):
-    """01:00 UTC (04:00 МСК) — обновляет athlete_cache из Strava и VO2max из трекеров."""
-
-    # ── Strava CTL/ATL/TSB ────────────────────────────────────
-    logger.info("Запускаю обновление Strava athlete_cache (CTL/ATL/TSB + прогнозы)...")
+async def scheduled_cache_refresh(context: ContextTypes.DEFAULT_TYPE):
+    """03:45 UTC (06:45 МСК) — обновляет кэш всех сервисов перед утренней рассылкой.
+    Порядок: до scheduled_morning (04:00 UTC / 07:00 МСК).
+    Обновляет: Strava CTL/ATL/TSB, Garmin recovery+VO2max, COROS, Polar.
+    """
+    logger.info("Запускаю обновление кэша всех сервисов (03:45 UTC)...")
     users = get_all_users()
-    ok = 0
+    counts = {"strava": 0, "garmin": 0, "coros": 0, "polar": 0, "vo2max": 0}
+
     for telegram_id, name, _ in users:
         db_user_id = get_or_create_user(telegram_id, name)
+
+        # ── Strava CTL/ATL/TSB ────────────────────────────────
         try:
             access_token = await ensure_valid_token(db_user_id)
             if access_token:
                 await refresh_athlete_cache(db_user_id, access_token)
-                ok += 1
+                counts["strava"] += 1
         except Exception as e:
-            logger.error(f"Strava cache refresh error for {telegram_id}: {e}")
-        await asyncio.sleep(2)
-    logger.info(f"Strava cache update done: {ok}/{len(users)} пользователей")
+            logger.warning(f"Strava cache error for {telegram_id}: {e}")
 
-    # ── VO2max из трекеров (Garmin / COROS / Polar) ───────────
-    logger.info("Обновляю VO2max из трекеров...")
-    vo2max_changed = 0
-    for telegram_id, name, _ in users:
-        db_user_id = get_or_create_user(telegram_id, name)
+        # ── Garmin: recovery (Body Battery, HRV, TR) ──────────
+        if get_token(db_user_id, "garmin"):
+            try:
+                result = await _fetch_garmin_recovery(db_user_id)
+                if result:
+                    counts["garmin"] += 1
+            except Exception as e:
+                logger.warning(f"Garmin recovery error for {telegram_id}: {e}")
+
+        # ── COROS ─────────────────────────────────────────────
+        if get_token(db_user_id, "coros"):
+            try:
+                import coros as _coros
+                await _coros.get_full_data(db_user_id)
+                counts["coros"] += 1
+            except Exception as e:
+                logger.warning(f"COROS refresh error for {telegram_id}: {e}")
+
+        # ── Polar ─────────────────────────────────────────────
+        if get_token(db_user_id, "polar"):
+            try:
+                import polar as _polar
+                await _polar.get_full_data(db_user_id)
+                counts["polar"] += 1
+            except Exception as e:
+                logger.warning(f"Polar refresh error for {telegram_id}: {e}")
+
+        # ── VO2max из трекера (тихо) ───────────────────────────
         new_vo2max, tracker_key, tracker_name = await _get_vo2max_from_tracker(db_user_id)
-        if new_vo2max is None:
-            await asyncio.sleep(0.5)
-            continue
-
-        profile = get_user_profile(db_user_id)
-        old_vo2max = (profile or {}).get("vo2max")
-
-        if old_vo2max is None:
-            # Первое значение — просто сохраняем, не уведомляем
-            save_user_profile(db_user_id, vo2max=new_vo2max, vo2max_source=tracker_key)
-            await asyncio.sleep(1)
-            continue
-
-        delta = abs(new_vo2max - float(old_vo2max))
-        if delta >= 2:
-            save_user_profile(db_user_id, vo2max=new_vo2max, vo2max_source=tracker_key)
-            vo2max_changed += 1
-            logger.info(f"VO2max обновлён для {telegram_id}: {float(old_vo2max):.0f} → {new_vo2max:.0f} ({tracker_name})")
+        if new_vo2max is not None:
+            profile = get_user_profile(db_user_id)
+            old_vo2max = (profile or {}).get("vo2max")
+            if old_vo2max is None:
+                save_user_profile(db_user_id, vo2max=new_vo2max, vo2max_source=tracker_key)
+            elif abs(new_vo2max - float(old_vo2max)) >= 2:
+                save_user_profile(db_user_id, vo2max=new_vo2max, vo2max_source=tracker_key)
+                counts["vo2max"] += 1
+                logger.info(
+                    f"VO2max обновлён для {telegram_id}: "
+                    f"{float(old_vo2max):.0f} → {new_vo2max:.0f} ({tracker_name})"
+                )
 
         await asyncio.sleep(1)
-    logger.info(f"VO2max: проверено {len(users)}, уведомлено об изменении {vo2max_changed}")
+
+    logger.info(
+        f"Кэш обновлён: Strava={counts['strava']}, Garmin={counts['garmin']}, "
+        f"COROS={counts['coros']}, Polar={counts['polar']}, VO2max изменён={counts['vo2max']}"
+    )
 
 
 async def scheduled_data_refresh(context: ContextTypes.DEFAULT_TYPE):
@@ -2827,11 +2892,10 @@ def main():
     app.add_error_handler(global_error_handler)
 
     job_queue = app.job_queue
-    job_queue.run_daily(scheduled_evening, time=time(hour=17, minute=0))            # 20:00 МСК
-    job_queue.run_daily(scheduled_morning, time=time(hour=4, minute=0))             # 07:00 МСК
-    job_queue.run_repeating(scheduled_new_workout_check, interval=1800, first=60)   # каждые 30 мин
-    job_queue.run_daily(scheduled_strava_cache, time=time(hour=1, minute=0))        # 04:00 МСК — Strava CTL/ATL
-    job_queue.run_daily(scheduled_data_refresh, time=time(hour=3, minute=0))        # 06:00 МСК — Garmin recovery
+    job_queue.run_daily(scheduled_evening,       time=time(hour=17, minute=0))           # 20:00 МСК
+    job_queue.run_daily(scheduled_cache_refresh, time=time(hour=3,  minute=45))          # 06:45 МСК — все сервисы
+    job_queue.run_daily(scheduled_morning,       time=time(hour=4,  minute=0))           # 07:00 МСК — после кэша
+    job_queue.run_repeating(scheduled_new_workout_check, interval=1800, first=60)        # каждые 30 мин
 
     import oauth_server as _oauth
     _oauth.set_telegram_app(app)
