@@ -15,7 +15,7 @@ $content = $content -replace 'BUILD_DATE = "[\d-]+"', "BUILD_DATE = `"$today`""
 [System.IO.File]::WriteAllText($versionFile, $content, (New-Object System.Text.UTF8Encoding $false))
 
 $version = ((Get-Content $versionFile) | Where-Object { $_ -match '^VERSION' }) -replace '.*"(.*)".*', '$1'
-$firstChange = ((Get-Content $versionFile) | Where-Object { $_ -match '^\s+"' } | Select-Object -First 1) -replace '^\s+"(.+?)",?\s*$', '$1'
+$firstChange = ((Get-Content $versionFile -Encoding UTF8) | Where-Object { $_ -match '^\s+"' } | Select-Object -First 1) -replace '^\s+"(.+?)",?\s*$', '$1'
 Write-Host ""
 Write-Host "==> Deploy v$version ($today)" -ForegroundColor Cyan
 
