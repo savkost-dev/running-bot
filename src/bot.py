@@ -1326,10 +1326,17 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 import coros as _coros
                 coros_data = await _coros.get_full_data(db_user_id)
                 load = (coros_data or {}).get("training_load") or {}
+                coros_parts = []
                 ctl = load.get("ctl")
-                result_lines.append(
-                    f"🔴 COROS: Training Load CTL {ctl}" if ctl is not None else "🔴 COROS: обновлено"
-                )
+                if ctl is not None:
+                    coros_parts.append(f"CTL {ctl}")
+                coros_vo2max = (coros_data or {}).get("fitness", {}).get("vo2max")
+                if coros_vo2max is not None:
+                    profile = get_user_profile(db_user_id)
+                    if (profile or {}).get("vo2max_source") != "manual":
+                        save_user_profile(db_user_id, vo2max=float(coros_vo2max), vo2max_source="coros")
+                    coros_parts.append(f"VO2max {float(coros_vo2max):.0f}")
+                result_lines.append(f"🔴 COROS: {', '.join(coros_parts)}" if coros_parts else "🔴 COROS: обновлено")
             except Exception as e:
                 logger.error(f"COROS refresh error (button) for {user.id}: {e}")
                 result_lines.append("🔴 COROS: ❌ ошибка")
@@ -1338,8 +1345,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if get_token(db_user_id, "polar"):
             try:
                 import polar as _polar
-                await _polar.get_full_data(db_user_id)
-                result_lines.append("❄️ Polar: обновлено")
+                polar_data = await _polar.get_full_data(db_user_id)
+                polar_vo2max = await _polar.get_vo2max(db_user_id)
+                polar_parts = []
+                if polar_vo2max is not None:
+                    profile = get_user_profile(db_user_id)
+                    if (profile or {}).get("vo2max_source") != "manual":
+                        save_user_profile(db_user_id, vo2max=float(polar_vo2max), vo2max_source="polar")
+                    polar_parts.append(f"VO2max {float(polar_vo2max):.0f}")
+                result_lines.append(f"❄️ Polar: {', '.join(polar_parts)}" if polar_parts else "❄️ Polar: обновлено")
             except Exception as e:
                 logger.error(f"Polar refresh error (button) for {user.id}: {e}")
                 result_lines.append("❄️ Polar: ❌ ошибка")
