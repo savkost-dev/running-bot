@@ -1293,16 +1293,26 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Garmin
         if get_token(db_user_id, "garmin"):
             try:
-                from garmin import get_vo2max as _garmin_vo2max, get_training_readiness
-                vo2max_val, readiness = await asyncio.gather(
+                from garmin import get_vo2max as _garmin_vo2max, get_training_readiness, get_lactate_threshold
+                vo2max_val, readiness, lt = await asyncio.gather(
                     _garmin_vo2max(db_user_id),
                     get_training_readiness(db_user_id),
+                    get_lactate_threshold(db_user_id),
                     return_exceptions=True,
                 )
+                profile = get_user_profile(db_user_id)
                 garmin_parts = []
                 if not isinstance(vo2max_val, Exception) and vo2max_val is not None:
-                    save_user_profile(db_user_id, vo2max=float(vo2max_val), vo2max_source="garmin")
+                    if (profile or {}).get("vo2max_source") != "manual":
+                        save_user_profile(db_user_id, vo2max=float(vo2max_val), vo2max_source="garmin")
                     garmin_parts.append(f"VO2max {float(vo2max_val):.0f}")
+                if not isinstance(lt, Exception) and lt:
+                    if (profile or {}).get("lactate_source") != "manual":
+                        save_user_profile(db_user_id,
+                            lactate_threshold_pace=lt["pace"],
+                            lactate_threshold_hr=lt.get("hr"),
+                            lactate_source="garmin")
+                    garmin_parts.append(f"ЛП {lt['pace']}")
                 if not isinstance(readiness, Exception) and readiness and readiness.get("score") is not None:
                     garmin_parts.append(f"TR {readiness['score']}")
                 result_lines.append(f"🔵 Garmin: {', '.join(garmin_parts) if garmin_parts else 'обновлено'}")
