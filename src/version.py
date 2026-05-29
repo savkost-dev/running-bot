@@ -1,6 +1,5 @@
-VERSION = "0.12.1"
+VERSION = "0.12.2"
 BUILD_DATE = "2026-05-29"
 CHANGES = [
-    "fix: /services показывает неактивных пользователей (заблокировали бота)",
-    "chore: deploy.ps1 git commit с описанием из CHANGES; CLAUDE.md правило git",
+    "feat: scheduled_strava_cache (4:00 МСК) — автообновление VO2max из Garmin/COROS/Polar с уведомлением при изменении >=2",
 ]

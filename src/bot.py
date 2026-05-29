@@ -2605,11 +2605,44 @@ async def scheduled_evening(context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"Вечерняя рассылка завершена: {len(rich_users)} полных + {len(simple_users)} упрощённых")
 
 
-async def scheduled_strava_cache(context: ContextTypes.DEFAULT_TYPE):
-    """01:00 UTC (04:00 МСК) — обновляет athlete_cache из Strava для всех пользователей.
-    Считает CTL/ATL/TSB за 90 дней, прогнозы Риегеля, соревнования.
-    Запускается заранее, чтобы к утренней рассылке (07:00 МСК) данные были свежими.
+async def _get_vo2max_from_tracker(db_user_id: int) -> tuple:
+    """Получает VO2max из первого доступного трекера (Garmin → COROS → Polar).
+    Возвращает (vo2max: float, tracker_key: str, tracker_name: str) или (None, None, None).
     """
+    if get_token(db_user_id, "garmin"):
+        try:
+            from garmin import get_vo2max as _garmin_vo2max
+            val = await _garmin_vo2max(db_user_id)
+            if val is not None:
+                return float(val), "garmin", "Garmin"
+        except Exception as e:
+            logger.warning(f"VO2max Garmin fetch error for uid={db_user_id}: {e}")
+
+    if get_token(db_user_id, "coros"):
+        try:
+            import coros as _coros
+            val = await _coros.get_vo2max(db_user_id)
+            if val is not None:
+                return float(val), "coros", "COROS"
+        except Exception as e:
+            logger.warning(f"VO2max COROS fetch error for uid={db_user_id}: {e}")
+
+    if get_token(db_user_id, "polar"):
+        try:
+            import polar as _polar
+            val = await _polar.get_vo2max(db_user_id)
+            if val is not None:
+                return float(val), "polar", "Polar"
+        except Exception as e:
+            logger.warning(f"VO2max Polar fetch error for uid={db_user_id}: {e}")
+
+    return None, None, None
+
+
+async def scheduled_strava_cache(context: ContextTypes.DEFAULT_TYPE):
+    """01:00 UTC (04:00 МСК) — обновляет athlete_cache из Strava и VO2max из трекеров."""
+
+    # ── Strava CTL/ATL/TSB ────────────────────────────────────
     logger.info("Запускаю обновление Strava athlete_cache (CTL/ATL/TSB + прогнозы)...")
     users = get_all_users()
     ok = 0
@@ -2622,8 +2655,44 @@ async def scheduled_strava_cache(context: ContextTypes.DEFAULT_TYPE):
                 ok += 1
         except Exception as e:
             logger.error(f"Strava cache refresh error for {telegram_id}: {e}")
-        await asyncio.sleep(2)  # небольшая пауза между пользователями
+        await asyncio.sleep(2)
     logger.info(f"Strava cache update done: {ok}/{len(users)} пользователей")
+
+    # ── VO2max из трекеров (Garmin / COROS / Polar) ───────────
+    logger.info("Обновляю VO2max из трекеров...")
+    vo2max_changed = 0
+    for telegram_id, name, _ in users:
+        db_user_id = get_or_create_user(telegram_id, name)
+        new_vo2max, tracker_key, tracker_name = await _get_vo2max_from_tracker(db_user_id)
+        if new_vo2max is None:
+            await asyncio.sleep(0.5)
+            continue
+
+        profile = get_user_profile(db_user_id)
+        old_vo2max = (profile or {}).get("vo2max")
+
+        if old_vo2max is None:
+            # Первое значение — просто сохраняем, не уведомляем
+            save_user_profile(db_user_id, vo2max=new_vo2max, vo2max_source=tracker_key)
+            await asyncio.sleep(1)
+            continue
+
+        delta = abs(new_vo2max - float(old_vo2max))
+        if delta >= 2:
+            save_user_profile(db_user_id, vo2max=new_vo2max, vo2max_source=tracker_key)
+            vo2max_changed += 1
+            try:
+                await context.bot.send_message(
+                    telegram_id,
+                    f"📊 Твой VO2max обновился: {float(old_vo2max):.0f} → {new_vo2max:.0f} мл/кг/мин ({tracker_name})"
+                )
+            except Forbidden:
+                _mark_user_inactive(telegram_id)
+            except Exception as e:
+                logger.warning(f"VO2max notify error for {telegram_id}: {e}")
+
+        await asyncio.sleep(1)
+    logger.info(f"VO2max: проверено {len(users)}, уведомлено об изменении {vo2max_changed}")
 
 
 async def scheduled_data_refresh(context: ContextTypes.DEFAULT_TYPE):
