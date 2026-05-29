@@ -16,7 +16,7 @@ from version import VERSION, BUILD_DATE
 from weather import get_weather_for_workout, format_weather_for_message, format_weather_for_prompt
 from database import (
     init_db, get_or_create_user, get_token, save_token,
-    get_all_users, get_active_users, get_all_users_with_status,
+    get_all_users, get_active_users, get_all_users_with_status, get_inactive_users,
     save_athlete_cache, get_athlete_cache,
     save_user_profile, get_user_profile,
     get_preferences, set_preference,
@@ -994,6 +994,11 @@ async def cmd_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     refs = ", ".join(_fmt_user_ref(n, u) for _, n, u in nothing)
     lines.append(f"❌ Ничего не подключено ({len(nothing)}): {refs or '—'}")
+
+    inactive = get_inactive_users()
+    if inactive:
+        refs = ", ".join(_fmt_user_ref(n, u) for _, n, u in inactive)
+        lines.append(f"\n💤 Неактивных (заблокировали бота) ({len(inactive)}): {refs}")
 
     text = "\n".join(lines)
     for i in range(0, len(text), 4096):

@@ -236,6 +236,17 @@ def get_active_users() -> list:
         """).fetchall()
 
 
+def get_inactive_users() -> list:
+    """Пользователи с is_active=0 (заблокировали бота)."""
+    with get_connection() as conn:
+        return conn.execute("""
+            SELECT u.telegram_id, u.name, u.username
+            FROM users u
+            JOIN user_preferences p ON u.id = p.user_id
+            WHERE p.is_active = 0
+        """).fetchall()
+
+
 def get_all_users_with_status(notify_key: str = "") -> list:
     """Активные пользователи с флагом has_data.
     has_data=1 если есть vo2max в профиле ИЛИ хотя бы один токен трекера (strava/garmin/coros/polar).
