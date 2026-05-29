@@ -236,6 +236,34 @@ def get_active_users() -> list:
         """).fetchall()
 
 
+def get_all_users_with_status(notify_key: str = "") -> list:
+    """Активные пользователи с флагом has_data.
+    has_data=1 если есть vo2max в профиле ИЛИ хотя бы один токен трекера (strava/garmin/coros/polar).
+    Если указан notify_key — дополнительно фильтрует по настройке уведомлений.
+    Возвращает список кортежей (telegram_id, name, username, has_data).
+    """
+    notify_filter = (
+        f"AND (p.{notify_key} IS NULL OR p.{notify_key} = 1)" if notify_key else ""
+    )
+    with get_connection() as conn:
+        return conn.execute(f"""
+            SELECT u.telegram_id, u.name, u.username,
+                   CASE WHEN (
+                       (pr.vo2max IS NOT NULL)
+                       OR EXISTS (
+                           SELECT 1 FROM user_tokens t
+                           WHERE t.user_id = u.id
+                             AND t.service IN ('strava', 'garmin', 'coros', 'polar')
+                       )
+                   ) THEN 1 ELSE 0 END AS has_data
+            FROM users u
+            LEFT JOIN user_preferences p ON u.id = p.user_id
+            LEFT JOIN user_profiles pr   ON u.id = pr.user_id
+            WHERE (p.is_active IS NULL OR p.is_active = 1)
+            {notify_filter}
+        """).fetchall()
+
+
 def get_users_for_notification(notify_key: str) -> list:
     """Пользователи у которых включён данный тип уведомлений (notify_interval / notify_interval_extra / notify_long).
     Автоматически фильтрует неактивных пользователей (is_active=0).

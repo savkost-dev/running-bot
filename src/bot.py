@@ -16,7 +16,8 @@ from version import VERSION, BUILD_DATE
 from weather import get_weather_for_workout, format_weather_for_message, format_weather_for_prompt
 from database import (
     init_db, get_or_create_user, get_token, save_token,
-    get_all_users, get_active_users, save_athlete_cache, get_athlete_cache,
+    get_all_users, get_active_users, get_all_users_with_status,
+    save_athlete_cache, get_athlete_cache,
     save_user_profile, get_user_profile,
     get_preferences, set_preference,
     save_last_recommendation, get_last_recommendation,
@@ -513,6 +514,33 @@ def _fmt_workout_date(workout_date: str) -> tuple[str, str]:
         return dt_obj.strftime("%d.%m"), _WEEKDAYS_RU[dt_obj.weekday()]
     except Exception:
         return workout_date, ""
+
+
+def _build_simple_workout_text(workout: dict) -> str:
+    """Упрощённое уведомление для пользователей без профиля/трекера."""
+    date_fmt, weekday = _fmt_workout_date(workout.get("workout_date", ""))
+    location  = workout.get("location") or "—"
+    schedule  = workout.get("schedule") or "—"
+    work_text = (workout.get("work_text") or "").strip()
+    groups_raw = (workout.get("groups_raw") or "").strip()
+
+    lines = [f"📢 Завтра тренировка Dusty Dumbbells!\n"]
+    lines.append(f"{weekday} {date_fmt} | 📍 {location}")
+    lines.append(f"⏰ {schedule}")
+    if work_text:
+        lines.append(f"\n💪 {work_text}")
+    if groups_raw:
+        lines.append(f"\nГруппы:\n{groups_raw[:400]}")
+    lines.append(
+        "\nМне очень жаль, что могу только напомнить тебе о тренировке, "
+        "но не могу дать рекомендаций о погоде, разминке, группе, питании и стратегии. 🤷"
+    )
+    lines.append(
+        "\nЧтобы получить полный анализ — заполни профиль и подключи трекер:\n"
+        "👤 /profile — VO2max и лактатный порог\n"
+        "🔗 Garmin, COROS или Polar — /connect_garmin, /connect_coros"
+    )
+    return "\n".join(lines)
 
 
 def _build_status_text(db_user_id: int) -> tuple[str, InlineKeyboardMarkup | None]:
@@ -2440,6 +2468,29 @@ async def _notify_all(context, text: str, notify_key: str = "") -> int:
     return count
 
 
+async def _broadcast_split(
+    context,
+    text_with_data: str,
+    text_no_data: str,
+    notify_key: str = "",
+) -> int:
+    """Рассылка с разным текстом: полная версия для пользователей с данными, упрощённая — без."""
+    users = get_all_users_with_status(notify_key)
+    count = 0
+    for telegram_id, name, _, has_data in users:
+        text = text_with_data if has_data else text_no_data
+        try:
+            await context.bot.send_message(telegram_id, text, parse_mode="HTML")
+            count += 1
+            await asyncio.sleep(0.3)
+        except Forbidden:
+            _mark_user_inactive(telegram_id)
+            logger.info(f"Пользователь {telegram_id} заблокировал бота, отмечен как неактивный")
+        except Exception as e:
+            logger.error(f"Broadcast error for {telegram_id}: {e}")
+    return count
+
+
 async def scheduled_new_workout_check(context: ContextTypes.DEFAULT_TYPE):
     """Каждые 30 минут проверяет новые анонсы тренировок и доп. группы."""
 
@@ -2460,7 +2511,8 @@ async def scheduled_new_workout_check(context: ContextTypes.DEFAULT_TYPE):
                     f"{work_line}\n\n"
                     f"Нажми /workout чтобы получить рекомендацию группы"
                 )
-                count = await _notify_all(context, text, "notify_interval")
+                simple_text = _build_simple_workout_text(workout)
+                count = await _broadcast_split(context, text, simple_text, "notify_interval")
                 save_workout_notification(post_id, "interval", workout["workout_date"], [], count)
                 logger.info(f"Анонс тренировки {workout['workout_date']}: отправлено {count}")
             else:
@@ -2500,7 +2552,8 @@ async def scheduled_new_workout_check(context: ContextTypes.DEFAULT_TYPE):
                     f"🕐 {weekday} {date_fmt} | 📍 {location}\n\n"
                     f"Нажми /long чтобы получить рекомендацию группы"
                 )
-                count = await _notify_all(context, text, "notify_long")
+                simple_text_lr = _build_simple_workout_text(workout_lr)
+                count = await _broadcast_split(context, text, simple_text_lr, "notify_long")
                 save_workout_notification(lr_post_id, "long", workout_lr["workout_date"], [], count)
                 logger.info(f"Анонс Long Run {workout_lr['workout_date']}: отправлено {count}")
             else:
@@ -2515,8 +2568,12 @@ async def scheduled_evening(context: ContextTypes.DEFAULT_TYPE):
     if now.weekday() not in [0, 3, 5]:
         return
     logger.info("Запускаю вечернюю рассылку...")
-    users = get_active_users()
-    for telegram_id, name, _ in users:
+    users = get_all_users_with_status()
+    rich_users  = [(tid, name, un) for tid, name, un, has in users if has]
+    simple_users = [(tid, name, un) for tid, name, un, has in users if not has]
+
+    # 1. Полная рекомендация — пользователям с данными
+    for telegram_id, name, _ in rich_users:
         try:
             await _send_workout_recommendation(telegram_id, name, context)
             await asyncio.sleep(0.5)
@@ -2525,6 +2582,22 @@ async def scheduled_evening(context: ContextTypes.DEFAULT_TYPE):
             logger.info(f"Пользователь {telegram_id} заблокировал бота (вечерняя рассылка)")
         except Exception as e:
             logger.error(f"Evening notification error for {telegram_id}: {e}")
+
+    # 2. Упрощённое уведомление — пользователям без профиля/трекера
+    if simple_users:
+        workout = await find_next_workout()
+        if workout and not workout.get("is_past"):
+            simple_text = _build_simple_workout_text(workout)
+            for telegram_id, name, _ in simple_users:
+                try:
+                    await context.bot.send_message(telegram_id, simple_text)
+                    await asyncio.sleep(0.3)
+                except Forbidden:
+                    _mark_user_inactive(telegram_id)
+                    logger.info(f"Пользователь {telegram_id} заблокировал бота (вечерняя рассылка)")
+                except Exception as e:
+                    logger.error(f"Evening simple notification error for {telegram_id}: {e}")
+    logger.info(f"Вечерняя рассылка завершена: {len(rich_users)} полных + {len(simple_users)} упрощённых")
 
 
 async def scheduled_strava_cache(context: ContextTypes.DEFAULT_TYPE):
@@ -2610,7 +2683,8 @@ async def scheduled_morning(context: ContextTypes.DEFAULT_TYPE):
     if now.weekday() not in [1, 4, 6]:
         return
     logger.info("Запускаю утреннюю рассылку...")
-    users = get_active_users()
+    # Пользователей без профиля/трекера не беспокоим — им нечего показывать
+    users = [(tid, name, un) for tid, name, un, has in get_all_users_with_status() if has]
     for telegram_id, name, _ in users:
         try:
             await _send_morning_check(telegram_id, context)

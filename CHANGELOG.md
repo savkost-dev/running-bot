@@ -5,6 +5,18 @@
 
 ---
 
+## [0.12.0] 2026-05-29 — Раздельная рассылка: полная vs упрощённая
+
+### Добавлено
+- `database.get_all_users_with_status(notify_key)` — возвращает `(telegram_id, name, username, has_data)`, где `has_data=1` если есть `vo2max` в профиле ИЛИ токен трекера (strava/garmin/coros/polar)
+- `bot._build_simple_workout_text(workout)` — упрощённое уведомление с датой/местом/расписанием/группами и CTA подключить трекер
+- `bot._broadcast_split(context, text_with_data, text_no_data, notify_key)` — рассылка с разным текстом по признаку `has_data`
+- `scheduled_new_workout_check`: пользователи без данных получают подробный анонс тренировки вместо "нажми /workout"
+- `scheduled_evening`: пользователи без данных получают упрощённое уведомление вместо полной AI-рекомендации; лог выводит счётчики обоих групп
+- `scheduled_morning`: пользователи без профиля/трекера не получают утреннюю рассылку
+
+---
+
 ## [0.11.10] 2026-05-29 — Кнопка Справка в главном меню
 
 ### Исправлено
