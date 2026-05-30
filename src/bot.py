@@ -1194,6 +1194,11 @@ def _format_analysis_result(result: dict, mode: str) -> str:
             lines.append(f"🔥 Тяжесть: {result['intensity_level']}")
         if result.get("what_to_watch"):
             lines.append(f"👀 На что обратить внимание: {result['what_to_watch']}")
+        if result.get("total_volume_km") is not None:
+            lines.append(f"📏 Объём: {result['total_volume_km']} км")
+        if result.get("is_borderline"):
+            note = result.get("borderline_note")
+            lines.append(f"⚖️ Пограничная: да{f' — {note}' if note else ''}")
 
         lines.append(f"\nГруппы ({len(groups)}):")
         for g in groups:

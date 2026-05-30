@@ -577,8 +577,12 @@ def _build_analyze_prompt(raw_text: str, comments_text: str) -> str:
         "- 'repeat': блок повторов — поля reps, work_distance_m, recovery_distance_m, purpose\n"
         "- 'easy': одиночный лёгкий отрезок-разделитель — поля distance_m, description\n"
         "  (без повторов и без темпа)\n"
-        "purpose — физиологическое назначение блока (ПАНО, скоростная выносливость,\n"
-        "скорость/нейромышечная, аэробная база и т.д.).\n"
+        "purpose — физиология блока НЕЙТРАЛЬНО, без жёсткой привязки к одной зоне.\n"
+        "Опиши диапазон: какие качества блок задействует в зависимости от темпа.\n"
+        "Пример: 'короткие быстрые отрезки с неполным восстановлением — в зависимости\n"
+        "от темпа работают на МПК (быстрые группы) или скоростную выносливость/ПАНО\n"
+        "(умеренные)'. Конкретную зону НЕ фиксируй — она определяется в рекомендации под\n"
+        "пользователя.\n"
         "overall_purpose — что развивает тренировка целиком (1-2 предложения).\n\n"
         "ЗАДАЧА 3b — СВОЙСТВА ТРЕНИРОВКИ (только interval, верхний уровень):\n"
         "Это свойства самой тренировки, общие для ВСЕХ, НЕ зависят от пользователя.\n"
@@ -591,6 +595,14 @@ def _build_analyze_prompt(raw_text: str, comments_text: str) -> str:
         "intensity_level — общая тяжесть: 'лёгкая' / 'средняя' / 'тяжёлая' / 'очень тяжёлая'.\n"
         "what_to_watch — на что обратить внимание, типичные ошибки. Например: не убегать\n"
         "  на первых 300-ках, держать технику на 100-ках.\n"
+        "total_volume_km — общий объём в км числом (из строки 'Объём: ...'). Отдельным\n"
+        "  полем, НЕ в coach_notes. Если не указан — null.\n"
+        "is_borderline — даёт ли тренировка реальный выбор РАЗНЫХ качеств между группами:\n"
+        "  true — разные группы развивают разные качества (напр на 300м быстрая группа =\n"
+        "    МПК, медленная = ПАНО/темп);\n"
+        "  false — группы отличаются только 'быстрее/медленнее по силам', характер работы\n"
+        "    одинаковый для всех.\n"
+        "borderline_note — краткое пояснение почему borderline (или null если false).\n"
         "НЕ добавляй сюда упрощение/подгонку под конкретного человека и под его усталость —\n"
         "это Шаг 2 (рекомендация), не сюда.\n\n"
         "ЗАДАЧА 4 — ГРУППЫ (groups[]):\n"
@@ -652,15 +664,18 @@ def _build_analyze_prompt(raw_text: str, comments_text: str) -> str:
         '  "workout_date": "YYYY-MM-DD",\n'
         '  "summary": "суть тренировки 1-2 предложения",\n'
         '  "structure": [\n'
-        '    {"block": 1, "type": "repeat", "reps": 10, "work_distance_m": 300, "recovery_distance_m": 100, "purpose": "ПАНО / скоростная выносливость"},\n'
+        '    {"block": 1, "type": "repeat", "reps": 10, "work_distance_m": 300, "recovery_distance_m": 100, "purpose": "быстрые отрезки с неполным восстановлением — МПК у быстрых групп или ПАНО/скоростная выносливость у умеренных"},\n'
         '    {"block": 2, "type": "easy", "distance_m": 400, "description": "лёгкий бег между блоками"},\n'
-        '    {"block": 3, "type": "repeat", "reps": 10, "work_distance_m": 100, "recovery_distance_m": 100, "purpose": "скорость / нейромышечная"}\n'
+        '    {"block": 3, "type": "repeat", "reps": 10, "work_distance_m": 100, "recovery_distance_m": 100, "purpose": "короткие отрезки — скорость/нейромышечная активация, у умеренных групп акцент на технике"}\n'
         "  ],\n"
         '  "overall_purpose": "что развивает тренировка в целом",\n'
         '  "block_contrast": "чем блоки отличаются и зачем такой порядок (физиологический смысл)",\n'
         '  "target_athlete": "на кого рассчитана, к чему готовит",\n'
         '  "intensity_level": "лёгкая / средняя / тяжёлая / очень тяжёлая",\n'
         '  "what_to_watch": "на что обратить внимание, типичные ошибки",\n'
+        '  "total_volume_km": 13.4,\n'
+        '  "is_borderline": true,\n'
+        '  "borderline_note": "на 300м быстрые группы работают на МПК, умеренные — на ПАНО (или null)",\n'
         '  "groups": [\n'
         "    {\n"
         '      "number": "1",\n'
@@ -683,7 +698,8 @@ def _build_analyze_prompt(raw_text: str, comments_text: str) -> str:
         '  "ignored": "что проигнорировано и почему"\n'
         "}\n"
         "Для long: structure=[], overall_purpose=null, block_contrast=null, target_athlete=null,\n"
-        "intensity_level=null, what_to_watch=null, groups[] в старом формате с полем work и blocks=[].\n"
+        "intensity_level=null, what_to_watch=null, total_volume_km=null, is_borderline=false,\n"
+        "borderline_note=null, groups[] в старом формате с полем work и blocks=[].\n"
         "Отвечай только JSON."
     )
 
