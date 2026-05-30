@@ -816,6 +816,251 @@ def analyze_workout(raw_text: str, comments_text: str = "", mode: str = "deep") 
     return parsed
 
 
+# ══════════════════════════════════════════════════════════════
+#  ШАГ 2 — Рекомендация группы (на готовом анализе + данных юзера)
+# ══════════════════════════════════════════════════════════════
+
+# Человекочитаемые названия зон
+_ZONE_LABELS = {
+    "easy":       "лёгкая (E)",
+    "marathon":   "темповая (M)",
+    "threshold":  "ПАНО (T)",
+    "interval":   "МПК (I)",
+    "repetition": "скоростная (R)",
+}
+
+# Относительная интенсивность зоны (для влияния восстановления)
+_ZONE_INTENSITY = {
+    "easy": 0.20, "marathon": 0.50, "threshold": 0.70,
+    "interval": 0.90, "repetition": 1.0,
+}
+
+# Ценность зоны для каждой специализации (0..1)
+_SPEC_ZONE_VALUE = {
+    "5k":            {"repetition": 0.70, "interval": 1.00, "threshold": 0.80, "marathon": 0.50, "easy": 0.30},
+    "10k":           {"repetition": 0.60, "interval": 1.00, "threshold": 0.85, "marathon": 0.60, "easy": 0.30},
+    "half_marathon": {"repetition": 0.40, "interval": 0.70, "threshold": 1.00, "marathon": 0.90, "easy": 0.50},
+    "marathon":      {"repetition": 0.30, "interval": 0.60, "threshold": 0.95, "marathon": 1.00, "easy": 0.60},
+    "speed":         {"repetition": 1.00, "interval": 0.90, "threshold": 0.50, "marathon": 0.30, "easy": 0.20},
+    "fitness":       {"repetition": 0.40, "interval": 0.60, "threshold": 0.70, "marathon": 0.80, "easy": 0.80},
+}
+
+_SPEC_LABELS = {
+    "5k": "5 км", "10k": "10 км", "half_marathon": "полумарафон",
+    "marathon": "марафон", "speed": "развитие скорости", "fitness": "общая форма",
+}
+
+# Веса трёх компонентов % подходимости
+_W_FORM, _W_SPEC, _W_REC = 0.35, 0.40, 0.25
+
+
+def _pace_sec(pace: str) -> float | None:
+    """'3:53' / '3.53' → 233 сек."""
+    if not pace:
+        return None
+    s = str(pace).strip().replace(".", ":")
+    if ":" not in s:
+        return None
+    try:
+        mm, ss = s.split(":")[:2]
+        return int(mm) * 60 + int(ss)
+    except (ValueError, IndexError):
+        return None
+
+
+def _classify_zone(pace_s: float, zone_secs: dict) -> str | None:
+    """Ближайшая зона пользователя для заданного темпа."""
+    best, best_d = None, None
+    for z, s in zone_secs.items():
+        if s is None:
+            continue
+        d = abs(pace_s - s)
+        if best_d is None or d < best_d:
+            best_d, best = d, z
+    return best
+
+
+def _form_score(pace_s: float, rep_sec: float | None) -> float:
+    """Посильность: 1.0 если не быстрее повторной зоны, падает если быстрее."""
+    if rep_sec is None or pace_s >= rep_sec:
+        return 1.0
+    deficit = rep_sec - pace_s  # насколько быстрее R (сек/км)
+    return max(0.0, 1.0 - deficit / 30.0)
+
+
+def _recovery_value(recovery: dict | None) -> float | None:
+    """Достаёт 0..100 из recovery (Recovery Score / Training Readiness)."""
+    if not recovery:
+        return None
+    for k in ("recovery_score", "training_readiness", "readiness", "score", "recovery"):
+        v = recovery.get(k)
+        if isinstance(v, (int, float)):
+            return float(v)
+        if isinstance(v, dict):
+            s = v.get("score")
+            if isinstance(s, (int, float)):
+                return float(s)
+    return None
+
+
+def _group_primary_pace(group: dict, struct_dist: dict) -> str | None:
+    """Темп определяющего (самого длинного) рабочего блока группы."""
+    blocks = group.get("blocks") or []
+    if not blocks:
+        return None
+    best_block = max(
+        blocks,
+        key=lambda b: struct_dist.get(b.get("block"), 0) or 0,
+    )
+    return best_block.get("work_pace")
+
+
+def _pct_for_spec(form: float, rec_fit: float, zone: str, spec: str) -> int:
+    """% подходимости группы для заданной специализации."""
+    spec_value = _SPEC_ZONE_VALUE.get(spec, _SPEC_ZONE_VALUE["half_marathon"]).get(zone, 0.5)
+    raw = _W_FORM * form + _W_SPEC * spec_value + _W_REC * rec_fit
+    return max(0, min(99, round(100 * raw)))
+
+
+def recommend_group(analysis_json: dict, user_data: dict) -> dict | None:
+    """Шаг 2: рекомендация группы на основе готового анализа Шага 1 + данных юзера.
+
+    analysis_json — результат analyze_workout (interval-схема со structure/groups/is_borderline).
+    user_data — {db_user_id, specialization?, recovery?}. Зоны берутся через get_pace_zones().
+
+    Возвращает структурированный dict (markup групп, основная/альтернативы, текст) или
+    {"ok": False, "note": ...} если рекомендация невозможна.
+    """
+    import zones as _zones
+
+    analysis = analysis_json or {}
+    if analysis.get("workout_type") != "interval" or not analysis.get("structure"):
+        return {"ok": False, "note": "Рекомендация по зонам доступна для интервальных тренировок."}
+
+    # ── Специализация (по умолчанию полумарафон) ──────────────
+    spec = user_data.get("specialization") or "half_marathon"
+    if spec not in _SPEC_ZONE_VALUE:
+        spec = "half_marathon"
+    spec_is_default = not user_data.get("specialization")
+
+    # ── Зоны пользователя (готовые, НЕ считаем здесь) ─────────
+    db_user_id = user_data.get("db_user_id")
+    zinfo = _zones.get_pace_zones(db_user_id) if db_user_id is not None else None
+    if not zinfo or not zinfo.get("zones"):
+        return {"ok": False, "note": "Нет персональных зон — заполни профиль (VO2max или лактатный порог)."}
+    zones_map = zinfo["zones"]
+    zones_source = zinfo.get("source")
+    zone_secs = {z: _pace_sec(p) for z, p in zones_map.items()}
+    rep_sec = zone_secs.get("repetition")
+
+    # ── Восстановление (0..1; нейтральное 0.7 если нет данных) ─
+    rec_raw = _recovery_value(user_data.get("recovery"))
+    rec = (rec_raw if rec_raw is not None else 70.0) / 100.0
+
+    # ── Карта дистанций блоков из структуры ───────────────────
+    struct_dist = {}
+    for b in analysis.get("structure") or []:
+        if b.get("type") == "repeat":
+            struct_dist[b.get("block")] = b.get("work_distance_m") or 0
+
+    is_borderline = bool(analysis.get("is_borderline"))
+
+    markup = []       # объективная разметка всех групп
+    scored = []       # группы с % (без health)
+    for g in analysis.get("groups") or []:
+        number = g.get("number", "?")
+        if g.get("health_group"):
+            markup.append({"number": number, "zone_label": "бег/ходьба", "work_pace": None, "pct": None})
+            continue
+        primary = _group_primary_pace(g, struct_dist)
+        psec = _pace_sec(primary)
+        if psec is None:
+            markup.append({"number": number, "zone_label": "—", "work_pace": primary, "pct": None})
+            continue
+        zone = _classify_zone(psec, zone_secs)
+        intensity = _ZONE_INTENSITY.get(zone, 0.7)
+        form = _form_score(psec, rep_sec)
+        rec_fit = 1.0 - intensity * (1.0 - rec)
+        pct = _pct_for_spec(form, rec_fit, zone, spec)
+        entry = {
+            "number": number, "zone_key": zone, "zone_label": _ZONE_LABELS.get(zone, zone),
+            "work_pace": primary, "pct": pct, "from_comment": bool(g.get("from_comment")),
+        }
+        markup.append({"number": number, "zone_label": entry["zone_label"], "work_pace": primary, "pct": pct})
+        # лучшая альтернативная специализация для этой группы
+        best_spec, best_pct = None, pct
+        for s in _SPEC_ZONE_VALUE:
+            if s == spec:
+                continue
+            p = _pct_for_spec(form, rec_fit, zone, s)
+            if p > best_pct:
+                best_pct, best_spec = p, s
+        entry["alt_spec"] = best_spec
+        entry["alt_pct"] = best_pct
+        scored.append(entry)
+
+    if not scored:
+        return {"ok": False, "note": "Не удалось разметить группы по зонам."}
+
+    scored.sort(key=lambda e: e["pct"], reverse=True)
+    main = scored[0]
+
+    # ── Альтернативы ──────────────────────────────────────────
+    alternatives = []
+    if is_borderline:
+        for e in scored[1:]:
+            cond = None
+            if e["alt_spec"] and e["alt_pct"] - e["pct"] >= 12:
+                cond = f"но {e['alt_pct']}% если цель — {_SPEC_LABELS[e['alt_spec']]}"
+            alternatives.append({
+                "number": e["number"], "pct": e["pct"], "zone_label": e["zone_label"],
+                "condition": cond,
+            })
+
+    spec_label = _SPEC_LABELS.get(spec, spec)
+
+    # ── Текст ─────────────────────────────────────────────────
+    lines = []
+    spec_suffix = " (по умолчанию)" if spec_is_default else ""
+    lines.append(f"🎯 Специализация: {spec_label.capitalize()}{spec_suffix}")
+    lines.append(f"📊 Зоны (источник: {zones_source})\n")
+
+    lines.append("Разметка групп под тебя:")
+    for m in markup:
+        if m["pct"] is None:
+            lines.append(f"  Группа {m['number']} — {m['zone_label']}")
+        else:
+            lines.append(f"  Группа {m['number']} — {m['zone_label']}, темп {m['work_pace']} ({m['pct']}%)")
+
+    if is_borderline:
+        lines.append(f"\n✅ Рекомендую: Группа {main['number']} — {main['zone_label']}, {main['pct']}%")
+        if alternatives:
+            lines.append("Альтернативы:")
+            for a in alternatives:
+                base = f"  Группа {a['number']} — {a['pct']}% для твоей цели ({spec_label})"
+                if a["condition"]:
+                    base += f", {a['condition']}"
+                lines.append(base)
+    else:
+        # Выбор качеств нет — группы отличаются только темпом «по силам»
+        lines.append(f"\n✅ Рекомендую: Группа {main['number']} (по силам), {main['pct']}%")
+        lines.append("Группы отличаются только темпом — выбери по самочувствию.")
+
+    return {
+        "ok": True,
+        "workout_type": "interval",
+        "specialization": spec,
+        "specialization_label": spec_label,
+        "specialization_is_default": spec_is_default,
+        "is_borderline": is_borderline,
+        "zones_source": zones_source,
+        "groups": markup,
+        "main_group": {"number": main["number"], "pct": main["pct"], "zone_label": main["zone_label"]},
+        "alternatives": alternatives,
+        "text": "\n".join(lines),
+    }
+
+
 def ask_groq(prompt: str, mode: str = "smart") -> dict | None:
     """Возвращает {"advice": {...}, "stats": {...}, "garmin_workout": ...} или None.
     При timeout возвращает {"advice": None, "timeout": True, "stats": {...}}.
