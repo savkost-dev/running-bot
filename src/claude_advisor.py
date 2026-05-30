@@ -1078,6 +1078,163 @@ def recommend_group(analysis_json: dict, user_data: dict) -> dict | None:
     }
 
 
+# ── Шаг 2 для ДЛИТЕЛЬНОЙ (long) — облегчённая рекомендация ─────
+
+def _is_health_long(group: dict) -> bool:
+    """Группа здоровья/ходоков в длительной."""
+    if group.get("health_group"):
+        return True
+    w = (group.get("work") or "").lower()
+    return "ходьб" in w or "чередован" in w
+
+
+def _extract_long_pace(group: dict) -> str | None:
+    """Достаёт представительный (первый = базовый/первая половина) темп из текста группы."""
+    import re as _re
+    for field in ("work", "recovery", "description"):
+        txt = group.get(field)
+        if not txt:
+            continue
+        m = _re.search(r'\b(\d{1,2}[:.]\d{2})\b', str(txt))
+        if m:
+            return m.group(1).replace(".", ":")
+    return None
+
+
+def recommend_long(analysis_json: dict, user_data: dict) -> dict | None:
+    """Облегчённая рекомендация для длительной (100 минут).
+
+    Длительная — доп. сервис: без трёхкомпонентного %, акцент на «потянешь ли
+    100 минут комфортно». Зоны берутся готовыми (get_pace_zones). Специализация
+    почти не влияет (длительная = аэробная база под полумарафон/марафон).
+
+    Возвращает структуру, совместимую с отображением /workout (main_group +
+    alternatives + заметки), или {"ok": False, "note": ...}.
+    """
+    import zones as _zones
+
+    analysis = analysis_json or {}
+    if analysis.get("workout_type") != "long":
+        return {"ok": False, "note": "Это не длительная тренировка."}
+
+    has_progression = bool(analysis.get("has_progression"))
+    groups = analysis.get("groups") or []
+
+    # Разделяем обычные группы и группу здоровья
+    health = next((g for g in groups if _is_health_long(g)), None)
+    paced = []
+    for g in groups:
+        if _is_health_long(g):
+            continue
+        pace = _extract_long_pace(g)
+        paced.append({"number": g.get("number", "?"), "pace": pace,
+                      "pace_sec": _pace_sec(pace)})
+
+    progression_note = (
+        "💡 Прогрессия: вторую половину можно на ~30 сек/км быстрее (опция)."
+        if has_progression else
+        "💡 Прогрессия: вторая половина быстрее — по желанию (~30 сек/км)."
+    )
+    even_note = "Ровный темп — норма и доступен всегда."
+
+    # ── Зоны пользователя ─────────────────────────────────────
+    db_user_id = user_data.get("db_user_id")
+    zinfo = _zones.get_pace_zones(db_user_id) if db_user_id is not None else None
+    zones_map = (zinfo or {}).get("zones") if zinfo else None
+    zones_source = (zinfo or {}).get("source") if zinfo else None
+
+    # ── Профиль пустой / нет зон → консервативный ориентир ────
+    if not zones_map or not any(p["pace_sec"] for p in paced):
+        lines = ["🕐 Длительная — 100 минут\n"]
+        lines.append("Профиль не заполнен — точный темп не подскажу. Ориентир:")
+        if paced:
+            mid = paced[len(paced) // 2]
+            lines.append(f"  • Бегаешь регулярно → средний по темпу вариант (Группа {mid['number']}),")
+            lines.append("    главное — держать ровно и комфортно все 100 минут.")
+        else:
+            lines.append("  • Бегаешь регулярно → выбери средний по темпу вариант, держи ровно 100 минут.")
+        if health:
+            lines.append(f"  • Новичкам → Группа {health.get('number', 'здоровья')} (бег/ходьба) — это нормально и полезно.")
+        else:
+            lines.append("  • Новичкам → начни с комфортного бег/ходьба, без гонки за темпом.")
+        lines.append(f"\n{progression_note}\n{even_note}")
+        return {
+            "ok": True, "workout_type": "long", "profile_empty": True,
+            "zones_source": zones_source,
+            "main_group": ({"number": paced[len(paced) // 2]["number"]} if paced else None),
+            "alternatives": [], "health_group": (health or {}).get("number") if health else None,
+            "progression_note": progression_note, "even_pace_note": even_note,
+            "text": "\n".join(lines),
+        }
+
+    # ── Подбор по форме ──────────────────────────────────────
+    zone_secs = {z: _pace_sec(p) for z, p in zones_map.items()}
+    easy_s = zone_secs.get("easy")
+    mar_s = zone_secs.get("marathon")
+    # Комфортная база на 100 мин ≈ между марафонским и лёгким темпом
+    if easy_s and mar_s:
+        target = (easy_s + mar_s) / 2
+    else:
+        target = easy_s or mar_s
+
+    with_pace = [p for p in paced if p["pace_sec"]]
+    with_pace.sort(key=lambda p: p["pace_sec"])  # быстрые → медленные
+
+    # базовая = ближайшая к комфортному ориентиру
+    base_idx = min(range(len(with_pace)),
+                   key=lambda i: abs(with_pace[i]["pace_sec"] - target))
+    base = with_pace[base_idx]
+    step_up = with_pace[base_idx - 1] if base_idx > 0 else None          # быстрее
+    step_down = with_pace[base_idx + 1] if base_idx + 1 < len(with_pace) else None  # медленнее
+
+    def _zlabel(psec):
+        return _ZONE_LABELS.get(_classify_zone(psec, zone_secs), "")
+
+    # ── Текст ─────────────────────────────────────────────────
+    lines = ["🕐 Длительная — 100 минут\n"]
+    lines.append(f"🎯 Тебе по силам: Группа {base['number']} — темп ~{base['pace']}/км")
+    lines.append("   Комфортная аэробная база, держишь 100 минут ровно.")
+
+    alternatives = []
+    extra = []
+    if step_up:
+        extra.append(f"   ⬆️ Группа {step_up['number']} (~{step_up['pace']}/км) — потемповее, "
+                     f"die-hard длительная для бодрых ног")
+        alternatives.append({"number": step_up["number"], "pace": step_up["pace"],
+                             "zone_label": _zlabel(step_up["pace_sec"]), "role": "step_up",
+                             "note": "потемповее, для бодрых ног"})
+    if step_down:
+        extra.append(f"   ⬇️ Группа {step_down['number']} (~{step_down['pace']}/км) — спокойнее, "
+                     f"для восстановления")
+        alternatives.append({"number": step_down["number"], "pace": step_down["pace"],
+                             "zone_label": _zlabel(step_down["pace_sec"]), "role": "step_down",
+                             "note": "спокойнее, для восстановления"})
+    if health:
+        extra.append(f"   (или Группа {health.get('number', 'здоровья')} — бег/ходьба, для начинающих)")
+        alternatives.append({"number": health.get("number", "здоровье"), "pace": None,
+                             "zone_label": "бег/ходьба", "role": "health",
+                             "note": "для начинающих / восстановления"})
+    if extra:
+        lines.append("\nЕсли хочется иначе:")
+        lines.extend(extra)
+
+    lines.append(f"\n{progression_note}\n{even_note}")
+
+    return {
+        "ok": True,
+        "workout_type": "long",
+        "profile_empty": False,
+        "zones_source": zones_source,
+        "main_group": {"number": base["number"], "pace": base["pace"],
+                       "zone_label": _zlabel(base["pace_sec"])},
+        "alternatives": alternatives,
+        "health_group": (health or {}).get("number") if health else None,
+        "progression_note": progression_note,
+        "even_pace_note": even_note,
+        "text": "\n".join(lines),
+    }
+
+
 def ask_groq(prompt: str, mode: str = "smart") -> dict | None:
     """Возвращает {"advice": {...}, "stats": {...}, "garmin_workout": ...} или None.
     При timeout возвращает {"advice": None, "timeout": True, "stats": {...}}.
