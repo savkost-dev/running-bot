@@ -851,12 +851,15 @@ _SPEC_LABELS = {
 }
 
 # ── ТЮНИНГ: % подходимости ────────────────────────────────────
-# borderline: % = полезность_зоны × completability.
-# Завершаемость — НЕОБХОДИМОЕ условие (множитель): не дотянет → % низкий при любой зоне.
-_USEFULNESS_FLOOR = 0.80     # характер/специализация — мягкий тилт поверх floor (0.8..1.0)
-_COMPL_D0 = 34.0             # сек/км быстрее порога, где completability ≈ 0.5
-_COMPL_K = 3.0               # крутизна НЕЛИНЕЙНОГО обрыва за гранью посильного
-_REC_FATIGUE_K = 0.35        # усталость приближает грань завершаемости (rec 0..1)
+# borderline: % = полезность_зоны × quality_volume.
+# quality_volume = intensity × time_to_termination — накопленный объём качественной
+# работы за тренировку (интеграл интенсивности по времени до отказа). Имеет максимум
+# у порога: слишком медленно → интенсивность≈0; слишком быстро → время до отказа≈0.
+_USEFULNESS_FLOOR = 0.80     # полезность зоны — мягкий тилт 0.8..1.0 (характер×специализация)
+_INTENSITY_EXP = 4.0         # крутизна роста интенсивности с темпом (отн. скорости к порогу)
+_TTT_TAU = 28.0              # сек/км превышения порога, где время до отказа ≈ половина
+_TTT_STEEP = 3.8             # крутизна НЕЛИНЕЙНОГО обрыва времени до отказа выше порога
+_TTT_RECOVERY_K = 0.35       # усталость приближает грань отказа (rec 0..1)
 # non-borderline (группы только «быстрее/медленнее»): спец не влияет, % по чистой форме
 _W_FORM_NB, _W_REC_NB = 0.58, 0.42
 
@@ -1026,18 +1029,27 @@ def _group_primary_pace(group: dict, struct_dist: dict) -> str | None:
     return best_block.get("work_pace")
 
 
-def _completability(pace_s: float, thr_sec: float | None, rec: float) -> float:
-    """Дотянет ли бегун группу всю тренировку без схода (0..1).
-    База — насколько рабочий темп быстрее персонального порога (ЛП/эквивалент).
-    Падение НЕЛИНЕЙНОЕ: за гранью посильного — крутой обрыв. Усталость приближает грань.
+def _intensity(pace_s: float, thr_sec: float | None) -> float:
+    """Относительная интенсивность темпа группы (отн. скорости к порогу), растёт с темпом.
+    1.0 на пороге, >1 быстрее, <1 медленнее (резко падает на медленных — «качества» нет).
+    """
+    if not thr_sec or pace_s <= 0:
+        return 1.0
+    return (thr_sec / pace_s) ** _INTENSITY_EXP   # скорость ∝ 1/темп
+
+
+def _time_to_termination(pace_s: float, thr_sec: float | None, rec: float) -> float:
+    """Доля времени тренировки, которую бегун реально удержит этот темп (0..1).
+    Ниже порога — плато (лактат в равновесии, держится долго). Выше порога — РЕЗКИЙ
+    нелинейный обрыв (накопление лактата → отказ). Усталость приближает грань.
     """
     if thr_sec is None:
         return 1.0
-    delta = thr_sec - pace_s           # >0 = быстрее порога (тяжелее)
+    delta = thr_sec - pace_s           # >0 = быстрее порога
     if delta <= 0:
-        return 1.0                     # у порога или медленнее — дотянет чисто
-    eff = delta * (1.0 + (1.0 - rec) * _REC_FATIGUE_K)   # уставший → грань ближе
-    return 1.0 / (1.0 + (eff / _COMPL_D0) ** _COMPL_K)
+        return 1.0                     # у порога или медленнее — удержит всю тренировку
+    eff = delta * (1.0 + (1.0 - rec) * _TTT_RECOVERY_K)   # уставший → грань ближе
+    return 1.0 / (1.0 + (eff / _TTT_TAU) ** _TTT_STEEP)
 
 
 def _zone_usefulness(zone: str, spec: str, character: str) -> float:
@@ -1047,30 +1059,17 @@ def _zone_usefulness(zone: str, spec: str, character: str) -> float:
     return _USEFULNESS_FLOOR + (1.0 - _USEFULNESS_FLOOR) * _spec_component(zone, spec, character)
 
 
-def _completability_tag(c: float) -> str | None:
-    """Короткая метка завершаемости для подачи."""
-    if c >= 0.85:
-        return None                    # по силам
-    if c >= 0.60:
+def _quality_label(pace_s: float, peak_pace_s: float, ttt: float, rec: float) -> str | None:
+    """Метка из положения на кривой quality_volume относительно оптимума (пика)."""
+    if pace_s < peak_pace_s - 0.5:          # быстрее оптимума — выше по интенсивности
+        if ttt < 0.25:
+            return "риск схода/травмы, мало времени работы"
         return "тяжело, но реально"
-    if c >= 0.40:
-        return "перебор, на грани"
-    if c >= 0.20:
-        return "запредельно"
-    return "риск схода/травмы"
-
-
-def _pct_score(*, form: float, rec_fit: float, pace_s: float, thr_sec: float | None,
-               rec: float, zone: str, spec: str, character: str, borderline: bool) -> int:
-    """% подходимости группы.
-    borderline=True  — полезность_зоны(характер×спец) × completability (множитель).
-    borderline=False — спец не влияет, % по чистой форме (перенормированные веса).
-    """
-    if borderline:
-        raw = _zone_usefulness(zone, spec, character) * _completability(pace_s, thr_sec, rec)
-    else:
-        raw = _W_FORM_NB * form + _W_REC_NB * rec_fit
-    return max(0, min(99, round(100 * raw)))
+    if pace_s > peak_pace_s + 0.5:          # медленнее оптимума — ниже интенсивность
+        if rec < 0.45:
+            return "разгрузочный вариант на сегодня"
+        return "низкий стимул, мало интенсивной работы"
+    return None                              # у максимума — оптимум работы
 
 
 def recommend_group(analysis_json: dict, user_data: dict) -> dict | None:
@@ -1117,54 +1116,71 @@ def recommend_group(analysis_json: dict, user_data: dict) -> dict | None:
     character = _workout_character(analysis)
     thr_sec = zone_secs.get("threshold")
 
-    markup = []       # объективная разметка всех групп
-    scored = []       # группы с % (без health)
+    # ── Проход 1: метрики каждой группы (порядок сохраняем в rows) ──
+    rows = []         # все группы по порядку (для разметки)
     for g in analysis.get("groups") or []:
         number = g.get("number", "?")
         if g.get("health_group"):
-            markup.append({"number": number, "zone_disp": "бег/ходьба", "work_pace": None, "pct": None, "tag": None})
+            rows.append({"number": number, "kind": "health", "zone_disp": "бег/ходьба",
+                         "work_pace": None, "pct": None, "tag": None})
             continue
         primary = _group_primary_pace(g, struct_dist)
         psec = _pace_sec(primary)
         if psec is None:
-            markup.append({"number": number, "zone_disp": "—", "work_pace": primary, "pct": None, "tag": None})
+            rows.append({"number": number, "kind": "na", "zone_disp": "—",
+                         "work_pace": primary, "pct": None, "tag": None})
             continue
         zone = _classify_zone(psec, zone_secs)
         pos, near = _zone_position(psec, zone, zone_secs)
-        zone_disp = _zone_display(zone, pos, near)
-        intensity = _ZONE_INTENSITY.get(zone, 0.7)
-        form = _form_score(psec, zone_secs)
-        rec_fit = 1.0 - intensity * (1.0 - rec)
-        compl = _completability(psec, thr_sec, rec)
-        tag = _completability_tag(compl) if is_borderline else None
-        pct = _pct_score(form=form, rec_fit=rec_fit, pace_s=psec, thr_sec=thr_sec,
-                         rec=rec, zone=zone, spec=spec, character=character, borderline=is_borderline)
-        entry = {
-            "number": number, "zone_key": zone, "zone_label": _ZONE_LABELS.get(zone, zone),
-            "zone_disp": zone_disp, "zone_pos": pos, "zone_near": near,
-            "work_pace": primary, "pct": pct, "completability": round(compl, 2), "tag": tag,
+        intensity = _intensity(psec, thr_sec)
+        ttt = _time_to_termination(psec, thr_sec, rec)
+        zint = _ZONE_INTENSITY.get(zone, 0.7)
+        rows.append({
+            "number": number, "kind": "paced", "zone_key": zone,
+            "zone_label": _ZONE_LABELS.get(zone, zone), "zone_disp": _zone_display(zone, pos, near),
+            "zone_pos": pos, "zone_near": near, "work_pace": primary, "psec": psec,
+            "intensity": round(intensity, 3), "ttt": round(ttt, 3), "qv_raw": intensity * ttt,
+            "use": _zone_usefulness(zone, spec, character),
+            "form": _form_score(psec, zone_secs), "rec_fit": 1.0 - zint * (1.0 - rec),
             "from_comment": bool(g.get("from_comment")),
-        }
-        markup.append({"number": number, "zone_disp": zone_disp, "work_pace": primary, "pct": pct, "tag": tag})
-        # лучшая альтернативная специализация — только для borderline (спец влияет на %)
-        best_spec, best_pct = None, pct
-        if is_borderline:
-            for s in _SPEC_ZONE_VALUE:
-                if s == spec:
-                    continue
-                p = _pct_score(form=form, rec_fit=rec_fit, pace_s=psec, thr_sec=thr_sec,
-                               rec=rec, zone=zone, spec=s, character=character, borderline=True)
-                if p > best_pct:
-                    best_pct, best_spec = p, s
-        entry["alt_spec"] = best_spec
-        entry["alt_pct"] = best_pct
-        scored.append(entry)
+        })
 
+    scored = [r for r in rows if r["kind"] == "paced"]
     if not scored:
         return {"ok": False, "note": "Не удалось разметить группы по зонам."}
 
-    scored.sort(key=lambda e: e["pct"], reverse=True)
+    # ── Проход 2: нормировка quality_volume к [0..1] и % ──────
+    qv_max = max(r["qv_raw"] for r in scored) or 1.0
+    for r in scored:
+        r["qvnorm"] = r["qv_raw"] / qv_max if qv_max else 0.0
+        if is_borderline:
+            r["pct"] = max(0, min(99, round(100 * r["use"] * r["qvnorm"])))
+            best_spec, best_pct = None, r["pct"]
+            for s in _SPEC_ZONE_VALUE:           # спец-альтернатива (qvnorm не зависит от спец)
+                if s == spec:
+                    continue
+                p = max(0, min(99, round(100 * _zone_usefulness(r["zone_key"], s, character) * r["qvnorm"])))
+                if p > best_pct:
+                    best_pct, best_spec = p, s
+            r["alt_spec"], r["alt_pct"] = best_spec, best_pct
+        else:
+            r["pct"] = max(0, min(99, round(100 * (_W_FORM_NB * r["form"] + _W_REC_NB * r["rec_fit"]))))
+            r["alt_spec"], r["alt_pct"] = None, r["pct"]
+
+    scored.sort(key=lambda r: r["pct"], reverse=True)
     main = scored[0]
+
+    # ── Метки из положения на кривой относительно оптимума ────
+    peak_pace = main["psec"]
+    for r in scored:
+        if is_borderline:
+            r["tag"] = None if r is main else _quality_label(r["psec"], peak_pace, r["ttt"], rec)
+        else:
+            r["tag"] = None
+
+    markup = [{"number": r["number"], "zone_disp": r["zone_disp"],
+               "work_pace": r.get("work_pace"), "pct": r["pct"], "tag": r.get("tag")}
+              for r in rows]
 
     # ── Альтернативы ──────────────────────────────────────────
     alternatives = []
