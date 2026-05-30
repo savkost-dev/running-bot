@@ -892,7 +892,9 @@ def _build_help_text(is_admin: bool) -> str:
             "/ratings — последние оценки рекомендаций\n"
             "/feedbacks — последние сообщения обратной связи\n"
             "/analyze — анализ последней тренировки через DeepSeek\n"
-            "/preprocess_mode — режим анализа тренировок (deep/smart)"
+            "/preprocess_mode — режим анализа тренировок (deep/smart)\n"
+            "/test_workout — тест Шага 2 (рекомендация группы) на твоих данных\n"
+            "/test_long — тест Шага 2 для длительной на твоих данных"
         )
     return text
 
@@ -1350,6 +1352,101 @@ async def cmd_preprocess_mode(update: Update, context: ContextTypes.DEFAULT_TYPE
         _build_preprocess_text(current),
         reply_markup=_build_preprocess_keyboard(current),
     )
+
+
+# ── ТЕСТ ШАГА 2 (рекомендация на готовом анализе) ────────────
+
+async def _collect_admin_user_data(db_user_id: int) -> tuple[dict, list[str]]:
+    """Собирает user_data текущего админа для recommend_*. Возвращает (user_data, missing)."""
+    missing = []
+    profile = get_user_profile(db_user_id)
+    spec = (profile or {}).get("specialization")
+
+    zinfo = zones.get_pace_zones(db_user_id)
+    if not zinfo or not zinfo.get("zones"):
+        missing.append("персональные зоны (нет VO2max/ЛП в профиле)")
+
+    recovery = None
+    try:
+        recovery = await _get_recovery_data(db_user_id, force_fresh=True)
+    except Exception as e:
+        logger.warning(f"test: recovery error for {db_user_id}: {e}")
+    if not recovery:
+        missing.append("восстановление (Whoop/Garmin/COROS/Polar) — взято нейтральное 70")
+
+    user_data = {"db_user_id": db_user_id, "specialization": spec, "recovery": recovery}
+    return user_data, missing
+
+
+async def _run_test_step2(update, context, *, long: bool):
+    """Общая логика /test_workout и /test_long."""
+    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+        await update.message.reply_text("Нет доступа.")
+        return
+
+    user = update.effective_user
+    db_user_id = get_or_create_user(user.id, user.full_name, user.username)
+    label = "Long Run" if long else "интервальную"
+    msg = await update.message.reply_text(f"🧪 Ищу {label} тренировку в канале...")
+
+    workout = await (find_next_long_run() if long else find_next_workout(only_interval=True))
+    if not workout:
+        await msg.edit_text("😔 Не нашёл подходящую тренировку в канале.")
+        return
+
+    mode = get_preprocess_mode()
+    await msg.edit_text(f"🧪 Анализирую через DeepSeek (режим {mode})...\nМожет занять 1-2 минуты.")
+
+    import functools
+    analysis = await asyncio.get_event_loop().run_in_executor(
+        None, functools.partial(analyze_workout, workout["raw_text"], workout["comments_text"], mode)
+    )
+    if not analysis:
+        await msg.edit_text("❌ Анализ не удался (пустой ответ модели).")
+        return
+
+    user_data, missing = await _collect_admin_user_data(db_user_id)
+
+    if long:
+        rec = claude_advisor.recommend_long(analysis, user_data)
+    else:
+        rec = claude_advisor.recommend_group(analysis, user_data)
+
+    # ── Заголовок теста с пометкой чего не хватило ────────────
+    header = [
+        f"🧪 <b>Тест Шага 2 — {'Long Run' if long else 'Интервальная'}</b>",
+        f"Анализ: {analysis.get('workout_date', '—')} · "
+        f"valid={analysis.get('is_valid')} · режим {mode}",
+    ]
+    if not long:
+        header.append(f"is_borderline: {analysis.get('is_borderline')}")
+    if missing:
+        header.append("⚠️ Не хватило данных: " + "; ".join(missing))
+    else:
+        src = (rec or {}).get("zones_source")
+        header.append(f"✅ Данные полные (зоны: {src})")
+
+    await msg.edit_text("\n".join(header), parse_mode="HTML")
+
+    # ── Сам вывод рекомендации (как увидит пользователь) ──────
+    if not rec or not rec.get("ok"):
+        note = (rec or {}).get("note", "рекомендация недоступна")
+        await context.bot.send_message(user.id, f"❌ {note}")
+        return
+
+    rec_text = rec.get("text", "(пустой вывод)")
+    for i in range(0, len(rec_text), 4096):
+        await context.bot.send_message(user.id, rec_text[i:i + 4096])
+
+
+async def cmd_test_workout(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Тест Шага 2 для интервальной: анализ + recommend_group на данных админа (админ)."""
+    await _run_test_step2(update, context, long=False)
+
+
+async def cmd_test_long(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Тест Шага 2 для длительной: анализ + recommend_long на данных админа (админ)."""
+    await _run_test_step2(update, context, long=True)
 
 
 # ── КНОПКИ ───────────────────────────────────────────────────
@@ -3208,6 +3305,8 @@ def main():
     app.add_handler(CommandHandler("feedbacks", cmd_feedbacks))
     app.add_handler(CommandHandler("analyze",   cmd_analyze))
     app.add_handler(CommandHandler("preprocess_mode", cmd_preprocess_mode))
+    app.add_handler(CommandHandler("test_workout", cmd_test_workout))
+    app.add_handler(CommandHandler("test_long",    cmd_test_long))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     app.add_error_handler(global_error_handler)
