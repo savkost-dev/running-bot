@@ -5,6 +5,17 @@
 
 ---
 
+## [0.16.0] 2026-05-30 — Персональные темповые зоны (Дэниелс/VDOT)
+
+### Добавлено
+- Модуль `zones.py`: `calculate_pace_zones(user_profile, athlete_cache)` — зоны easy/marathon/threshold/interval/repetition (темпы мин/км) по подходу Дэниелса от порогового темпа; приоритет источника: лактат → VO2max → Риегель
+- `athlete_cache`: поля `pace_zones_json`, `zones_source`, `zones_updated_at` + миграция
+- `database.save_pace_zones()` (upsert, не затрагивает CTL/ATL/TSB) и `get_pace_zones_raw()` (чтение независимо от 30-дневной свежести training_load)
+- `zones.recalculate_and_save(db_user_id)` и `zones.get_pace_zones(db_user_id)` (готовые зоны из БД; если нет — считает на лету и сохраняет)
+- Пересчёт зон: в ночном `scheduled_cache_refresh` (после обновления VO2max/ЛП), при ручном вводе VO2max и при ручном вводе лактатного порога. НЕ пересчитывается при смене специализации
+
+---
+
 ## [0.15.3] 2026-05-30 — Анализ interval: объём, пограничность, нейтральный purpose
 
 ### Добавлено / Изменено (только interval, JSON-схема long не тронута)

@@ -61,6 +61,9 @@ def init_db():
                 form_text TEXT,
                 predictions TEXT,
                 last_race TEXT,
+                pace_zones_json TEXT,
+                zones_source TEXT,
+                zones_updated_at TEXT,
                 updated_at TEXT DEFAULT (datetime('now')),
                 FOREIGN KEY (user_id) REFERENCES users(id)
             );
@@ -200,6 +203,12 @@ def init_db():
         with get_connection() as conn:
             try:
                 conn.execute(f"ALTER TABLE user_profile ADD COLUMN {col}")
+            except Exception:
+                pass
+    for col in ("pace_zones_json TEXT", "zones_source TEXT", "zones_updated_at TEXT"):
+        with get_connection() as conn:
+            try:
+                conn.execute(f"ALTER TABLE athlete_cache ADD COLUMN {col}")
             except Exception:
                 pass
 
@@ -620,6 +629,41 @@ def get_athlete_cache(user_id: int) -> dict | None:
         "last_race": _json.loads(row[6]) if row[6] else None,
         "updated_at": row[7],
     }
+
+
+def save_pace_zones(user_id: int, zones: dict, source: str) -> None:
+    """Сохраняет персональные темповые зоны в athlete_cache (upsert).
+    Не затрагивает training_load (ctl/atl/tsb) — обновляет только поля зон.
+    """
+    payload = _json.dumps(zones, ensure_ascii=False)
+    with get_connection() as conn:
+        conn.execute("""
+            INSERT INTO athlete_cache (user_id, pace_zones_json, zones_source, zones_updated_at)
+            VALUES (?, ?, ?, datetime('now'))
+            ON CONFLICT(user_id) DO UPDATE SET
+                pace_zones_json = excluded.pace_zones_json,
+                zones_source = excluded.zones_source,
+                zones_updated_at = excluded.zones_updated_at
+        """, (user_id, payload, source))
+
+
+def get_pace_zones_raw(user_id: int) -> dict | None:
+    """Читает зоны из athlete_cache напрямую (не зависит от свежести training_load).
+    Возвращает {"zones": dict, "source": str, "updated_at": str} или None.
+    """
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT pace_zones_json, zones_source, zones_updated_at "
+            "FROM athlete_cache WHERE user_id = ?",
+            (user_id,)
+        ).fetchone()
+    if not row or not row[0]:
+        return None
+    try:
+        zones = _json.loads(row[0])
+    except Exception:
+        return None
+    return {"zones": zones, "source": row[1], "updated_at": row[2]}
 
 
 # ── Профиль спортсмена ────────────────────────────────────────

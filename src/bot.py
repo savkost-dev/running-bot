@@ -46,6 +46,7 @@ from claude_advisor import (
     ask_groq, format_evening_message, format_morning_message, format_long_run_message,
     analyze_workout,
 )
+import zones
 
 ADMIN_TELEGRAM_IDS = {273726778}
 ADMIN_ID = 273726778
@@ -1944,6 +1945,10 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         vo2max = float(text.replace(',', '.'))
         db_user_id = get_or_create_user(user.id, user.full_name, user.username)
         save_user_profile(db_user_id, vo2max=vo2max, vo2max_source="manual")
+        try:
+            zones.recalculate_and_save(db_user_id)
+        except Exception as e:
+            logger.warning(f"Zones recalc error (manual vo2max) for {user.id}: {e}")
         context.user_data.pop("awaiting_profile")
         profile = get_user_profile(db_user_id)
         await update.message.reply_text(
@@ -1960,6 +1965,10 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pace = pace_match.group(1)
         db_user_id = get_or_create_user(user.id, user.full_name, user.username)
         save_user_profile(db_user_id, lactate_threshold_pace=pace, lactate_source="manual")
+        try:
+            zones.recalculate_and_save(db_user_id)
+        except Exception as e:
+            logger.warning(f"Zones recalc error (manual lactate) for {user.id}: {e}")
         context.user_data["awaiting_profile"] = "set_lactate_hr"
         context.user_data["lactate_pace"] = pace
         await update.message.reply_text(
@@ -3038,6 +3047,12 @@ async def scheduled_cache_refresh(context: ContextTypes.DEFAULT_TYPE):
                     f"VO2max обновлён для {telegram_id}: "
                     f"{float(old_vo2max):.0f} → {new_vo2max:.0f} ({tracker_name})"
                 )
+
+        # ── Персональные темповые зоны (пересчёт после обновления данных) ──
+        try:
+            zones.recalculate_and_save(db_user_id)
+        except Exception as e:
+            logger.warning(f"Zones recalc error for {telegram_id}: {e}")
 
         await asyncio.sleep(1)
 
