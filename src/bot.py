@@ -894,7 +894,8 @@ def _build_help_text(is_admin: bool) -> str:
             "/analyze — анализ последней тренировки через DeepSeek\n"
             "/preprocess_mode — режим анализа тренировок (deep/smart)\n"
             "/test_workout — тест Шага 2 (рекомендация группы) на твоих данных\n"
-            "/test_long — тест Шага 2 для длительной на твоих данных"
+            "/test_long — тест Шага 2 для длительной на твоих данных\n"
+            "/reanalyze — форс переанализа свежих анонсов (обновить кэш)"
         )
     return text
 
@@ -1447,6 +1448,74 @@ async def cmd_test_workout(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_test_long(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Тест Шага 2 для длительной: анализ + recommend_long на данных админа (админ)."""
     await _run_test_step2(update, context, long=True)
+
+
+async def _reanalyze_one(workout: dict, mode: str) -> str:
+    """Принудительный переанализ одного анонса (игнор idempotency) → запись в workout_analysis.
+    Возвращает строку статуса для админа.
+    """
+    import json as _json, functools
+    label = "🕐 Long Run" if workout.get("workout_type") == "long" else "⚡ Интервальная"
+    date_fmt = workout.get("workout_date", "—")
+    raw_text = workout.get("raw_text") or ""
+    comments_text = workout.get("comments_text") or ""
+    edit_date = workout.get("edit_date")
+    extra = workout.get("extra_groups") or []
+
+    result = await asyncio.get_event_loop().run_in_executor(
+        None, functools.partial(analyze_workout, raw_text, comments_text, mode)
+    )
+    if not result:
+        return f"{label} — {date_fmt}: ❌ анализ не удался (пустой ответ модели)"
+
+    save_workout_analysis(
+        post_id=workout.get("post_id"),
+        workout_date=result.get("workout_date", ""),
+        workout_type=result.get("workout_type", ""),
+        is_valid=1 if result.get("is_valid") else 0,
+        raw_text=raw_text,
+        analyzed_json=_json.dumps(result, ensure_ascii=False),
+        analysis_mode=mode,
+        extra_groups_json=_json.dumps(extra, ensure_ascii=False),
+        edit_date=edit_date,
+    )
+    n_groups = len(result.get("groups") or [])
+    n_extra = len(result.get("extra_groups") or [])
+    logger.info(f"reanalyze: post_id={workout.get('post_id')} обновлён вручную "
+                f"(type={result.get('workout_type')}, valid={result.get('is_valid')})")
+    return (
+        f"{label} — {result.get('workout_date', date_fmt)} | режим {mode} | "
+        f"valid={result.get('is_valid')}\n"
+        f"   групп: {n_groups}, доп. групп: {n_extra} — обновлено"
+    )
+
+
+async def cmd_reanalyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Ручной форс переанализа свежих анонсов (interval + long) → кэш workout_analysis (админ)."""
+    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+        await update.message.reply_text("Нет доступа.")
+        return
+
+    mode = get_preprocess_mode()
+    msg = await update.message.reply_text(
+        f"🔁 Принудительный переанализ свежих анонсов (режим {mode})...\nМожет занять 1-2 минуты на каждый."
+    )
+
+    lines = [f"🔁 <b>Переанализ выполнен (режим {mode})</b>\n"]
+
+    workout = await find_next_workout(only_interval=True)
+    if workout and workout.get("post_id"):
+        lines.append(await _reanalyze_one(workout, mode))
+    else:
+        lines.append("⚡ Интервальная — анонс не найден")
+
+    workout_lr = await find_next_long_run()
+    if workout_lr and workout_lr.get("post_id"):
+        lines.append(await _reanalyze_one(workout_lr, mode))
+    else:
+        lines.append("🕐 Long Run — анонс не найден")
+
+    await msg.edit_text("\n".join(lines), parse_mode="HTML")
 
 
 # ── КНОПКИ ───────────────────────────────────────────────────
@@ -3386,6 +3455,7 @@ def main():
     app.add_handler(CommandHandler("preprocess_mode", cmd_preprocess_mode))
     app.add_handler(CommandHandler("test_workout", cmd_test_workout))
     app.add_handler(CommandHandler("test_long",    cmd_test_long))
+    app.add_handler(CommandHandler("reanalyze",    cmd_reanalyze))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     app.add_error_handler(global_error_handler)
