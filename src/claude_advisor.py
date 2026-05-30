@@ -1059,7 +1059,8 @@ def _zone_usefulness(zone: str, spec: str, character: str) -> float:
     return _USEFULNESS_FLOOR + (1.0 - _USEFULNESS_FLOOR) * _spec_component(zone, spec, character)
 
 
-def _quality_label(pace_s: float, peak_pace_s: float, ttt: float, rec: float) -> str | None:
+def _quality_label(pace_s: float, peak_pace_s: float, ttt: float,
+                   rec: float, zone_key: str) -> str | None:
     """Метка из положения на кривой quality_volume относительно оптимума (пика)."""
     if pace_s < peak_pace_s - 0.5:          # быстрее оптимума — выше по интенсивности
         if ttt < 0.25:
@@ -1068,7 +1069,9 @@ def _quality_label(pace_s: float, peak_pace_s: float, ttt: float, rec: float) ->
     if pace_s > peak_pace_s + 0.5:          # медленнее оптимума — ниже интенсивность
         if rec < 0.45:
             return "разгрузочный вариант на сегодня"
-        return "низкий стимул, мало интенсивной работы"
+        if zone_key == "easy":              # реально лёгкая зона
+            return "слишком легко"
+        return "низкий стимул"              # темповая/пороговая, но ниже оптимума
     return None                              # у максимума — оптимум работы
 
 
@@ -1174,7 +1177,7 @@ def recommend_group(analysis_json: dict, user_data: dict) -> dict | None:
     peak_pace = main["psec"]
     for r in scored:
         if is_borderline:
-            r["tag"] = None if r is main else _quality_label(r["psec"], peak_pace, r["ttt"], rec)
+            r["tag"] = None if r is main else _quality_label(r["psec"], peak_pace, r["ttt"], rec, r["zone_key"])
         else:
             r["tag"] = None
 
