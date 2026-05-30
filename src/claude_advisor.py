@@ -850,10 +850,14 @@ _SPEC_LABELS = {
     "marathon": "марафон", "speed": "развитие скорости", "fitness": "общая форма",
 }
 
-# ── ТЮНИНГ: веса компонентов % подходимости ───────────────────
-# borderline (выбор разных качеств между группами): форма + специализация + восст.
-_W_FORM, _W_SPEC, _W_REC = 0.35, 0.40, 0.25
-# non-borderline (группы только «быстрее/медленнее»): спец обнулён, веса перенормированы
+# ── ТЮНИНГ: % подходимости ────────────────────────────────────
+# borderline: % = полезность_зоны × completability.
+# Завершаемость — НЕОБХОДИМОЕ условие (множитель): не дотянет → % низкий при любой зоне.
+_USEFULNESS_FLOOR = 0.80     # характер/специализация — мягкий тилт поверх floor (0.8..1.0)
+_COMPL_D0 = 31.0             # сек/км быстрее порога, где completability ≈ 0.5
+_COMPL_K = 3.0               # крутизна НЕЛИНЕЙНОГО обрыва за гранью посильного
+_REC_FATIGUE_K = 0.35        # усталость приближает грань завершаемости (rec 0..1)
+# non-borderline (группы только «быстрее/медленнее»): спец не влияет, % по чистой форме
 _W_FORM_NB, _W_REC_NB = 0.58, 0.42
 
 # Зоны от быстрой к медленной + короткие имена
@@ -1022,14 +1026,48 @@ def _group_primary_pace(group: dict, struct_dist: dict) -> str | None:
     return best_block.get("work_pace")
 
 
-def _pct_score(form: float, rec_fit: float, zone: str, spec: str,
-               character: str, borderline: bool) -> int:
+def _completability(pace_s: float, thr_sec: float | None, rec: float) -> float:
+    """Дотянет ли бегун группу всю тренировку без схода (0..1).
+    База — насколько рабочий темп быстрее персонального порога (ЛП/эквивалент).
+    Падение НЕЛИНЕЙНОЕ: за гранью посильного — крутой обрыв. Усталость приближает грань.
+    """
+    if thr_sec is None:
+        return 1.0
+    delta = thr_sec - pace_s           # >0 = быстрее порога (тяжелее)
+    if delta <= 0:
+        return 1.0                     # у порога или медленнее — дотянет чисто
+    eff = delta * (1.0 + (1.0 - rec) * _REC_FATIGUE_K)   # уставший → грань ближе
+    return 1.0 / (1.0 + (eff / _COMPL_D0) ** _COMPL_K)
+
+
+def _zone_usefulness(zone: str, spec: str, character: str) -> float:
+    """Полезность зоны (мягкий тилт 0.8..1.0): характер тренировки × специализация.
+    Завершаемость доминирует, поэтому полезность — гентл-множитель, а не главный фактор.
+    """
+    return _USEFULNESS_FLOOR + (1.0 - _USEFULNESS_FLOOR) * _spec_component(zone, spec, character)
+
+
+def _completability_tag(c: float) -> str | None:
+    """Короткая метка завершаемости для подачи."""
+    if c >= 0.85:
+        return None                    # по силам
+    if c >= 0.60:
+        return "тяжело, но реально"
+    if c >= 0.40:
+        return "перебор, на грани"
+    if c >= 0.20:
+        return "запредельно"
+    return "риск схода/травмы"
+
+
+def _pct_score(*, form: float, rec_fit: float, pace_s: float, thr_sec: float | None,
+               rec: float, zone: str, spec: str, character: str, borderline: bool) -> int:
     """% подходимости группы.
-    borderline=True  — форма + спец-компонент(характер×специализация) + восстановление.
-    borderline=False — спец обнулена, веса формы/восст. перенормированы (по чистой форме).
+    borderline=True  — полезность_зоны(характер×спец) × completability (множитель).
+    borderline=False — спец не влияет, % по чистой форме (перенормированные веса).
     """
     if borderline:
-        raw = _W_FORM * form + _W_SPEC * _spec_component(zone, spec, character) + _W_REC * rec_fit
+        raw = _zone_usefulness(zone, spec, character) * _completability(pace_s, thr_sec, rec)
     else:
         raw = _W_FORM_NB * form + _W_REC_NB * rec_fit
     return max(0, min(99, round(100 * raw)))
@@ -1077,18 +1115,19 @@ def recommend_group(analysis_json: dict, user_data: dict) -> dict | None:
 
     is_borderline = bool(analysis.get("is_borderline"))
     character = _workout_character(analysis)
+    thr_sec = zone_secs.get("threshold")
 
     markup = []       # объективная разметка всех групп
     scored = []       # группы с % (без health)
     for g in analysis.get("groups") or []:
         number = g.get("number", "?")
         if g.get("health_group"):
-            markup.append({"number": number, "zone_disp": "бег/ходьба", "work_pace": None, "pct": None})
+            markup.append({"number": number, "zone_disp": "бег/ходьба", "work_pace": None, "pct": None, "tag": None})
             continue
         primary = _group_primary_pace(g, struct_dist)
         psec = _pace_sec(primary)
         if psec is None:
-            markup.append({"number": number, "zone_disp": "—", "work_pace": primary, "pct": None})
+            markup.append({"number": number, "zone_disp": "—", "work_pace": primary, "pct": None, "tag": None})
             continue
         zone = _classify_zone(psec, zone_secs)
         pos, near = _zone_position(psec, zone, zone_secs)
@@ -1096,20 +1135,25 @@ def recommend_group(analysis_json: dict, user_data: dict) -> dict | None:
         intensity = _ZONE_INTENSITY.get(zone, 0.7)
         form = _form_score(psec, zone_secs)
         rec_fit = 1.0 - intensity * (1.0 - rec)
-        pct = _pct_score(form, rec_fit, zone, spec, character, is_borderline)
+        compl = _completability(psec, thr_sec, rec)
+        tag = _completability_tag(compl) if is_borderline else None
+        pct = _pct_score(form=form, rec_fit=rec_fit, pace_s=psec, thr_sec=thr_sec,
+                         rec=rec, zone=zone, spec=spec, character=character, borderline=is_borderline)
         entry = {
             "number": number, "zone_key": zone, "zone_label": _ZONE_LABELS.get(zone, zone),
             "zone_disp": zone_disp, "zone_pos": pos, "zone_near": near,
-            "work_pace": primary, "pct": pct, "from_comment": bool(g.get("from_comment")),
+            "work_pace": primary, "pct": pct, "completability": round(compl, 2), "tag": tag,
+            "from_comment": bool(g.get("from_comment")),
         }
-        markup.append({"number": number, "zone_disp": zone_disp, "work_pace": primary, "pct": pct})
+        markup.append({"number": number, "zone_disp": zone_disp, "work_pace": primary, "pct": pct, "tag": tag})
         # лучшая альтернативная специализация — только для borderline (спец влияет на %)
         best_spec, best_pct = None, pct
         if is_borderline:
             for s in _SPEC_ZONE_VALUE:
                 if s == spec:
                     continue
-                p = _pct_score(form, rec_fit, zone, s, character, True)
+                p = _pct_score(form=form, rec_fit=rec_fit, pace_s=psec, thr_sec=thr_sec,
+                               rec=rec, zone=zone, spec=s, character=character, borderline=True)
                 if p > best_pct:
                     best_pct, best_spec = p, s
         entry["alt_spec"] = best_spec
@@ -1131,7 +1175,7 @@ def recommend_group(analysis_json: dict, user_data: dict) -> dict | None:
                 cond = f"но {e['alt_pct']}% если цель — {_SPEC_LABELS[e['alt_spec']]}"
             alternatives.append({
                 "number": e["number"], "pct": e["pct"], "zone_label": e["zone_label"],
-                "zone_disp": e["zone_disp"], "condition": cond,
+                "zone_disp": e["zone_disp"], "tag": e.get("tag"), "condition": cond,
             })
 
     spec_label = _SPEC_LABELS.get(spec, spec)
@@ -1147,7 +1191,8 @@ def recommend_group(analysis_json: dict, user_data: dict) -> dict | None:
         if m["pct"] is None:
             lines.append(f"  Группа {m['number']} — {m['zone_disp']}")
         else:
-            lines.append(f"  Группа {m['number']} — {m['zone_disp']}, темп {m['work_pace']} ({m['pct']}%)")
+            tag = f", {m['tag']}" if m.get("tag") else ""
+            lines.append(f"  Группа {m['number']} — {m['zone_disp']}, темп {m['work_pace']} ({m['pct']}%{tag})")
 
     if is_borderline:
         lines.append(f"\n✅ Рекомендую: Группа {main['number']} — {main['zone_disp']}, {main['pct']}%")
@@ -1155,6 +1200,8 @@ def recommend_group(analysis_json: dict, user_data: dict) -> dict | None:
             lines.append("Альтернативы:")
             for a in alternatives:
                 base = f"  Группа {a['number']} — {a['pct']}% для твоей цели ({spec_label})"
+                if a.get("tag"):
+                    base += f" — {a['tag']}"
                 if a["condition"]:
                     base += f", {a['condition']}"
                 lines.append(base)
