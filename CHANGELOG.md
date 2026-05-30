@@ -5,6 +5,20 @@
 
 ---
 
+## [0.15.0] 2026-05-30 — Новая блочная схема анализа interval-тренировок
+
+### Добавлено / Изменено
+- `analyze_workout` (interval): структура работы вынесена на верхний уровень `structure[]` — блоки `repeat` (reps + дистанции + `purpose`) и `easy` (разделитель); задаётся ОДИН раз
+- `overall_purpose` — что развивает тренировка целиком
+- `groups[].blocks[]` — только темпы по блокам (`work_pace`/`recovery_pace`/`active_recovery`), привязка через `block: N`, без дублирования структуры
+- Новые поля группы: `from_comment` (группа из комментария с полным набором → в groups), `track_note` (4-я дорожка), `reps_override` (меньше повторов), `health_group` (бег/ходьба)
+- LONG-тренировки: схема не изменена — `structure=[]`, `groups[].work`, `has_progression`, `even_pace_available`
+- Все правила парсинга сохранены (формат времени с точкой, work vs recovery, active_recovery OR, нет темпа → null)
+- `bot._format_analysis_result` обновлён: рендерит структуру+блоки для interval и старый формат для long
+- Все правила парсинга сохранены
+
+---
+
 ## [0.14.9] 2026-05-30 — analyze_workout: нет целевого темпа → null
 
 ### Изменено (только текст промпта, JSON-схема не тронута)

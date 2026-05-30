@@ -1140,19 +1140,66 @@ def _format_analysis_result(result: dict, mode: str) -> str:
     else:
         lines.append(f"❌ Не анонс: {result.get('reject_reason') or '—'}")
 
-    lines.append(f"Тип: {result.get('workout_type', '—')} | Дата: {result.get('workout_date', '—')}")
+    wtype = result.get("workout_type", "—")
+    lines.append(f"Тип: {wtype} | Дата: {result.get('workout_date', '—')}")
     lines.append(f"\n📋 Суть: {result.get('summary', '—')}")
 
+    structure = result.get("structure") or []
     groups = result.get("groups") or []
-    lines.append(f"\nГруппы ({len(groups)}):")
-    for g in groups:
-        recovery = g.get("recovery")
-        line = f"  {g.get('number', '?')}. {g.get('work', '—')}"
-        if recovery and str(recovery).lower() != "none":
-            ar = " 🟢актив.восст." if g.get("active_recovery") else ""
-            rec_pace = g.get("recovery_pace") or "—"
-            line += f"\n     ↻ восст: {recovery} ({rec_pace}){ar}"
-        lines.append(line)
+
+    if wtype == "interval" and structure:
+        # Новая схема: структура один раз + группы как темпы по блокам
+        lines.append("\n🏗 Структура:")
+        for b in structure:
+            blk = b.get("block", "?")
+            if b.get("type") == "easy":
+                desc = b.get("description") or "лёгкий бег"
+                lines.append(f"  Блок {blk}: {b.get('distance_m', '?')}м — {desc}")
+            else:
+                purpose = f" — {b['purpose']}" if b.get("purpose") else ""
+                lines.append(
+                    f"  Блок {blk}: {b.get('reps', '?')}×{b.get('work_distance_m', '?')}м"
+                    f" / {b.get('recovery_distance_m', '?')}м восст{purpose}"
+                )
+        if result.get("overall_purpose"):
+            lines.append(f"🎯 Цель тренировки: {result['overall_purpose']}")
+
+        lines.append(f"\nГруппы ({len(groups)}):")
+        for g in groups:
+            num = g.get("number", "?")
+            tags = []
+            if g.get("from_comment"):
+                tags.append("💬из комм.")
+            if g.get("reps_override"):
+                tags.append(f"повторов: {g['reps_override']}")
+            if g.get("track_note"):
+                tags.append(str(g["track_note"]))
+            tag_str = f" ({'; '.join(tags)})" if tags else ""
+
+            if g.get("health_group"):
+                lines.append(f"  {num}{tag_str}: бег/ходьба чередование (для начинающих)")
+                continue
+
+            block_strs = []
+            for bl in (g.get("blocks") or []):
+                ar = "🟢" if bl.get("active_recovery") else "⚪"
+                rp = bl.get("recovery_pace") or "—"
+                block_strs.append(
+                    f"бл{bl.get('block', '?')} {bl.get('work_pace', '—')}/км (восст {rp} {ar})"
+                )
+            body = "; ".join(block_strs) if block_strs else "—"
+            lines.append(f"  {num}{tag_str}: {body}")
+    else:
+        # Long или старый формат: группы с текстовым work
+        lines.append(f"\nГруппы ({len(groups)}):")
+        for g in groups:
+            recovery = g.get("recovery")
+            line = f"  {g.get('number', '?')}. {g.get('work', '—')}"
+            if recovery and str(recovery).lower() != "none":
+                ar = " 🟢актив.восст." if g.get("active_recovery") else ""
+                rec_pace = g.get("recovery_pace") or "—"
+                line += f"\n     ↻ восст: {recovery} ({rec_pace}){ar}"
+            lines.append(line)
 
     extra = result.get("extra_groups") or []
     if extra:
@@ -1162,7 +1209,7 @@ def _format_analysis_result(result: dict, mode: str) -> str:
     else:
         lines.append("\nДоп. группы: нет")
 
-    if result.get("workout_type") == "long":
+    if wtype == "long":
         prog = "да" if result.get("has_progression") else "нет"
         even = "да" if result.get("even_pace_available") else "нет"
         lines.append(f"\nПрогрессия: {prog} | Ровный темп: {even}")
