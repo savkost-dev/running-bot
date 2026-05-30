@@ -155,7 +155,8 @@ def init_db():
                 extra_groups_json TEXT,
                 analysis_mode TEXT,
                 created_at TEXT DEFAULT (datetime('now')),
-                updated_at TEXT DEFAULT (datetime('now'))
+                updated_at TEXT DEFAULT (datetime('now')),
+                edit_date TEXT
             );
 
             CREATE TABLE IF NOT EXISTS bot_settings (
@@ -211,6 +212,11 @@ def init_db():
                 conn.execute(f"ALTER TABLE athlete_cache ADD COLUMN {col}")
             except Exception:
                 pass
+    with get_connection() as conn:
+        try:
+            conn.execute("ALTER TABLE workout_analysis ADD COLUMN edit_date TEXT")
+        except Exception:
+            pass
 
     # Дефолт глобальной настройки режима анализа тренировок
     with get_connection() as conn:
@@ -1019,25 +1025,31 @@ def save_workout_analysis(
     raw_text: str,
     analyzed_json: str,
     analysis_mode: str,
+    extra_groups_json: str | None = None,
+    edit_date: str | None = None,
 ) -> None:
-    """Сохраняет или обновляет анализ тренировки."""
+    """Сохраняет или обновляет анализ тренировки.
+    extra_groups_json / edit_date — опциональны; при None существующие НЕ затираются (COALESCE).
+    """
     now = datetime.now().isoformat()
     with get_connection() as conn:
         conn.execute("""
             INSERT INTO workout_analysis
                 (post_id, workout_date, workout_type, is_valid, raw_text,
-                 analyzed_json, analysis_mode, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 analyzed_json, extra_groups_json, analysis_mode, created_at, updated_at, edit_date)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(post_id) DO UPDATE SET
-                workout_date   = excluded.workout_date,
-                workout_type   = excluded.workout_type,
-                is_valid       = excluded.is_valid,
-                raw_text       = excluded.raw_text,
-                analyzed_json  = excluded.analyzed_json,
-                analysis_mode  = excluded.analysis_mode,
-                updated_at     = excluded.updated_at
+                workout_date      = excluded.workout_date,
+                workout_type      = excluded.workout_type,
+                is_valid          = excluded.is_valid,
+                raw_text          = excluded.raw_text,
+                analyzed_json     = excluded.analyzed_json,
+                extra_groups_json = COALESCE(excluded.extra_groups_json, workout_analysis.extra_groups_json),
+                analysis_mode     = excluded.analysis_mode,
+                updated_at        = excluded.updated_at,
+                edit_date         = COALESCE(excluded.edit_date, workout_analysis.edit_date)
         """, (post_id, workout_date, workout_type, is_valid, raw_text,
-              analyzed_json, analysis_mode, now, now))
+              analyzed_json, extra_groups_json, analysis_mode, now, now, edit_date))
     _db_logger.info(
         f"Анализ тренировки сохранён: post_id={post_id}, "
         f"type={workout_type}, valid={is_valid}, mode={analysis_mode}"
@@ -1054,7 +1066,7 @@ def get_workout_analysis(post_id: int) -> dict | None:
         return None
     cols = ["id", "post_id", "workout_date", "workout_type", "is_valid",
             "raw_text", "analyzed_json", "extra_groups_json",
-            "analysis_mode", "created_at", "updated_at"]
+            "analysis_mode", "created_at", "updated_at", "edit_date"]
     return dict(zip(cols, row))
 
 
@@ -1071,7 +1083,7 @@ def get_latest_workout_analysis(workout_type: str) -> dict | None:
         return None
     cols = ["id", "post_id", "workout_date", "workout_type", "is_valid",
             "raw_text", "analyzed_json", "extra_groups_json",
-            "analysis_mode", "created_at", "updated_at"]
+            "analysis_mode", "created_at", "updated_at", "edit_date"]
     return dict(zip(cols, row))
 
 

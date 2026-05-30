@@ -56,7 +56,8 @@ async def get_recent_posts(limit: int = 50) -> list:
                 posts.append({
                     "id": message.id,
                     "date": message.date,
-                    "text": message.text
+                    "text": message.text,
+                    "edit_date": message.edit_date.isoformat() if message.edit_date else None,
                 })
     return posts
 
@@ -124,6 +125,7 @@ async def find_next_workout(only_interval: bool = True) -> dict | None:
         # Полный текст поста и комментарии — для двухшагового анализа (/analyze)
         parsed["post_id"] = post["id"]
         parsed["raw_text"] = post["text"]
+        parsed["edit_date"] = post.get("edit_date")
         parsed["comments_text"] = "\n".join(c["text"] for c in comments if c.get("text"))
 
         try:
@@ -514,6 +516,7 @@ async def find_next_long_run() -> dict | None:
         # Полный текст поста и комментарии — для двухшагового анализа (/analyze)
         parsed["post_id"] = post["id"]
         parsed["raw_text"] = post["text"]
+        parsed["edit_date"] = post.get("edit_date")
         _comments = await get_post_comments(post["id"])
         parsed["comments_text"] = "\n".join(c["text"] for c in _comments if c.get("text"))
 

@@ -2948,15 +2948,92 @@ async def _broadcast_split(
     return count
 
 
+def _edit_newer(a: str | None, b: str | None) -> bool:
+    """True если edit_date a новее b (оба ISO-строки или None)."""
+    if not a:
+        return False
+    if not b:
+        return True
+    try:
+        from datetime import datetime as _dt
+        return _dt.fromisoformat(a) > _dt.fromisoformat(b)
+    except Exception:
+        return str(a) > str(b)
+
+
+async def _autoanalyze_post(workout: dict) -> None:
+    """Фоновый автоанализ анонса (Шаг 1) → запись в workout_analysis.
+    Запускается при: новом анонсе / новой доп. группе / редактировании поста.
+    Прод-режим (get_preprocess_mode). Не блокирует цикл проверки.
+    """
+    import json as _json, functools
+    try:
+        post_id = workout.get("post_id")
+        if not post_id:
+            return
+        raw_text = workout.get("raw_text") or ""
+        comments_text = workout.get("comments_text") or ""
+        edit_date = workout.get("edit_date")
+        extra = workout.get("extra_groups") or []
+        extra_json = _json.dumps(extra, ensure_ascii=False)
+
+        existing = get_workout_analysis(post_id)
+        reason = None
+        if not existing:
+            reason = "новый анонс"
+        elif _edit_newer(edit_date, existing.get("edit_date")):
+            reason = "пост отредактирован"
+        else:
+            old_extra = _json.loads(existing.get("extra_groups_json") or "[]")
+            old_nums = {str(g.get("number")) for g in old_extra}
+            new_nums = {str(g.get("number")) for g in extra}
+            if new_nums - old_nums:
+                reason = "новые доп. группы"
+        if not reason:
+            return
+
+        mode = get_preprocess_mode()
+        logger.info(f"autoanalyze: post_id={post_id} запуск анализа ({reason}, режим {mode})")
+        result = await asyncio.get_event_loop().run_in_executor(
+            None, functools.partial(analyze_workout, raw_text, comments_text, mode)
+        )
+        if not result:
+            logger.warning(f"autoanalyze: post_id={post_id} анализ не удался ({reason})")
+            return
+        save_workout_analysis(
+            post_id=post_id,
+            workout_date=result.get("workout_date", ""),
+            workout_type=result.get("workout_type", ""),
+            is_valid=1 if result.get("is_valid") else 0,
+            raw_text=raw_text,
+            analyzed_json=_json.dumps(result, ensure_ascii=False),
+            analysis_mode=mode,
+            extra_groups_json=extra_json,
+            edit_date=edit_date,
+        )
+        logger.info(
+            f"autoanalyze: post_id={post_id} сохранён ({reason}) — "
+            f"type={result.get('workout_type')}, valid={result.get('is_valid')}, "
+            f"groups={len(result.get('groups') or [])}, extra={len(extra)}"
+        )
+    except Exception as e:
+        logger.error(f"autoanalyze error for post {workout.get('post_id')}: {e}")
+
+
 async def scheduled_new_workout_check(context: ContextTypes.DEFAULT_TYPE):
-    """Каждые 30 минут проверяет новые анонсы тренировок и доп. группы."""
+    """Каждые 30 минут проверяет новые анонсы тренировок и доп. группы.
+    Параллельно запускает фоновый автоанализ (Шаг 1) в workout_analysis.
+    """
 
     # ── Вт/Пт тренировка ──────────────────────────────────────
-    post_id = await get_latest_workout_post_id()
+    workout = await find_next_workout()
+    if workout and workout.get("post_id"):
+        # Автоанализ в фоне — новый анонс / новые доп. группы / редактирование
+        asyncio.create_task(_autoanalyze_post(workout))
+    post_id = workout.get("post_id") if workout else None
     if post_id:
         existing = get_workout_notification(post_id)
         if not existing:
-            workout = await find_next_workout()
             if workout and not workout.get("is_past"):
                 date_fmt, weekday = _fmt_workout_date(workout["workout_date"])
                 location = workout.get("location") or "—"
@@ -2996,11 +3073,13 @@ async def scheduled_new_workout_check(context: ContextTypes.DEFAULT_TYPE):
                 save_workout_notification(post_id, "interval", existing["workout_date"], all_notified, 0)
 
     # ── Воскресный Long Run ────────────────────────────────────
-    lr_post_id = await get_latest_long_run_post_id()
+    workout_lr = await find_next_long_run()
+    if workout_lr and workout_lr.get("post_id"):
+        asyncio.create_task(_autoanalyze_post(workout_lr))
+    lr_post_id = workout_lr.get("post_id") if workout_lr else None
     if lr_post_id:
         existing_lr = get_workout_notification(lr_post_id)
         if not existing_lr:
-            workout_lr = await find_next_long_run()
             if workout_lr and not workout_lr.get("is_past"):
                 date_fmt, weekday = _fmt_workout_date(workout_lr["workout_date"])
                 location = workout_lr.get("location") or "—"
