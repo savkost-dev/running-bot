@@ -1163,6 +1163,14 @@ def _format_analysis_result(result: dict, mode: str) -> str:
                 )
         if result.get("overall_purpose"):
             lines.append(f"🎯 Цель тренировки: {result['overall_purpose']}")
+        if result.get("block_contrast"):
+            lines.append(f"🔀 Контраст блоков: {result['block_contrast']}")
+        if result.get("target_athlete"):
+            lines.append(f"🏃 Для кого: {result['target_athlete']}")
+        if result.get("intensity_level"):
+            lines.append(f"🔥 Тяжесть: {result['intensity_level']}")
+        if result.get("what_to_watch"):
+            lines.append(f"👀 На что обратить внимание: {result['what_to_watch']}")
 
         lines.append(f"\nГруппы ({len(groups)}):")
         for g in groups:
