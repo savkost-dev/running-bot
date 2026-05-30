@@ -856,6 +856,102 @@ _W_FORM, _W_SPEC, _W_REC = 0.35, 0.40, 0.25
 # non-borderline (группы только «быстрее/медленнее»): спец обнулён, веса перенормированы
 _W_FORM_NB, _W_REC_NB = 0.58, 0.42
 
+# Зоны от быстрой к медленной + короткие имена
+_ZONE_ORDER = ["repetition", "interval", "threshold", "marathon", "easy"]
+_ZONE_NAME = {  # без буквенного индекса — для разметки положения
+    "repetition": "скоростная", "interval": "МПК", "threshold": "ПАНО",
+    "marathon": "темповая", "easy": "лёгкая",
+}
+_ZONE_NEAR = {  # форма «близко к …»
+    "repetition": "скоростной", "interval": "МПК", "threshold": "ПАНО",
+    "marathon": "темповой", "easy": "лёгкой",
+}
+
+# Что РЕАЛЬНО развивает тренировка данного характера (character→zone affinity 0..1).
+# speed — короткие быстрые отрезки; vo2 — средние интервалы; tempo — длинные/пороговые.
+_CHARACTER_ZONE = {
+    "speed": {"repetition": 1.00, "interval": 0.90, "threshold": 0.50, "marathon": 0.25, "easy": 0.10},
+    "vo2":   {"repetition": 0.70, "interval": 1.00, "threshold": 0.80, "marathon": 0.40, "easy": 0.15},
+    "tempo": {"repetition": 0.30, "interval": 0.60, "threshold": 1.00, "marathon": 0.90, "easy": 0.40},
+}
+
+
+def _workout_character(analysis: dict) -> str:
+    """Характер тренировки: 'speed' / 'vo2' / 'tempo' — по длине отрезков и purpose."""
+    dists = [b.get("work_distance_m") or 0
+             for b in (analysis.get("structure") or []) if b.get("type") == "repeat"]
+    dom = max(dists) if dists else 0
+    text = " ".join(
+        [str(analysis.get("overall_purpose") or "")]
+        + [str(b.get("purpose") or "") for b in (analysis.get("structure") or [])]
+    ).lower()
+    speed_kw = any(k in text for k in ("скорост", "спринт", "нейромыш", "максимал"))
+    tempo_kw = any(k in text for k in ("пано", "темпов", "порог", "марафон"))
+
+    if dom and dom <= 400:
+        char = "speed"
+    elif dom and dom <= 1000:
+        char = "vo2"
+    elif dom > 1000:
+        char = "tempo"
+    else:
+        char = "vo2"
+    # мягкая корректировка по ключевым словам
+    if char == "vo2" and tempo_kw and not speed_kw:
+        char = "tempo"
+    if char in ("vo2", "tempo") and speed_kw and not tempo_kw and dom and dom <= 500:
+        char = "speed"
+    return char
+
+
+def _spec_component(zone: str, spec: str, character: str) -> float:
+    """Ценность зоны = что тренировка СПОСОБНА дать (характер) × приоритет специализации.
+    Характер доминирует (зона, которую тренировка не тренирует, ценится низко даже под цель);
+    специализация лишь тилтит приоритет среди того, что тренировка даёт.
+    """
+    char_v = _CHARACTER_ZONE.get(character, _CHARACTER_ZONE["vo2"]).get(zone, 0.5)
+    base = _SPEC_ZONE_VALUE.get(spec, _SPEC_ZONE_VALUE["half_marathon"]).get(zone, 0.5)
+    return char_v * (0.6 + 0.4 * base)
+
+
+def _zone_position(pace_s: float, zone_key: str, zone_secs: dict) -> tuple[str, str | None]:
+    """Положение темпа внутри зоны: (верх/середина/низ зоны, 'близко к …' | None).
+    Границы зоны — середины до соседних зон пользователя. Верх = быстрый край.
+    """
+    order = sorted([z for z in zone_secs if zone_secs.get(z) is not None],
+                   key=lambda z: zone_secs[z])
+    if zone_key not in order:
+        return "", None
+    idx = order.index(zone_key)
+    center = zone_secs[zone_key]
+    faster = order[idx - 1] if idx > 0 else None          # меньше сек = быстрее
+    slower = order[idx + 1] if idx + 1 < len(order) else None
+    lower_edge = (center + zone_secs[faster]) / 2 if faster else center - 20
+    upper_edge = (center + zone_secs[slower]) / 2 if slower else center + 20
+    span = upper_edge - lower_edge
+    if span <= 0:
+        return "середина зоны", None
+    frac = max(0.0, min(1.0, (pace_s - lower_edge) / span))  # 0=быстрый край, 1=медленный
+    if frac < 0.33:
+        pos = "верх зоны"
+    elif frac > 0.66:
+        pos = "низ зоны"
+    else:
+        pos = "середина зоны"
+    near = None
+    if frac <= 0.18 and faster:
+        near = f"близко к {_ZONE_NEAR.get(faster, faster)}"
+    elif frac >= 0.82 and slower:
+        near = f"близко к {_ZONE_NEAR.get(slower, slower)}"
+    return pos, near
+
+
+def _zone_display(zone_key: str, pos: str, near: str | None) -> str:
+    """'темповая (верх зоны, близко к ПАНО)'."""
+    name = _ZONE_NAME.get(zone_key, zone_key)
+    inner = ", ".join(x for x in (pos, near) if x)
+    return f"{name} ({inner})" if inner else name
+
 
 def _pace_sec(pace: str) -> float | None:
     """'3:53' / '3.53' → 233 сек."""
@@ -926,14 +1022,14 @@ def _group_primary_pace(group: dict, struct_dist: dict) -> str | None:
     return best_block.get("work_pace")
 
 
-def _pct_score(form: float, rec_fit: float, zone: str, spec: str, borderline: bool) -> int:
+def _pct_score(form: float, rec_fit: float, zone: str, spec: str,
+               character: str, borderline: bool) -> int:
     """% подходимости группы.
-    borderline=True  — форма + специализация + восстановление.
+    borderline=True  — форма + спец-компонент(характер×специализация) + восстановление.
     borderline=False — спец обнулена, веса формы/восст. перенормированы (по чистой форме).
     """
     if borderline:
-        spec_value = _SPEC_ZONE_VALUE.get(spec, _SPEC_ZONE_VALUE["half_marathon"]).get(zone, 0.5)
-        raw = _W_FORM * form + _W_SPEC * spec_value + _W_REC * rec_fit
+        raw = _W_FORM * form + _W_SPEC * _spec_component(zone, spec, character) + _W_REC * rec_fit
     else:
         raw = _W_FORM_NB * form + _W_REC_NB * rec_fit
     return max(0, min(99, round(100 * raw)))
@@ -980,36 +1076,40 @@ def recommend_group(analysis_json: dict, user_data: dict) -> dict | None:
             struct_dist[b.get("block")] = b.get("work_distance_m") or 0
 
     is_borderline = bool(analysis.get("is_borderline"))
+    character = _workout_character(analysis)
 
     markup = []       # объективная разметка всех групп
     scored = []       # группы с % (без health)
     for g in analysis.get("groups") or []:
         number = g.get("number", "?")
         if g.get("health_group"):
-            markup.append({"number": number, "zone_label": "бег/ходьба", "work_pace": None, "pct": None})
+            markup.append({"number": number, "zone_disp": "бег/ходьба", "work_pace": None, "pct": None})
             continue
         primary = _group_primary_pace(g, struct_dist)
         psec = _pace_sec(primary)
         if psec is None:
-            markup.append({"number": number, "zone_label": "—", "work_pace": primary, "pct": None})
+            markup.append({"number": number, "zone_disp": "—", "work_pace": primary, "pct": None})
             continue
         zone = _classify_zone(psec, zone_secs)
+        pos, near = _zone_position(psec, zone, zone_secs)
+        zone_disp = _zone_display(zone, pos, near)
         intensity = _ZONE_INTENSITY.get(zone, 0.7)
         form = _form_score(psec, zone_secs)
         rec_fit = 1.0 - intensity * (1.0 - rec)
-        pct = _pct_score(form, rec_fit, zone, spec, is_borderline)
+        pct = _pct_score(form, rec_fit, zone, spec, character, is_borderline)
         entry = {
             "number": number, "zone_key": zone, "zone_label": _ZONE_LABELS.get(zone, zone),
+            "zone_disp": zone_disp, "zone_pos": pos, "zone_near": near,
             "work_pace": primary, "pct": pct, "from_comment": bool(g.get("from_comment")),
         }
-        markup.append({"number": number, "zone_label": entry["zone_label"], "work_pace": primary, "pct": pct})
+        markup.append({"number": number, "zone_disp": zone_disp, "work_pace": primary, "pct": pct})
         # лучшая альтернативная специализация — только для borderline (спец влияет на %)
         best_spec, best_pct = None, pct
         if is_borderline:
             for s in _SPEC_ZONE_VALUE:
                 if s == spec:
                     continue
-                p = _pct_score(form, rec_fit, zone, s, True)
+                p = _pct_score(form, rec_fit, zone, s, character, True)
                 if p > best_pct:
                     best_pct, best_spec = p, s
         entry["alt_spec"] = best_spec
@@ -1031,7 +1131,7 @@ def recommend_group(analysis_json: dict, user_data: dict) -> dict | None:
                 cond = f"но {e['alt_pct']}% если цель — {_SPEC_LABELS[e['alt_spec']]}"
             alternatives.append({
                 "number": e["number"], "pct": e["pct"], "zone_label": e["zone_label"],
-                "condition": cond,
+                "zone_disp": e["zone_disp"], "condition": cond,
             })
 
     spec_label = _SPEC_LABELS.get(spec, spec)
@@ -1040,17 +1140,17 @@ def recommend_group(analysis_json: dict, user_data: dict) -> dict | None:
     lines = []
     spec_suffix = " (по умолчанию)" if spec_is_default else ""
     lines.append(f"🎯 Специализация: {spec_label.capitalize()}{spec_suffix}")
-    lines.append(f"📊 Зоны (источник: {zones_source})\n")
+    lines.append(f"📊 Зоны (источник: {zones_source}) · характер: {character}\n")
 
     lines.append("Разметка групп под тебя:")
     for m in markup:
         if m["pct"] is None:
-            lines.append(f"  Группа {m['number']} — {m['zone_label']}")
+            lines.append(f"  Группа {m['number']} — {m['zone_disp']}")
         else:
-            lines.append(f"  Группа {m['number']} — {m['zone_label']}, темп {m['work_pace']} ({m['pct']}%)")
+            lines.append(f"  Группа {m['number']} — {m['zone_disp']}, темп {m['work_pace']} ({m['pct']}%)")
 
     if is_borderline:
-        lines.append(f"\n✅ Рекомендую: Группа {main['number']} — {main['zone_label']}, {main['pct']}%")
+        lines.append(f"\n✅ Рекомендую: Группа {main['number']} — {main['zone_disp']}, {main['pct']}%")
         if alternatives:
             lines.append("Альтернативы:")
             for a in alternatives:
@@ -1070,9 +1170,11 @@ def recommend_group(analysis_json: dict, user_data: dict) -> dict | None:
         "specialization_label": spec_label,
         "specialization_is_default": spec_is_default,
         "is_borderline": is_borderline,
+        "workout_character": character,
         "zones_source": zones_source,
         "groups": markup,
-        "main_group": {"number": main["number"], "pct": main["pct"], "zone_label": main["zone_label"]},
+        "main_group": {"number": main["number"], "pct": main["pct"],
+                       "zone_label": main["zone_label"], "zone_disp": main["zone_disp"]},
         "alternatives": alternatives,
         "text": "\n".join(lines),
     }
