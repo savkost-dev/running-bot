@@ -5,6 +5,16 @@
 
 ---
 
+## [0.14.4] 2026-05-30 — /analyze: выбор типа тренировки кнопками
+
+### Изменено
+- `/analyze` теперь спрашивает «Какую тренировку проанализировать?» с кнопками `⚡ Интервальная (вт/пт)` и `🕐 Long Run (вс)`
+- Интервальная → `find_next_workout(only_interval=True)`, Long Run → `find_next_long_run()`
+- `find_next_workout` и `find_next_long_run` теперь возвращают `post_id`, `raw_text`, `comments_text` (аддитивно, для двухшагового анализа)
+- Логика анализа вынесена в `_run_analyze_and_show()`
+
+---
+
 ## [0.14.3] 2026-05-30 — /analyze: чистый вывод для Long Run
 
 ### Исправлено

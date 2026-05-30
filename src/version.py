@@ -1,5 +1,6 @@
-VERSION = "0.14.3"
+VERSION = "0.14.4"
 BUILD_DATE = "2026-05-30"
 CHANGES = [
-    "fix: /analyze — скрывать строку восстановления у групп без него (Long Run)",
+    "feat: /analyze — выбор типа тренировки кнопками (Интервальная / Long Run)",
+    "feat: find_next_workout/find_next_long_run возвращают post_id, raw_text, comments_text",
 ]

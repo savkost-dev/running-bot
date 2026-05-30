@@ -121,6 +121,11 @@ async def find_next_workout(only_interval: bool = True) -> dict | None:
                         filtered_raws.append(filtered)
             parsed["extra_groups_raw"] = filtered_raws
 
+        # Полный текст поста и комментарии — для двухшагового анализа (/analyze)
+        parsed["post_id"] = post["id"]
+        parsed["raw_text"] = post["text"]
+        parsed["comments_text"] = "\n".join(c["text"] for c in comments if c.get("text"))
+
         try:
             workout_date = datetime.strptime(parsed["workout_date"], "%Y-%m-%d").date()
         except ValueError:
@@ -505,6 +510,12 @@ async def find_next_long_run() -> dict | None:
         parsed = _parse_long_run_post(post["text"], post["date"])
         if not parsed:
             continue
+
+        # Полный текст поста и комментарии — для двухшагового анализа (/analyze)
+        parsed["post_id"] = post["id"]
+        parsed["raw_text"] = post["text"]
+        _comments = await get_post_comments(post["id"])
+        parsed["comments_text"] = "\n".join(c["text"] for c in _comments if c.get("text"))
 
         try:
             workout_date = datetime.strptime(parsed["workout_date"], "%Y-%m-%d").date()

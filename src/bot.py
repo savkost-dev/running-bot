@@ -1173,40 +1173,52 @@ def _format_analysis_result(result: dict, mode: str) -> str:
 
 
 async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Анализирует последний пост тренировки через DeepSeek (только для админов)."""
+    """Выбор типа тренировки для анализа через DeepSeek (только для админов)."""
     if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
         await update.message.reply_text("Нет доступа.")
         return
+    await update.message.reply_text(
+        "Какую тренировку проанализировать?",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("⚡ Интервальная (вт/пт)", callback_data="analyze_interval"),
+            InlineKeyboardButton("🕐 Long Run (вс)",        callback_data="analyze_long"),
+        ]])
+    )
 
-    msg = await update.message.reply_text("🔬 Ищу последний пост тренировки в канале...")
-    post = await get_latest_workout_post_full()
-    if not post:
-        await msg.edit_text("😔 Не нашёл пост тренировки в канале.")
+
+async def _run_analyze_and_show(workout: dict, query, context: ContextTypes.DEFAULT_TYPE):
+    """Анализирует найденный пост тренировки и показывает результат админу."""
+    raw_text = workout.get("raw_text", "")
+    comments_text = workout.get("comments_text", "")
+    post_id = workout.get("post_id")
+
+    if not raw_text:
+        await query.edit_message_text("❌ Не удалось получить текст поста для анализа.")
         return
 
     mode = get_preprocess_mode()
-    await msg.edit_text(
+    await query.edit_message_text(
         f"⏳ Анализирую через DeepSeek (режим {mode})...\nМожет занять 1-2 минуты."
     )
 
     import functools
     result = await asyncio.get_event_loop().run_in_executor(
-        None, functools.partial(analyze_workout, post["text"], post["comments_text"], mode)
+        None, functools.partial(analyze_workout, raw_text, comments_text, mode)
     )
 
     if not result:
-        await msg.edit_text("❌ Анализ не удался (пустой ответ модели). Попробуй ещё раз.")
+        await query.edit_message_text("❌ Анализ не удался (пустой ответ модели). Попробуй ещё раз.")
         return
 
     # Сохраняем результат в БД
     try:
         import json as _json
         save_workout_analysis(
-            post_id=post["id"],
+            post_id=post_id,
             workout_date=result.get("workout_date", ""),
             workout_type=result.get("workout_type", ""),
             is_valid=1 if result.get("is_valid") else 0,
-            raw_text=post["text"],
+            raw_text=raw_text,
             analyzed_json=_json.dumps(result, ensure_ascii=False),
             analysis_mode=mode,
         )
@@ -1218,10 +1230,10 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for i in range(0, len(text), 4096):
         chunk = text[i:i + 4096]
         if first:
-            await msg.edit_text(chunk)
+            await query.edit_message_text(chunk)
             first = False
         else:
-            await update.message.reply_text(chunk)
+            await context.bot.send_message(query.from_user.id, chunk)
 
 
 def _build_preprocess_text(current: str) -> str:
@@ -1699,6 +1711,19 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _build_preprocess_text(new_mode),
             reply_markup=_build_preprocess_keyboard(new_mode),
         )
+
+    elif query.data in ("analyze_interval", "analyze_long"):
+        if user.id not in ADMIN_TELEGRAM_IDS:
+            return
+        is_long = query.data == "analyze_long"
+        await query.edit_message_text(
+            f"🔬 Ищу {'Long Run' if is_long else 'интервальную'} тренировку в канале..."
+        )
+        workout = await (find_next_long_run() if is_long else find_next_workout(only_interval=True))
+        if not workout:
+            await query.edit_message_text("😔 Не нашёл подходящую тренировку в канале.")
+            return
+        await _run_analyze_and_show(workout, query, context)
 
     # ── ОБРАТНАЯ СВЯЗЬ ────────────────────────────────────────
 
