@@ -5,6 +5,17 @@
 
 ---
 
+## [0.15.2] 2026-05-30 — Специализация в профиле пользователя
+
+### Добавлено
+- `user_profile.specialization TEXT DEFAULT 'half_marathon'` + миграция
+- `save_user_profile(specialization=...)` (None не перезаписывает), `get_user_profile()` возвращает `specialization`
+- 6 значений: 5k, 10k, half_marathon, marathon, speed, fitness (человекочитаемые названия в `SPECIALIZATIONS`)
+- `/profile`: кнопка «🎯 Специализация» с выбором из 6 вариантов, сохранение через `save_user_profile`
+- В выводе профиля строка «Специализация: …»; если не задана — «Полумарафон (по умолчанию)»
+
+---
+
 ## [0.15.1] 2026-05-30 — Свойства interval-тренировки в анализе
 
 ### Добавлено (только interval, верхний уровень — общие для всех, Шаг 1)

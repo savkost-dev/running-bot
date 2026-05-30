@@ -716,6 +716,16 @@ def _vo2max_tag(profile: dict) -> str:
     return "вручную" if updated else ""
 
 
+SPECIALIZATIONS = {
+    "5k": "5 км",
+    "10k": "10 км",
+    "half_marathon": "Полумарафон",
+    "marathon": "Марафон",
+    "speed": "Развитие скорости",
+    "fitness": "Общая форма",
+}
+
+
 def _build_profile_text(profile: dict | None) -> str:
     if not profile or not any([profile.get("vo2max"), profile.get("lactate_threshold_pace"), profile.get("gender")]):
         return "Профиль не заполнен. Используй кнопки ниже чтобы добавить данные."
@@ -733,6 +743,9 @@ def _build_profile_text(profile: dict | None) -> str:
         if lt_source:
             lt += f"  ({'Garmin' if lt_source == 'garmin' else 'вручную'})"
         lines.append(lt)
+    spec = profile.get("specialization")
+    spec_label = SPECIALIZATIONS.get(spec) if spec else None
+    lines.append(f"Специализация: {spec_label or 'Полумарафон (по умолчанию)'}")
     if profile.get("updated_at"):
         lines.append(f"\nОбновлено: {profile['updated_at'][:10]}")
     return '\n'.join(lines)
@@ -742,9 +755,19 @@ def _build_profile_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📊 Указать VO2max",   callback_data="profile_set_vo2max"),
          InlineKeyboardButton("🏃 Лактатный порог", callback_data="profile_set_lactate")],
-        [InlineKeyboardButton("👤 Пол", callback_data="profile_set_gender")],
+        [InlineKeyboardButton("👤 Пол", callback_data="profile_set_gender"),
+         InlineKeyboardButton("🎯 Специализация", callback_data="profile_set_specialization")],
         _settings_nav(),
     ])
+
+
+def _build_specialization_keyboard() -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(label, callback_data=f"spec_set_{key}")]
+        for key, label in SPECIALIZATIONS.items()
+    ]
+    rows.append([InlineKeyboardButton("← Назад", callback_data="my_profile")])
+    return InlineKeyboardMarkup(rows)
 
 
 async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1602,6 +1625,24 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         profile = get_user_profile(db_user_id)
         await query.edit_message_text(
             f"✅ Пол сохранён: {gender_label}\n\n{_build_profile_text(profile)}",
+            reply_markup=_build_profile_keyboard()
+        )
+
+    elif query.data == "profile_set_specialization":
+        await query.edit_message_text(
+            "Выбери специализацию (на что нацелены тренировки):",
+            reply_markup=_build_specialization_keyboard()
+        )
+
+    elif query.data.startswith("spec_set_"):
+        db_user_id = get_or_create_user(user.id, user.full_name, user.username)
+        spec = query.data[len("spec_set_"):]
+        if spec not in SPECIALIZATIONS:
+            return
+        save_user_profile(db_user_id, specialization=spec)
+        profile = get_user_profile(db_user_id)
+        await query.edit_message_text(
+            f"✅ Специализация сохранена: {SPECIALIZATIONS[spec]}\n\n{_build_profile_text(profile)}",
             reply_markup=_build_profile_keyboard()
         )
 
