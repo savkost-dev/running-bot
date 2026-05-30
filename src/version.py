@@ -1,6 +1,5 @@
-VERSION = "0.18.1"
+VERSION = "0.18.2"
 BUILD_DATE = "2026-05-30"
 CHANGES = [
-    "feat: /reanalyze (админ) — ручной форс переанализа свежих interval+long, обновление кэша workout_analysis",
-    "feat: игнорирует idempotency (edit_date), перечитывает комментарии/доп-группы, анализ в фоне",
+    "fix: get_all_users_with_status — опечатка таблицы user_profiles → user_profile (роняла рассылки с 0.12.0)",
 ]

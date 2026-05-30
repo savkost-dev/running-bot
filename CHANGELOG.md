@@ -5,6 +5,13 @@
 
 ---
 
+## [0.18.2] 2026-05-30 — Фикс: рассылки падали из-за опечатки имени таблицы
+
+### Исправлено
+- `get_all_users_with_status` (database.py:314): `LEFT JOIN user_profiles` → `user_profile`. Таблицы `user_profiles` (мн.ч.) не существует → `sqlite3.OperationalError: no such table: user_profiles` ронял `scheduled_evening` и `scheduled_morning` на первой строке. Баг жил с 0.12.0; команды /workout, /long, автоанализ не затронуты (не вызывают функцию)
+
+---
+
 ## [0.18.1] 2026-05-30 — /reanalyze: ручной форс переанализа (админ)
 
 ### Добавлено

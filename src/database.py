@@ -311,7 +311,7 @@ def get_all_users_with_status(notify_key: str = "") -> list:
                    ) THEN 1 ELSE 0 END AS has_data
             FROM users u
             LEFT JOIN user_preferences p ON u.id = p.user_id
-            LEFT JOIN user_profiles pr   ON u.id = pr.user_id
+            LEFT JOIN user_profile pr    ON u.id = pr.user_id
             WHERE (p.is_active IS NULL OR p.is_active = 1)
             {notify_filter}
         """).fetchall()
