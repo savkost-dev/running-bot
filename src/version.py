@@ -1,6 +1,6 @@
-VERSION = "0.14.4"
+VERSION = "0.14.5"
 BUILD_DATE = "2026-05-30"
 CHANGES = [
-    "feat: /analyze — выбор типа тренировки кнопками (Интервальная / Long Run)",
-    "feat: find_next_workout/find_next_long_run возвращают post_id, raw_text, comments_text",
+    "fix: analyze_workout — coach_notes без подготовки к забегам с датами (в ignored)",
+    "fix: analyze_workout — workout_date использует текущий год 2026 если год не указан",
 ]
