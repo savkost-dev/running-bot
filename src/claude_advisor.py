@@ -850,8 +850,11 @@ _SPEC_LABELS = {
     "marathon": "марафон", "speed": "развитие скорости", "fitness": "общая форма",
 }
 
-# Веса трёх компонентов % подходимости
+# ── ТЮНИНГ: веса компонентов % подходимости ───────────────────
+# borderline (выбор разных качеств между группами): форма + специализация + восст.
 _W_FORM, _W_SPEC, _W_REC = 0.35, 0.40, 0.25
+# non-borderline (группы только «быстрее/медленнее»): спец обнулён, веса перенормированы
+_W_FORM_NB, _W_REC_NB = 0.58, 0.42
 
 
 def _pace_sec(pace: str) -> float | None:
@@ -880,12 +883,20 @@ def _classify_zone(pace_s: float, zone_secs: dict) -> str | None:
     return best
 
 
-def _form_score(pace_s: float, rep_sec: float | None) -> float:
-    """Посильность: 1.0 если не быстрее повторной зоны, падает если быстрее."""
-    if rep_sec is None or pace_s >= rep_sec:
+def _form_score(pace_s: float, zone_secs: dict) -> float:
+    """Фит к рабочей зоне атлета (близость к целевой рабочей зоне).
+    1.0 если темп в диапазоне R..T (посильная интенсивная работа),
+    падает если быстрее R (непосильно) или медленнее T (для интервальной — слишком легко).
+    """
+    rep = zone_secs.get("repetition")
+    thr = zone_secs.get("threshold")
+    if rep is None or thr is None:
         return 1.0
-    deficit = rep_sec - pace_s  # насколько быстрее R (сек/км)
-    return max(0.0, 1.0 - deficit / 30.0)
+    if pace_s < rep:                       # быстрее повторной — слишком тяжело
+        return max(0.0, 1.0 - (rep - pace_s) / 30.0)
+    if pace_s <= thr:                      # в рабочем диапазоне R..T — идеально по силам
+        return 1.0
+    return max(0.0, 1.0 - (pace_s - thr) / 60.0)  # медленнее порога — ценность падает
 
 
 def _recovery_value(recovery: dict | None) -> float | None:
@@ -915,10 +926,16 @@ def _group_primary_pace(group: dict, struct_dist: dict) -> str | None:
     return best_block.get("work_pace")
 
 
-def _pct_for_spec(form: float, rec_fit: float, zone: str, spec: str) -> int:
-    """% подходимости группы для заданной специализации."""
-    spec_value = _SPEC_ZONE_VALUE.get(spec, _SPEC_ZONE_VALUE["half_marathon"]).get(zone, 0.5)
-    raw = _W_FORM * form + _W_SPEC * spec_value + _W_REC * rec_fit
+def _pct_score(form: float, rec_fit: float, zone: str, spec: str, borderline: bool) -> int:
+    """% подходимости группы.
+    borderline=True  — форма + специализация + восстановление.
+    borderline=False — спец обнулена, веса формы/восст. перенормированы (по чистой форме).
+    """
+    if borderline:
+        spec_value = _SPEC_ZONE_VALUE.get(spec, _SPEC_ZONE_VALUE["half_marathon"]).get(zone, 0.5)
+        raw = _W_FORM * form + _W_SPEC * spec_value + _W_REC * rec_fit
+    else:
+        raw = _W_FORM_NB * form + _W_REC_NB * rec_fit
     return max(0, min(99, round(100 * raw)))
 
 
@@ -951,7 +968,6 @@ def recommend_group(analysis_json: dict, user_data: dict) -> dict | None:
     zones_map = zinfo["zones"]
     zones_source = zinfo.get("source")
     zone_secs = {z: _pace_sec(p) for z, p in zones_map.items()}
-    rep_sec = zone_secs.get("repetition")
 
     # ── Восстановление (0..1; нейтральное 0.7 если нет данных) ─
     rec_raw = _recovery_value(user_data.get("recovery"))
@@ -979,22 +995,23 @@ def recommend_group(analysis_json: dict, user_data: dict) -> dict | None:
             continue
         zone = _classify_zone(psec, zone_secs)
         intensity = _ZONE_INTENSITY.get(zone, 0.7)
-        form = _form_score(psec, rep_sec)
+        form = _form_score(psec, zone_secs)
         rec_fit = 1.0 - intensity * (1.0 - rec)
-        pct = _pct_for_spec(form, rec_fit, zone, spec)
+        pct = _pct_score(form, rec_fit, zone, spec, is_borderline)
         entry = {
             "number": number, "zone_key": zone, "zone_label": _ZONE_LABELS.get(zone, zone),
             "work_pace": primary, "pct": pct, "from_comment": bool(g.get("from_comment")),
         }
         markup.append({"number": number, "zone_label": entry["zone_label"], "work_pace": primary, "pct": pct})
-        # лучшая альтернативная специализация для этой группы
+        # лучшая альтернативная специализация — только для borderline (спец влияет на %)
         best_spec, best_pct = None, pct
-        for s in _SPEC_ZONE_VALUE:
-            if s == spec:
-                continue
-            p = _pct_for_spec(form, rec_fit, zone, s)
-            if p > best_pct:
-                best_pct, best_spec = p, s
+        if is_borderline:
+            for s in _SPEC_ZONE_VALUE:
+                if s == spec:
+                    continue
+                p = _pct_score(form, rec_fit, zone, s, True)
+                if p > best_pct:
+                    best_pct, best_spec = p, s
         entry["alt_spec"] = best_spec
         entry["alt_pct"] = best_pct
         scored.append(entry)

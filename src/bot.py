@@ -2039,6 +2039,11 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     lactate_threshold_pace=lt["pace"],
                     lactate_threshold_hr=lt["hr"],
                     lactate_source="garmin")
+            if garmin_vo2max_found or garmin_lt_found:
+                try:
+                    zones.recalculate_and_save(db_user_id)
+                except Exception as e:
+                    logger.warning(f"Zones recalc error (garmin connect) for {user.id}: {e}")
 
             lines = ["✅ Garmin подключён!\n"]
 
@@ -2131,6 +2136,10 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             if coros_vo2max_found:
                 save_user_profile(db_user_id, vo2max=vo2max, vo2max_source="coros")
+                try:
+                    zones.recalculate_and_save(db_user_id)
+                except Exception as e:
+                    logger.warning(f"Zones recalc error (coros connect) for {user.id}: {e}")
 
             lines = ["✅ COROS подключён!\n"]
             lines.append("Загружено из COROS:")

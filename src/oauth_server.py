@@ -364,6 +364,11 @@ async def _notify_polar(telegram_id: int, db_user_id: int,
         polar_vo2max_found = not isinstance(vo2max, Exception) and vo2max is not None
         if polar_vo2max_found:
             save_user_profile(db_user_id, vo2max=vo2max, vo2max_source="polar")
+            try:
+                import zones as _zones
+                _zones.recalculate_and_save(db_user_id)
+            except Exception as _e:
+                print(f"Zones recalc error (polar connect): {_e}")
 
         lines = ["✅ Polar подключён!\n", "Загружено из Polar:"]
 
