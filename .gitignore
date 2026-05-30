@@ -9,3 +9,6 @@ uploads/
 venv/
 .garmin_token
 test_*.py
+temp/
+*.fit
+*.gpx
