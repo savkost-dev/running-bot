@@ -1,6 +1,5 @@
-VERSION = "0.14.8"
+VERSION = "0.14.9"
 BUILD_DATE = "2026-05-30"
 CHANGES = [
-    "fix: analyze_workout промпт — active_recovery по OR-логике (быстрее 5:30 ИЛИ <50% медленнее работы)",
-    "feat: правила про группу 5 (4-я дорожка) и единую структуру всех групп",
+    "fix: analyze_workout промпт — если у восстановления нет темпа/времени, active_recovery=false, recovery_pace=null (не фантазировать)",
 ]
