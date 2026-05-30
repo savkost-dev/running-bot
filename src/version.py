@@ -1,6 +1,6 @@
-VERSION = "0.14.5"
+VERSION = "0.14.7"
 BUILD_DATE = "2026-05-30"
 CHANGES = [
-    "fix: analyze_workout — coach_notes без подготовки к забегам с датами (в ignored)",
-    "fix: analyze_workout — workout_date использует текущий год 2026 если год не указан",
+    "fix: analyze_workout промпт — формат времени (точка=мин.сек), work vs recovery, группа здоровья, доп-группа со ссылкой",
+    "fix: active_recovery теперь относительно рабочего темпа (<40-50% медленнее), убран порог 5:30",
 ]
