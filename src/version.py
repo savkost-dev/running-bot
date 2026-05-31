@@ -1,7 +1,7 @@
-VERSION = "0.20.1"
+VERSION = "0.20.2"
 BUILD_DATE = "2026-05-31"
 CHANGES = [
-    "feat: двухцветная шкала подходимости — второй ряд 🟦 для групп со значимой альтернативой (alt_pct-pct>=12)",
-    "feat: _pct_bar(pct, width, color) — параметр цвета; легенда 🟩 цель / 🟦 другие качества",
-    "note: только interval borderline; вёрстка остального не тронута",
+    "fix: _build_specialization_keyboard — ✅ на текущем выборе",
+    "fix: lactate_source унифицирован: сервисы → 'auto', ручной → 'manual' (было 'garmin')",
+    "fix: _build_profile_text — отображает 'из сервиса' для auto, 'вручную' для manual",
 ]

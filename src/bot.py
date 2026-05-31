@@ -742,7 +742,7 @@ def _build_profile_text(profile: dict | None) -> str:
             lt += f" при ЧСС {profile['lactate_threshold_hr']} уд/мин"
         lt_source = profile.get("lactate_source")
         if lt_source:
-            lt += f"  ({'Garmin' if lt_source == 'garmin' else 'вручную'})"
+            lt += f"  ({'вручную' if lt_source == 'manual' else 'из сервиса'})"
         lines.append(lt)
     spec = profile.get("specialization")
     spec_label = SPECIALIZATIONS.get(spec) if spec else None
@@ -762,9 +762,11 @@ def _build_profile_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
-def _build_specialization_keyboard() -> InlineKeyboardMarkup:
+def _build_specialization_keyboard(current_spec: str | None = None) -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton(label, callback_data=f"spec_set_{key}")]
+        [InlineKeyboardButton(
+            f"{'✅ ' if key == current_spec else ''}{label}",
+            callback_data=f"spec_set_{key}")]
         for key, label in SPECIALIZATIONS.items()
     ]
     rows.append([InlineKeyboardButton("← Назад", callback_data="my_profile")])
@@ -1709,7 +1711,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         save_user_profile(db_user_id,
                             lactate_threshold_pace=lt["pace"],
                             lactate_threshold_hr=lt.get("hr"),
-                            lactate_source="garmin")
+                            lactate_source="auto")
                     garmin_parts.append(f"ЛП {lt['pace']}")
                 if not isinstance(readiness, Exception) and readiness and readiness.get("score") is not None:
                     garmin_parts.append(f"TR {readiness['score']}")
@@ -1802,9 +1804,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     elif query.data == "profile_set_specialization":
+        db_user_id = get_or_create_user(user.id, user.full_name, user.username)
+        current_spec = (get_user_profile(db_user_id) or {}).get("specialization")
         await query.edit_message_text(
             "Выбери специализацию (на что нацелены тренировки):",
-            reply_markup=_build_specialization_keyboard()
+            reply_markup=_build_specialization_keyboard(current_spec)
         )
 
     elif query.data.startswith("spec_set_"):
@@ -2205,7 +2209,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 save_user_profile(db_user_id,
                     lactate_threshold_pace=lt["pace"],
                     lactate_threshold_hr=lt["hr"],
-                    lactate_source="garmin")
+                    lactate_source="auto")
             if garmin_vo2max_found or garmin_lt_found:
                 try:
                     zones.recalculate_and_save(db_user_id)
@@ -3465,7 +3469,7 @@ async def scheduled_data_refresh(context: ContextTypes.DEFAULT_TYPE):
                         save_user_profile(db_user_id,
                                           lactate_threshold_pace=lt["pace"],
                                           lactate_threshold_hr=lt["hr"],
-                                          lactate_source="garmin")
+                                          lactate_source="auto")
             except Exception as e:
                 logger.error(f"Garmin VO2max refresh error for {telegram_id}: {e}")
 
