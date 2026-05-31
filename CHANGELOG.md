@@ -5,6 +5,16 @@
 
 ---
 
+## [0.19.2] 2026-05-31 — Фикс гонки за Telethon-сессию (database is locked)
+
+### Исправлено
+- Единый общий Telethon-клиент на процесс (`_get_shared_client`) вместо `async with get_client()` на каждый вызов. Несколько клиентов на один `session.session` давали `sqlite3.OperationalError: database is locked` при пересечении вызовов (ручная команда + 30-мин `scheduled_new_workout_check`, или две команды разом)
+- `get_recent_posts` / `get_post_comments` переведены на общий клиент; ленивое подключение + переподключение при обрыве (`is_connected()`), `_client_lock` защищает init
+- `connect_client()` — прогрев при старте бота; `close_client()` — аккуратное отключение при остановке (в `main()._run`)
+- `get_client()` оставлен только для standalone-скриптов (не для прод-пути)
+
+---
+
 ## [0.19.1] 2026-05-30 — Анонс: уведомление только админу, без шума пользователям
 
 ### Изменено

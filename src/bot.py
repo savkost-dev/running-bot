@@ -3525,6 +3525,13 @@ def main():
         await site.start()
         logger.info("OAuth server started on :8080")
 
+        # Единый Telethon-клиент на процесс (прогрев)
+        try:
+            import telegram_reader as _tr
+            await _tr.connect_client()
+        except Exception as e:
+            logger.warning(f"Telethon warmup failed: {e}")
+
         stop_event = asyncio.Event()
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGTERM, signal.SIGINT):
@@ -3547,6 +3554,12 @@ def main():
         finally:
             await runner.cleanup()
             logger.info("OAuth server stopped")
+            try:
+                import telegram_reader as _tr
+                await _tr.close_client()
+                logger.info("Telethon client closed")
+            except Exception:
+                pass
 
     asyncio.run(_run())
 

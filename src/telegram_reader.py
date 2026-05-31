@@ -1,5 +1,6 @@
 import os
 import re
+import asyncio
 from datetime import datetime, date
 from telethon import TelegramClient
 from dotenv import load_dotenv
@@ -41,7 +42,47 @@ _DATE_DD_MM_RE = re.compile(r'\b\d{1,2}\.\d{2}\b')
 
 
 def get_client() -> TelegramClient:
+    """Создаёт НОВЫЙ клиент (для standalone-скриптов). В проде не использовать —
+    несколько клиентов на один .session дают sqlite 'database is locked'."""
     return TelegramClient(SESSION_FILE, API_ID, API_HASH)
+
+
+# ── Единый общий Telethon-клиент на процесс ──────────────────
+# Несколько клиентов на один session-файл → гонка за sqlite ('database is locked').
+# Поэтому один клиент, переиспользуемый всеми вызовами; lock защищает init/reconnect.
+_shared_client: TelegramClient | None = None
+_client_lock = asyncio.Lock()
+
+
+async def _get_shared_client() -> TelegramClient:
+    """Возвращает единый подключённый клиент. Лениво создаёт и переподключает при обрыве."""
+    global _shared_client
+    async with _client_lock:
+        if _shared_client is None:
+            _shared_client = TelegramClient(SESSION_FILE, API_ID, API_HASH)
+        if not _shared_client.is_connected():
+            await _shared_client.connect()
+        return _shared_client
+
+
+async def connect_client() -> None:
+    """Прогрев при старте бота (необязательно — ленивое подключение тоже работает)."""
+    try:
+        await _get_shared_client()
+        print("Telethon: общий клиент подключён")
+    except Exception as e:
+        print(f"Telethon: не удалось подключить общий клиент при старте: {e}")
+
+
+async def close_client() -> None:
+    """Аккуратное отключение общего клиента при остановке бота."""
+    global _shared_client
+    if _shared_client is not None:
+        try:
+            await _shared_client.disconnect()
+        except Exception as e:
+            print(f"Telethon: ошибка при отключении: {e}")
+        _shared_client = None
 
 
 def is_admin(telegram_id: int) -> bool:
@@ -50,36 +91,36 @@ def is_admin(telegram_id: int) -> bool:
 
 async def get_recent_posts(limit: int = 50) -> list:
     posts = []
-    async with get_client() as client:
-        async for message in client.iter_messages(CHANNEL, limit=limit):
-            if message.text:
-                posts.append({
-                    "id": message.id,
-                    "date": message.date,
-                    "text": message.text,
-                    "edit_date": message.edit_date.isoformat() if message.edit_date else None,
-                })
+    client = await _get_shared_client()
+    async for message in client.iter_messages(CHANNEL, limit=limit):
+        if message.text:
+            posts.append({
+                "id": message.id,
+                "date": message.date,
+                "text": message.text,
+                "edit_date": message.edit_date.isoformat() if message.edit_date else None,
+            })
     return posts
 
 
 async def get_post_comments(post_id: int) -> list:
     """Получает комментарии к посту"""
     comments = []
-    async with get_client() as client:
-        try:
-            async for message in client.iter_messages(
-                CHANNEL,
-                reply_to=post_id,
-                limit=50
-            ):
-                if message.text:
-                    comments.append({
-                        "id": message.id,
-                        "date": message.date,
-                        "text": message.text,
-                    })
-        except Exception as e:
-            print(f"Ошибка чтения комментариев: {e}")
+    client = await _get_shared_client()
+    try:
+        async for message in client.iter_messages(
+            CHANNEL,
+            reply_to=post_id,
+            limit=50
+        ):
+            if message.text:
+                comments.append({
+                    "id": message.id,
+                    "date": message.date,
+                    "text": message.text,
+                })
+    except Exception as e:
+        print(f"Ошибка чтения комментариев: {e}")
     return comments
 
 
