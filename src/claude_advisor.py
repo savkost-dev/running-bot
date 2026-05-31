@@ -1761,6 +1761,127 @@ def _pct_bar(pct: int, width: int = 8) -> str:
 
 
 
+def _suit_comment(g: dict, main_num: str) -> str:
+    """Короткая словесная метка для шкалы подходимости (≤12 симв.)."""
+    if str(g.get("number")) == main_num:
+        return "оптимально"
+    tag = (g.get("tag") or "").lower()
+    if "риск" in tag:
+        return "риск схода"
+    if "тяжело" in tag or "перебор" in tag:
+        return "тяжело"
+    if "слишком легко" in tag:
+        return "оч.легко"
+    if "низкий" in tag:
+        return "легко"
+    pct = g.get("pct") or 0
+    return "хорошо" if pct >= 60 else "запасной"
+
+
+def _recovery_warning(analysis: dict, main_num: str, recovery: dict | None) -> str:
+    """Строка для блока ⚡ Активное восстановление: метрики + восстановление меж отрезками."""
+    rec_pace, active = None, None
+    for grp in (analysis.get("groups") or []):
+        if str(grp.get("number")) == str(main_num):
+            for b in (grp.get("blocks") or []):
+                if b.get("recovery_pace"):
+                    rec_pace, active = b.get("recovery_pace"), b.get("active_recovery")
+                    break
+            break
+    parts = []
+    if recovery:
+        m = []
+        rv = recovery.get("recovery_score")
+        if rv is not None:
+            m.append(f"Recovery {rv}")
+        tr = recovery.get("training_readiness")
+        if isinstance(tr, dict) and tr.get("score") is not None:
+            m.append(f"Readiness {tr['score']}")
+        elif isinstance(tr, (int, float)):
+            m.append(f"Readiness {tr}")
+        hrv = recovery.get("hrv")
+        if hrv is not None:
+            m.append(f"HRV {hrv}")
+        if m:
+            parts.append(", ".join(m) + " — восстановление учтено")
+    if rec_pace:
+        kind = "активное (трусцой)" if active else "полный отдых"
+        parts.append(f"восстановление между отрезками ~{rec_pace}/км — {kind}")
+    return ". ".join(parts)
+
+
+def recommendation_to_advice(rec: dict, analysis: dict, recovery: dict | None) -> dict:
+    """Преобразует выход recommend_group + кэш-анализ + восстановление в advice-dict
+    для format_evening_message — старая вёрстка v0.18.2 на новом (двухшаговом) движке."""
+    groups = rec.get("groups") or []
+    main = rec.get("main_group") or {}
+    main_num = str(main.get("number", "—"))
+
+    suitability, main_pace = [], ""
+    for g in groups:
+        if g.get("pct") is not None:
+            suitability.append({"group": g.get("number"), "percentage": g.get("pct"),
+                                 "comment": _suit_comment(g, main_num)})
+        if str(g.get("number")) == main_num:
+            main_pace = g.get("work_pace") or ""
+
+    # Соседи по темпу для «оцени на разминке»
+    paced = [(g, _pace_sec(g.get("work_pace"))) for g in groups if _pace_sec(g.get("work_pace"))]
+    paced.sort(key=lambda x: x[1])
+    nums = [str(g.get("number")) for g, _ in paced]
+    if_good = if_tired = gap_note = ""
+    if main_num in nums:
+        i = nums.index(main_num)
+        if i > 0:
+            f = paced[i - 1][0]
+            if_good = f"перейди в Группу {f.get('number')} ({f.get('work_pace')})"
+        if i + 1 < len(paced):
+            s = paced[i + 1][0]
+            if_tired = f"снизься в Группу {s.get('number')} ({s.get('work_pace')})"
+        gaps = []
+        if i > 0:
+            gaps.append(abs(paced[i][1] - paced[i - 1][1]))
+        if i + 1 < len(paced):
+            gaps.append(abs(paced[i + 1][1] - paced[i][1]))
+        if gaps:
+            gap_note = f"разрыв между соседними группами ~{int(sum(gaps) / len(gaps))} сек/км"
+
+    # Обоснование
+    zone_disp = main.get("zone_disp") or main.get("zone_label") or ""
+    char_phrase = {
+        "speed": "тренировка скоростная (короткие отрезки) — развивает скорость и МПК",
+        "vo2": "интервалы на уровне МПК",
+        "tempo": "длинные/пороговые отрезки — развивают ПАНО и темповую выносливость",
+    }.get(rec.get("workout_character"), "")
+    rp = [p for p in (
+        f"{zone_disp} по твоим зонам" if zone_disp else "",
+        char_phrase,
+        f"оптимум по объёму качественной работы ({main.get('pct')}%)" if main.get("pct") is not None else "",
+    ) if p]
+    reason = (". ".join(rp) + ".") if rp else (analysis.get("overall_purpose") or "")
+
+    # Подготовка из прозы Шага 1
+    tips = []
+    cn = (analysis.get("coach_notes") or "").strip()
+    if cn:
+        tips.append(cn if len(cn) <= 230 else cn[:227] + "…")
+    wtw = (analysis.get("what_to_watch") or "").strip()
+    if wtw:
+        tips.append(f"Внимание: {wtw if len(wtw) <= 200 else wtw[:197] + '…'}")
+
+    return {
+        "recommended_group": main_num,
+        "recommended_pace": main_pace,
+        "reason": reason,
+        "suitability_percentages": suitability,
+        "if_feeling_good": if_good,
+        "if_tired": if_tired,
+        "gap_note": gap_note,
+        "preparation_tips": tips,
+        "warning": _recovery_warning(analysis, main_num, recovery),
+    }
+
+
 def format_evening_message(advice: dict, workout: dict, stats: dict | None = None, weather_line: str = "", profile_only: bool = False, has_tracker: bool = True) -> str:
     if not advice:
         return "Не удалось получить рекомендацию. Попробуй позже."

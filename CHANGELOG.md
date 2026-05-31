@@ -5,6 +5,17 @@
 
 ---
 
+## [0.19.3] 2026-05-31 — /workout: прежняя вёрстка v0.18.2 на новом движке
+
+### Добавлено
+- `claude_advisor.recommendation_to_advice(rec, analysis, recovery)` — маппит выход `recommend_group` + кэш-анализ (structure/coach_notes/what_to_watch/overall_purpose) + восстановление в `advice`-dict
+- `/workout` (interval, has_data) снова рендерится через прежний `format_evening_message` → вёрстка 1:1 с v0.18.2: шапка (статус/локация/погода), 📊 шкала подходимости (блоки+%+метка), 🎯 группа+темп+обоснование, ⚡ активное восстановление (Recovery/HRV/темп меж отрезками), «оцени на разминке» (легко→выше / тяжело→ниже + разрыв темпа), подготовка (coach_notes/what_to_watch), футер (режим/токены анализа/версия)
+- Источник данных полностью двухшаговый: кэш `workout_analysis` + `recommend_group` + `get_pace_zones`; DeepSeek-advice на лету больше не используется
+- Шапка берётся из `find_next` (для current/past совпадает с кэшем); погода — `get_weather_for_workout`
+- `long` пока на облегчённом тексте `recommend_long` (вне рамок задачи)
+
+---
+
 ## [0.19.2] 2026-05-31 — Фикс гонки за Telethon-сессию (database is locked)
 
 ### Исправлено

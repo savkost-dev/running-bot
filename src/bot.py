@@ -2430,22 +2430,23 @@ async def _send_recommendation(
 
     row, status = get_latest_workout_analysis(wtype, cur_post, cur_date, cur_edit)
 
-    async def _out(text, markup=None):
+    async def _out(text, markup=None, parse_mode=None):
         if msg:
-            await msg.edit_text(text, reply_markup=markup)
+            await msg.edit_text(text, reply_markup=markup, parse_mode=parse_mode)
         else:
-            await context.bot.send_message(telegram_id, text, reply_markup=markup)
+            await context.bot.send_message(telegram_id, text, reply_markup=markup, parse_mode=parse_mode)
 
     if status == "empty" or row is None:
         what = "ближайшего Long Run" if long else "ближайшей тренировки"
         await _out(f"😔 Не нашёл анонс {what} в канале. Попробуй позже.")
         return
 
+    # Плашку past НЕ дублируем для interval — её рисует сам форматтер (is_past).
     banner = ""
     if status == "analyzing":
         banner = ("🔄 Новый анонс появился, сейчас в проработке — обновится через пару минут.\n"
                   "Пока показываю предыдущую тренировку.\n\n")
-    elif status == "past":
+    elif status == "past" and long:
         banner = ("📅 Будущих тренировок пока нет. Показываю последнюю прошедшую "
                   "(для ознакомления, не на сегодня).\n\n")
 
@@ -2485,7 +2486,30 @@ async def _send_recommendation(
         InlineKeyboardButton("⭐ Оценить рекомендацию", callback_data="rate_show"),
     ]])
     final_markup = _merge_keyboards(rating_markup, get_main_keyboard(from_recommendation=True))
-    await _out(banner + rec["text"], final_markup)
+
+    if long:
+        # Long — облегчённый текстовый вывод recommend_long
+        await _out(banner + rec["text"], final_markup)
+        return
+
+    # Interval — ПРЕЖНЯЯ богатая вёрстка (format_evening_message) на новом движке
+    advice = claude_advisor.recommendation_to_advice(rec, analysis, user_data["recovery"])
+    workout_dict = dict(live) if live else {
+        "workout_date": analysis.get("workout_date", ""), "workout_type": "interval",
+    }
+    workout_dict["workout_type"] = "interval"
+    workout_dict["is_past"] = (status == "past")
+    weather = await get_weather_for_workout(
+        workout_dict.get("location", ""), workout_dict.get("workout_date", ""),
+        workout_dict.get("schedule", ""),
+    )
+    weather_line = format_weather_for_message(weather) if weather else ""
+    has_tracker = any(get_token(db_user_id, s) for s in ("garmin", "coros", "polar", "strava"))
+    body = claude_advisor.format_evening_message(
+        advice, workout_dict, stats=analysis.get("_stats"),
+        weather_line=weather_line, has_tracker=has_tracker,
+    )
+    await _out(banner + body, final_markup, parse_mode="HTML")
 
 
 async def _send_workout_recommendation(
