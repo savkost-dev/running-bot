@@ -1355,6 +1355,22 @@ def recommend_long(analysis_json: dict, user_data: dict) -> dict | None:
     step_up = with_pace[base_idx - 1] if base_idx > 0 else None          # быстрее
     step_down = with_pace[base_idx + 1] if base_idx + 1 < len(with_pace) else None  # медленнее
 
+    # Шкала подходимости (детерминированная): база = оптимум, дальше — по дистанции от неё.
+    # Для длительной «слишком быстро» хуже «слишком медленно».
+    groups_markup = []
+    for j, p in enumerate(with_pace):
+        d = j - base_idx
+        if d == 0:
+            pct, comment = 92, "идеально"
+        elif d < 0:
+            pct, comment = max(5, 92 - 22 * abs(d)), ("быстровато" if d == -1 else "слишком быстро")
+        else:
+            pct, comment = max(5, 92 - 14 * d), ("спокойнее" if d == 1 else "слишком медленно")
+        groups_markup.append({"number": p["number"], "pace": p["pace"], "pct": pct, "comment": comment})
+    if health:
+        groups_markup.append({"number": health.get("number", "здоровье"), "pace": None,
+                              "pct": None, "comment": "бег/ходьба"})
+
     def _zlabel(psec):
         return _ZONE_LABELS.get(_classify_zone(psec, zone_secs), "")
 
@@ -1393,6 +1409,8 @@ def recommend_long(analysis_json: dict, user_data: dict) -> dict | None:
         "workout_type": "long",
         "profile_empty": False,
         "zones_source": zones_source,
+        "has_progression": has_progression,
+        "groups": groups_markup,
         "main_group": {"number": base["number"], "pace": base["pace"],
                        "zone_label": _zlabel(base["pace_sec"])},
         "alternatives": alternatives,
@@ -1879,6 +1897,116 @@ def recommendation_to_advice(rec: dict, analysis: dict, recovery: dict | None) -
         "gap_note": gap_note,
         "preparation_tips": tips,
         "warning": _recovery_warning(analysis, main_num, recovery),
+    }
+
+
+def _sec_to_pace(sec: float) -> str:
+    sec = int(round(sec))
+    return f"{sec // 60}:{sec % 60:02d}"
+
+
+def _recovery_descriptor(recovery: dict | None) -> str:
+    """Словесное описание восстановления (Whoop/Garmin Readiness/HRV/сон) для long-обоснования."""
+    if not recovery:
+        return ""
+    parts = []
+    rv = recovery.get("recovery_score")
+    if rv is not None:
+        parts.append(f"Recovery {rv}")
+    tr = recovery.get("training_readiness")
+    if isinstance(tr, dict) and tr.get("score") is not None:
+        parts.append(f"Readiness {tr['score']}")
+    elif isinstance(tr, (int, float)):
+        parts.append(f"Readiness {tr}")
+    hrv = recovery.get("hrv")
+    if hrv is not None:
+        parts.append(f"HRV {hrv}")
+    sleep = recovery.get("sleep_hours") or recovery.get("sleep")
+    if sleep is not None:
+        parts.append(f"сон {sleep}")
+    return ", ".join(parts)
+
+
+def recommendation_to_long_advice(rec: dict, analysis: dict, recovery: dict | None) -> dict:
+    """Выход recommend_long + кэш-анализ + восстановление → advice-dict для
+    format_long_run_message (старая вёрстка /long v0.18.2). Стратегия (ровный/прогрессия)
+    выводится ИЗ данных восстановления."""
+    import re as _re
+    main = rec.get("main_group") or {}
+    main_num = str(main.get("number", "—"))
+    first_pace = main.get("pace") or "—"
+
+    suitability = [{"group": g["number"], "percentage": g["pct"], "comment": g.get("comment", "")}
+                   for g in (rec.get("groups") or []) if g.get("pct") is not None]
+
+    # Второй темп: из текста группы анализа (вторая половина), иначе первый − 30 сек/км
+    second_pace = None
+    for grp in (analysis.get("groups") or []):
+        if str(grp.get("number")) == main_num:
+            paces = _re.findall(r'\d{1,2}:\d{2}', str(grp.get("work") or ""))
+            if len(paces) >= 2:
+                second_pace = paces[1]
+            break
+    fp_sec = _pace_sec(first_pace)
+    if second_pace is None and fp_sec:
+        second_pace = _sec_to_pace(fp_sec - 30)
+
+    # Стратегия из восстановления
+    rv = _recovery_value(recovery)
+    has_prog = bool(rec.get("has_progression") or analysis.get("has_progression"))
+    desc = _recovery_descriptor(recovery)
+    warning = ""
+    if has_prog and rv is not None and rv >= 67:
+        strategy = "progressive"
+        strategy_reason = (
+            f"{desc} — восстановление хорошее. Первую половину держи ровно, вторую можно "
+            f"ускорить до ~{second_pace}/км." if desc else
+            f"Восстановление хорошее — можно прогрессия со второй половины (до ~{second_pace}/км).")
+    elif rv is not None and rv < 50:
+        strategy, second_pace = "even", None
+        strategy_reason = (
+            f"{desc} — восстановление неполное. Держи ровный темп всю тренировку, не разгоняйся: "
+            "цель сегодня — аэробный объём, а не нагрузка.")
+        warning = "Восстановление неполное — при плохом самочувствии сократи дистанцию или сделай лёгкий кросс."
+    else:
+        strategy, second_pace = "even", None
+        strategy_reason = (
+            f"{desc or 'Нет свежих данных о восстановлении'} — рекомендую ровный темп. "
+            "Прогрессия (вторую половину быстрее) — по желанию и самочувствию.")
+
+    # Соседи для «оцени на разминке»
+    if_good = if_tired = ""
+    for a in (rec.get("alternatives") or []):
+        if a.get("role") == "step_up" and not if_good:
+            if_good = f"перейди в Группу {a.get('number')} (~{a.get('pace')}/км)"
+        elif a.get("role") == "step_down" and not if_tired:
+            if_tired = f"снизься в Группу {a.get('number')} (~{a.get('pace')}/км)"
+    if not if_tired:
+        for a in (rec.get("alternatives") or []):
+            if a.get("role") == "health":
+                if_tired = f"Группа {a.get('number')} (бег/ходьба)"
+                break
+
+    # Подготовка (long-специфика: разминка, вода, питание, одежда)
+    tips = []
+    cn = (analysis.get("coach_notes") or "").strip()
+    if cn:
+        tips.append(cn if len(cn) <= 230 else cn[:227] + "…")
+    tips.append("💧 Вода: 100 минут бега — спланируй питьё (возьми воду / маршрут с источниками)")
+    tips.append("🍌 Питание: за 1–1.5 ч лёгкий углеводный перекус; на длинной можно гель/изотоник")
+    tips.append("👕 Одежда по погоде — на длительной учитывай ветер и похолодание к концу")
+
+    return {
+        "recommended_group": main_num,
+        "suitability_percentages": suitability,
+        "run_strategy": strategy,
+        "first_half_pace": first_pace,
+        "second_half_pace": second_pace,
+        "strategy_reason": strategy_reason,
+        "if_feeling_good": if_good,
+        "if_tired": if_tired,
+        "preparation_tips": tips,
+        "warning": warning,
     }
 
 

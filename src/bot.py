@@ -2487,28 +2487,30 @@ async def _send_recommendation(
     ]])
     final_markup = _merge_keyboards(rating_markup, get_main_keyboard(from_recommendation=True))
 
-    if long:
-        # Long — облегчённый текстовый вывод recommend_long
-        await _out(banner + rec["text"], final_markup)
-        return
-
-    # Interval — ПРЕЖНЯЯ богатая вёрстка (format_evening_message) на новом движке
-    advice = claude_advisor.recommendation_to_advice(rec, analysis, user_data["recovery"])
-    workout_dict = dict(live) if live else {
-        "workout_date": analysis.get("workout_date", ""), "workout_type": "interval",
-    }
-    workout_dict["workout_type"] = "interval"
+    # Шапка/погода из live (для current/past совпадает с кэшем)
+    workout_dict = dict(live) if live else {"workout_date": analysis.get("workout_date", "")}
+    workout_dict["workout_type"] = "long" if long else "interval"
     workout_dict["is_past"] = (status == "past")
+    workout_dict["even_pace_available"] = analysis.get("even_pace_available")
     weather = await get_weather_for_workout(
         workout_dict.get("location", ""), workout_dict.get("workout_date", ""),
         workout_dict.get("schedule", ""),
     )
     weather_line = format_weather_for_message(weather) if weather else ""
     has_tracker = any(get_token(db_user_id, s) for s in ("garmin", "coros", "polar", "strava"))
-    body = claude_advisor.format_evening_message(
-        advice, workout_dict, stats=analysis.get("_stats"),
-        weather_line=weather_line, has_tracker=has_tracker,
-    )
+    stats = analysis.get("_stats")
+
+    if long:
+        # Long — ПРЕЖНЯЯ богатая вёрстка (format_long_run_message) на новом движке
+        advice = claude_advisor.recommendation_to_long_advice(rec, analysis, user_data["recovery"])
+        body = claude_advisor.format_long_run_message(
+            advice, workout_dict, stats=stats, weather_line=weather_line, has_tracker=has_tracker)
+    else:
+        # Interval — ПРЕЖНЯЯ богатая вёрстка (format_evening_message)
+        advice = claude_advisor.recommendation_to_advice(rec, analysis, user_data["recovery"])
+        body = claude_advisor.format_evening_message(
+            advice, workout_dict, stats=stats, weather_line=weather_line, has_tracker=has_tracker)
+
     await _out(banner + body, final_markup, parse_mode="HTML")
 
 
