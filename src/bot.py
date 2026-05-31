@@ -735,14 +735,18 @@ def _build_profile_text(profile: dict | None) -> str:
         lines.append(f"Пол: {'Мужской' if profile['gender'] == 'male' else 'Женский'}")
     if profile.get("vo2max"):
         tag = _vo2max_tag(profile)
-        lines.append(f"VO2max: {profile['vo2max']} мл/кг/мин{f'  ({tag})' if tag else ''}")
+        lock_icon = " 🔒" if profile.get("vo2max_locked") else ""
+        lines.append(f"VO2max: {profile['vo2max']} мл/кг/мин{f'  ({tag})' if tag else ''}{lock_icon}")
     if profile.get("lactate_threshold_pace"):
         lt = f"Лактатный порог: {profile['lactate_threshold_pace']} мин/км"
         if profile.get("lactate_threshold_hr"):
             lt += f" при ЧСС {profile['lactate_threshold_hr']} уд/мин"
         lt_source = profile.get("lactate_source")
+        lt_lock = " 🔒" if profile.get("lactate_locked") else ""
         if lt_source:
-            lt += f"  ({'вручную' if lt_source == 'manual' else 'из сервиса'})"
+            lt += f"  ({'вручную' if lt_source == 'manual' else 'из сервиса'}){lt_lock}"
+        elif lt_lock:
+            lt += f"  {lt_lock.strip()}"
         lines.append(lt)
     spec = profile.get("specialization")
     spec_label = SPECIALIZATIONS.get(spec) if spec else None
@@ -752,14 +756,25 @@ def _build_profile_text(profile: dict | None) -> str:
     return '\n'.join(lines)
 
 
-def _build_profile_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
+def _build_profile_keyboard(profile: dict | None = None) -> InlineKeyboardMarkup:
+    p = profile or {}
+    rows = [
         [InlineKeyboardButton("📊 Указать VO2max",   callback_data="profile_set_vo2max"),
          InlineKeyboardButton("🏃 Лактатный порог", callback_data="profile_set_lactate")],
         [InlineKeyboardButton("👤 Пол", callback_data="profile_set_gender"),
          InlineKeyboardButton("🎯 Специализация", callback_data="profile_set_specialization")],
-        _settings_nav(),
-    ])
+    ]
+    lock_row = []
+    if p.get("vo2max") is not None:
+        lbl = "🔒 VO2max заблокирован" if p.get("vo2max_locked") else "🔓 VO2max (обновлять)"
+        lock_row.append(InlineKeyboardButton(lbl, callback_data="profile_toggle_vo2max_lock"))
+    if p.get("lactate_threshold_pace"):
+        lbl = "🔒 ЛП заблокирован" if p.get("lactate_locked") else "🔓 ЛП (обновлять)"
+        lock_row.append(InlineKeyboardButton(lbl, callback_data="profile_toggle_lactate_lock"))
+    if lock_row:
+        rows.append(lock_row)
+    rows.append(_settings_nav())
+    return InlineKeyboardMarkup(rows)
 
 
 def _build_specialization_keyboard(current_spec: str | None = None) -> InlineKeyboardMarkup:
@@ -779,7 +794,7 @@ async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     profile = get_user_profile(db_user_id)
     await update.message.reply_text(
         _build_profile_text(profile),
-        reply_markup=_build_profile_keyboard()
+        reply_markup=_build_profile_keyboard(profile)
     )
 
 
@@ -1703,11 +1718,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 profile = get_user_profile(db_user_id)
                 garmin_parts = []
                 if not isinstance(vo2max_val, Exception) and vo2max_val is not None:
-                    if (profile or {}).get("vo2max_source") != "manual":
-                        save_user_profile(db_user_id, vo2max=float(vo2max_val), vo2max_source="garmin")
+                    if not (profile or {}).get("vo2max_locked"):
+                        save_user_profile(db_user_id, vo2max=float(vo2max_val), vo2max_source="auto")
                     garmin_parts.append(f"VO2max {float(vo2max_val):.0f}")
                 if not isinstance(lt, Exception) and lt:
-                    if (profile or {}).get("lactate_source") != "manual":
+                    if not (profile or {}).get("lactate_locked"):
                         save_user_profile(db_user_id,
                             lactate_threshold_pace=lt["pace"],
                             lactate_threshold_hr=lt.get("hr"),
@@ -1733,8 +1748,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 coros_vo2max = (coros_data or {}).get("fitness", {}).get("vo2max")
                 if coros_vo2max is not None:
                     profile = get_user_profile(db_user_id)
-                    if (profile or {}).get("vo2max_source") != "manual":
-                        save_user_profile(db_user_id, vo2max=float(coros_vo2max), vo2max_source="coros")
+                    if not (profile or {}).get("vo2max_locked"):
+                        save_user_profile(db_user_id, vo2max=float(coros_vo2max), vo2max_source="auto")
                     coros_parts.append(f"VO2max {float(coros_vo2max):.0f}")
                 result_lines.append(f"🔴 COROS: {', '.join(coros_parts)}" if coros_parts else "🔴 COROS: обновлено")
             except Exception as e:
@@ -1750,8 +1765,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 polar_parts = []
                 if polar_vo2max is not None:
                     profile = get_user_profile(db_user_id)
-                    if (profile or {}).get("vo2max_source") != "manual":
-                        save_user_profile(db_user_id, vo2max=float(polar_vo2max), vo2max_source="polar")
+                    if not (profile or {}).get("vo2max_locked"):
+                        save_user_profile(db_user_id, vo2max=float(polar_vo2max), vo2max_source="auto")
                     polar_parts.append(f"VO2max {float(polar_vo2max):.0f}")
                 result_lines.append(f"❄️ Polar: {', '.join(polar_parts)}" if polar_parts else "❄️ Polar: обновлено")
             except Exception as e:
@@ -1768,7 +1783,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         profile = get_user_profile(db_user_id)
         await query.edit_message_text(
             _build_profile_text(profile),
-            reply_markup=_build_profile_keyboard()
+            reply_markup=_build_profile_keyboard(profile)
         )
 
     elif query.data == "profile_set_vo2max":
@@ -1800,7 +1815,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         profile = get_user_profile(db_user_id)
         await query.edit_message_text(
             f"✅ Пол сохранён: {gender_label}\n\n{_build_profile_text(profile)}",
-            reply_markup=_build_profile_keyboard()
+            reply_markup=_build_profile_keyboard(profile)
         )
 
     elif query.data == "profile_set_specialization":
@@ -1820,7 +1835,24 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         profile = get_user_profile(db_user_id)
         await query.edit_message_text(
             f"✅ Специализация сохранена: {SPECIALIZATIONS[spec]}\n\n{_build_profile_text(profile)}",
-            reply_markup=_build_profile_keyboard()
+            reply_markup=_build_profile_keyboard(profile)
+        )
+
+    elif query.data in ("profile_toggle_vo2max_lock", "profile_toggle_lactate_lock"):
+        db_user_id = get_or_create_user(user.id, user.full_name, user.username)
+        profile = get_user_profile(db_user_id)
+        if query.data == "profile_toggle_vo2max_lock":
+            new_val = 0 if (profile or {}).get("vo2max_locked") else 1
+            save_user_profile(db_user_id, vo2max_locked=new_val)
+            note = "🔒 VO2max защищён — сервисы не перепишут." if new_val else "🔓 VO2max будет обновляться из сервисов."
+        else:
+            new_val = 0 if (profile or {}).get("lactate_locked") else 1
+            save_user_profile(db_user_id, lactate_locked=new_val)
+            note = "🔒 Лактатный порог защищён — сервисы не перепишут." if new_val else "🔓 Лактатный порог будет обновляться из сервисов."
+        profile = get_user_profile(db_user_id)
+        await query.edit_message_text(
+            f"{note}\n\n{_build_profile_text(profile)}",
+            reply_markup=_build_profile_keyboard(profile)
         )
 
     elif query.data == "ai_mode":
@@ -2124,7 +2156,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         profile = get_user_profile(db_user_id)
         await update.message.reply_text(
             f"✅ VO2max сохранён: {vo2max} мл/кг/мин\n\n{_build_profile_text(profile)}",
-            reply_markup=_build_profile_keyboard()
+            reply_markup=_build_profile_keyboard(profile)
         )
 
     elif context.user_data.get("awaiting_profile") == "set_lactate_pace":
@@ -2159,7 +2191,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         profile = get_user_profile(db_user_id)
         await update.message.reply_text(
             f"✅ Лактатный порог сохранён: {pace} мин/км при ЧСС {hr} уд/мин\n\n{_build_profile_text(profile)}",
-            reply_markup=_build_profile_keyboard()
+            reply_markup=_build_profile_keyboard(profile)
         )
 
     # Email для Garmin
@@ -3396,16 +3428,17 @@ async def scheduled_cache_refresh(context: ContextTypes.DEFAULT_TYPE):
         new_vo2max, tracker_key, tracker_name = await _get_vo2max_from_tracker(db_user_id)
         if new_vo2max is not None:
             profile = get_user_profile(db_user_id)
-            old_vo2max = (profile or {}).get("vo2max")
-            if old_vo2max is None:
-                save_user_profile(db_user_id, vo2max=new_vo2max, vo2max_source=tracker_key)
-            elif abs(new_vo2max - float(old_vo2max)) >= 2:
-                save_user_profile(db_user_id, vo2max=new_vo2max, vo2max_source=tracker_key)
-                counts["vo2max"] += 1
-                logger.info(
-                    f"VO2max обновлён для {telegram_id}: "
-                    f"{float(old_vo2max):.0f} → {new_vo2max:.0f} ({tracker_name})"
-                )
+            if not (profile or {}).get("vo2max_locked"):
+                old_vo2max = (profile or {}).get("vo2max")
+                if old_vo2max is None:
+                    save_user_profile(db_user_id, vo2max=new_vo2max, vo2max_source="auto")
+                elif abs(new_vo2max - float(old_vo2max)) >= 2:
+                    save_user_profile(db_user_id, vo2max=new_vo2max, vo2max_source="auto")
+                    counts["vo2max"] += 1
+                    logger.info(
+                        f"VO2max обновлён для {telegram_id}: "
+                        f"{float(old_vo2max):.0f} → {new_vo2max:.0f} ({tracker_name})"
+                    )
 
         # ── Персональные темповые зоны (пересчёт после обновления данных) ──
         try:
@@ -3463,13 +3496,15 @@ async def scheduled_data_refresh(context: ContextTypes.DEFAULT_TYPE):
                         return_exceptions=True,
                     )
                     if not isinstance(vo2max, Exception) and vo2max:
-                        save_user_profile(db_user_id, vo2max=vo2max, vo2max_source="garmin")
-                        vo2max_ok += 1
+                        if not (profile or {}).get("vo2max_locked"):
+                            save_user_profile(db_user_id, vo2max=vo2max, vo2max_source="garmin")
+                            vo2max_ok += 1
                     if not isinstance(lt, Exception) and lt:
-                        save_user_profile(db_user_id,
-                                          lactate_threshold_pace=lt["pace"],
-                                          lactate_threshold_hr=lt["hr"],
-                                          lactate_source="auto")
+                        if not (profile or {}).get("lactate_locked"):
+                            save_user_profile(db_user_id,
+                                              lactate_threshold_pace=lt["pace"],
+                                              lactate_threshold_hr=lt["hr"],
+                                              lactate_source="auto")
             except Exception as e:
                 logger.error(f"Garmin VO2max refresh error for {telegram_id}: {e}")
 
