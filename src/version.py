@@ -1,7 +1,6 @@
-VERSION = "0.20.4"
+VERSION = "0.20.5"
 BUILD_DATE = "2026-05-31"
 CHANGES = [
-    "fix: alt_pct отвязан от qvnorm — теперь 'ценность зоны для другой цели в принципе'",
-    "fix: alt_pct = 100 × char_affinity × spec_value[alt][zone] (без усталости/завершаемости)",
-    "fix: легенда синего ряда: 🟩=по силам сегодня, 🟦=ценность если бы цель была другой",
+    "fix: откат bot.py к чистому 0ccea77 — устранение mojibake от PowerShell Get-Content без -Encoding UTF8",
+    "note: правки профиля (vo2max_locked/lactate_locked, _build_profile_keyboard) будут переделаны чисто",
 ]
