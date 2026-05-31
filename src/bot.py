@@ -461,16 +461,16 @@ async def cmd_workout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db_user_id = _mark_user_active_if_needed(user.id, user.full_name, user.username)
     log_activity(db_user_id, '/workout')
-    msg = await update.message.reply_text("🔍 Ищу тренировку в канале...")
-    await _send_workout_recommendation(user.id, user.full_name, context, msg)
+    msg = await update.message.reply_text("🔍 Подбираю тренировку...")
+    await _send_recommendation(user.id, user.full_name, context, long=False, msg=msg)
 
 
 async def cmd_long(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db_user_id = _mark_user_active_if_needed(user.id, user.full_name, user.username)
     log_activity(db_user_id, '/long')
-    msg = await update.message.reply_text("🔍 Ищу Long Run в канале...")
-    await _send_long_run_recommendation(user.id, user.full_name, context, msg)
+    msg = await update.message.reply_text("🔍 Подбираю Long Run...")
+    await _send_recommendation(user.id, user.full_name, context, long=True, msg=msg)
 
 
 async def cmd_morning(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1659,12 +1659,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _send_morning_check(user.id, context, msg)
 
     elif query.data == "get_workout":
-        msg = await context.bot.send_message(user.id, "🔍 Ищу тренировку в канале...")
-        await _send_workout_recommendation(user.id, user.full_name, context, msg)
+        msg = await context.bot.send_message(user.id, "🔍 Подбираю тренировку...")
+        await _send_recommendation(user.id, user.full_name, context, long=False, msg=msg)
 
     elif query.data == "get_long_run":
-        msg = await context.bot.send_message(user.id, "🔍 Ищу Long Run в канале...")
-        await _send_long_run_recommendation(user.id, user.full_name, context, msg)
+        msg = await context.bot.send_message(user.id, "🔍 Подбираю Long Run...")
+        await _send_recommendation(user.id, user.full_name, context, long=True, msg=msg)
 
     elif query.data == "refresh_cache":
         db_user_id = get_or_create_user(user.id, user.full_name, user.username)
@@ -2397,6 +2397,96 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ── ЛОГИКА РЕКОМЕНДАЦИЙ ──────────────────────────────────────
+
+def _user_has_data(db_user_id: int) -> bool:
+    """has_data: есть VO2max в профиле ИЛИ хотя бы один токен трекера."""
+    profile = get_user_profile(db_user_id)
+    if profile and profile.get("vo2max"):
+        return True
+    return any(get_token(db_user_id, s) for s in ("strava", "garmin", "coros", "polar"))
+
+
+async def _send_recommendation(
+    telegram_id: int, name: str,
+    context: ContextTypes.DEFAULT_TYPE,
+    long: bool = False,
+    msg=None,
+    live: dict | None = None,
+):
+    """И3: рекомендация из кэша workout_analysis + recommend_group/recommend_long.
+    find_next_* используется ТОЛЬКО для детекта свежести анонса (post_id/edit_date) и
+    как источник упрощённого текста для has_data=False — НЕ для парсинга рекомендации.
+    live можно передать заранее (рассылка фетчит один раз на всех).
+    """
+    import json as _json
+    db_user_id = get_or_create_user(telegram_id, name)
+    wtype = "long" if long else "interval"
+
+    if live is None:
+        live = await (find_next_long_run() if long else find_next_workout())
+    cur_post = live.get("post_id") if live else None
+    cur_date = live.get("workout_date") if live else None
+    cur_edit = live.get("edit_date") if live else None
+
+    row, status = get_latest_workout_analysis(wtype, cur_post, cur_date, cur_edit)
+
+    async def _out(text, markup=None):
+        if msg:
+            await msg.edit_text(text, reply_markup=markup)
+        else:
+            await context.bot.send_message(telegram_id, text, reply_markup=markup)
+
+    if status == "empty" or row is None:
+        what = "ближайшего Long Run" if long else "ближайшей тренировки"
+        await _out(f"😔 Не нашёл анонс {what} в канале. Попробуй позже.")
+        return
+
+    banner = ""
+    if status == "analyzing":
+        banner = ("🔄 Новый анонс появился, сейчас в проработке — обновится через пару минут.\n"
+                  "Пока показываю предыдущую тренировку.\n\n")
+    elif status == "past":
+        banner = ("📅 Будущих тренировок пока нет. Показываю последнюю прошедшую "
+                  "(для ознакомления, не на сегодня).\n\n")
+
+    # has_data=False → упрощённое уведомление
+    if not _user_has_data(db_user_id):
+        if live:
+            simple = _build_simple_workout_text(live)
+        else:
+            simple = (f"📢 Тренировка {row.get('workout_date', '')}\n\n"
+                      "Заполни профиль и подключи трекер, чтобы получить рекомендацию группы. "
+                      "Новичкам подойдёт группа здоровья (бег/ходьба).")
+        await _out(banner + simple)
+        return
+
+    # has_data=True → персональная рекомендация из кэша
+    try:
+        analysis = _json.loads(row.get("analyzed_json") or "{}")
+    except Exception:
+        analysis = {}
+    user_data = {
+        "db_user_id": db_user_id,
+        "specialization": (get_user_profile(db_user_id) or {}).get("specialization"),
+        "recovery": await _get_recovery_data(db_user_id, force_fresh=True),
+    }
+    rec = (claude_advisor.recommend_long(analysis, user_data) if long
+           else claude_advisor.recommend_group(analysis, user_data))
+    if not rec or not rec.get("ok"):
+        note = (rec or {}).get("note", "Не удалось собрать рекомендацию. Попробуй позже.")
+        await _out(banner + note)
+        return
+
+    _rating_data[telegram_id] = {
+        "workout_date": analysis.get("workout_date", ""),
+        "ai_mode": row.get("analysis_mode", ""),
+    }
+    rating_markup = InlineKeyboardMarkup([[
+        InlineKeyboardButton("⭐ Оценить рекомендацию", callback_data="rate_show"),
+    ]])
+    final_markup = _merge_keyboards(rating_markup, get_main_keyboard(from_recommendation=True))
+    await _out(banner + rec["text"], final_markup)
+
 
 async def _send_workout_recommendation(
     telegram_id: int, name: str,
@@ -3172,37 +3262,33 @@ async def scheduled_evening(context: ContextTypes.DEFAULT_TYPE):
     now = datetime.now()
     if now.weekday() not in [0, 3, 5]:
         return
-    logger.info("Запускаю вечернюю рассылку...")
-    users = get_all_users_with_status()
-    rich_users  = [(tid, name, un) for tid, name, un, has in users if has]
-    simple_users = [(tid, name, un) for tid, name, un, has in users if not has]
+    is_long = (now.weekday() == 5)  # сб → анонс воскресного Long Run
+    wtype = "long" if is_long else "interval"
+    logger.info(f"Запускаю вечернюю рассылку ({wtype})...")
 
-    # 1. Полная рекомендация — пользователям с данными
-    for telegram_id, name, _ in rich_users:
+    # Один раз детектим свежесть анонса (find_next), кэш — источник рекомендации
+    live = await (find_next_long_run() if is_long else find_next_workout())
+    cur_post = live.get("post_id") if live else None
+    cur_edit = live.get("edit_date") if live else None
+    _, status = get_latest_workout_analysis(
+        wtype, cur_post, live.get("workout_date") if live else None, cur_edit)
+    if status == "empty":
+        logger.info(f"Вечерняя рассылка: нет анализа в кэше ({wtype}) — пропуск")
+        return
+
+    users = get_all_users_with_status()
+    count = 0
+    for telegram_id, name, _un, _has in users:
         try:
-            await _send_workout_recommendation(telegram_id, name, context)
+            await _send_recommendation(telegram_id, name, context, long=is_long, live=live)
+            count += 1
             await asyncio.sleep(0.5)
         except Forbidden:
             _mark_user_inactive(telegram_id)
             logger.info(f"Пользователь {telegram_id} заблокировал бота (вечерняя рассылка)")
         except Exception as e:
             logger.error(f"Evening notification error for {telegram_id}: {e}")
-
-    # 2. Упрощённое уведомление — пользователям без профиля/трекера
-    if simple_users:
-        workout = await find_next_workout()
-        if workout and not workout.get("is_past"):
-            simple_text = _build_simple_workout_text(workout)
-            for telegram_id, name, _ in simple_users:
-                try:
-                    await context.bot.send_message(telegram_id, simple_text)
-                    await asyncio.sleep(0.3)
-                except Forbidden:
-                    _mark_user_inactive(telegram_id)
-                    logger.info(f"Пользователь {telegram_id} заблокировал бота (вечерняя рассылка)")
-                except Exception as e:
-                    logger.error(f"Evening simple notification error for {telegram_id}: {e}")
-    logger.info(f"Вечерняя рассылка завершена: {len(rich_users)} полных + {len(simple_users)} упрощённых")
+    logger.info(f"Вечерняя рассылка завершена ({wtype}, status={status}): {count} отправлено (кэш, без парсинга на лету)")
 
 
 async def _get_vo2max_from_tracker(db_user_id: int) -> tuple:

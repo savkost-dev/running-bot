@@ -1070,8 +1070,26 @@ def get_workout_analysis(post_id: int) -> dict | None:
     return dict(zip(cols, row))
 
 
-def get_latest_workout_analysis(workout_type: str) -> dict | None:
-    """Последний валидный анализ нужного типа ('interval' или 'long')."""
+def get_latest_workout_analysis(
+    workout_type: str,
+    current_post_id: int | None = None,
+    current_workout_date: str | None = None,
+    current_edit_date: str | None = None,
+) -> tuple[dict | None, str]:
+    """Возвращает (analysis | None, status) для двухшагового флоу.
+
+    status:
+      'current'   — есть валидный анализ под текущий анонс (workout_date >= сегодня)
+      'analyzing' — в канале анонс новее кэша (другой post_id / правка) — отдаём прошлый анализ
+      'past'      — будущего/сегодняшнего анонса нет, только прошедший
+      'empty'     — анализа нет вообще
+
+    current_* — что сейчас в канале (из find_next_*); сравнение по post_id/edit_date,
+    без тяжёлого DeepSeek-анализа. Если current_post_id=None — статус по дате анализа.
+    """
+    from datetime import date as _date
+    today = _date.today().isoformat()
+
     with get_connection() as conn:
         row = conn.execute("""
             SELECT * FROM workout_analysis
@@ -1080,11 +1098,26 @@ def get_latest_workout_analysis(workout_type: str) -> dict | None:
             LIMIT 1
         """, (workout_type,)).fetchone()
     if not row:
-        return None
+        return None, "empty"
     cols = ["id", "post_id", "workout_date", "workout_type", "is_valid",
             "raw_text", "analyzed_json", "extra_groups_json",
             "analysis_mode", "created_at", "updated_at", "edit_date"]
-    return dict(zip(cols, row))
+    analysis = dict(zip(cols, row))
+
+    # Свежий анонс в канале новее кэша → кэш ещё в проработке
+    if current_post_id is not None:
+        cache_stale = (analysis.get("post_id") != current_post_id)
+        if not cache_stale and current_edit_date:
+            old_ed = analysis.get("edit_date")
+            if not old_ed or str(current_edit_date) > str(old_ed):
+                cache_stale = True
+        if cache_stale:
+            return analysis, "analyzing"
+
+    # Кэш актуален (или анонса в канале нет) → current vs past по дате
+    if (analysis.get("workout_date") or "") >= today:
+        return analysis, "current"
+    return analysis, "past"
 
 
 def update_extra_groups(post_id: int, extra_groups_json: str) -> None:

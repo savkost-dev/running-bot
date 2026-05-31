@@ -17,3 +17,6 @@ bash
 cd D:\running-bot
 C:\nodejs\node.exe C:\nodejs\node_modules\@anthropic-ai\claude-code\cli-wrapper.cjs
 
+GitHub
+
+
