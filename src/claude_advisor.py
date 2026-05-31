@@ -1183,7 +1183,8 @@ def recommend_group(analysis_json: dict, user_data: dict) -> dict | None:
             r["tag"] = None
 
     markup = [{"number": r["number"], "zone_disp": r["zone_disp"],
-               "work_pace": r.get("work_pace"), "pct": r["pct"], "tag": r.get("tag")}
+               "work_pace": r.get("work_pace"), "pct": r["pct"], "tag": r.get("tag"),
+               "alt_pct": r.get("alt_pct"), "alt_spec": r.get("alt_spec")}
               for r in rows]
 
     # ── Альтернативы ──────────────────────────────────────────
@@ -1774,9 +1775,9 @@ def _sanitize_group_name(name: str) -> str:
     return m.group(0).replace(',', '.') if m else s[:5]
 
 
-def _pct_bar(pct: int, width: int = 8) -> str:
+def _pct_bar(pct: int, width: int = 8, color: str = '🟩') -> str:
     filled = max(0, min(width, round(pct / 100 * width)))
-    return '🟩' * filled + '⬜' * (width - filled)
+    return color * filled + '⬜' * (width - filled)
 
 
 
@@ -1839,8 +1840,14 @@ def recommendation_to_advice(rec: dict, analysis: dict, recovery: dict | None) -
     suitability, main_pace = [], ""
     for g in groups:
         if g.get("pct") is not None:
-            suitability.append({"group": g.get("number"), "percentage": g.get("pct"),
-                                 "comment": _suit_comment(g, main_num)})
+            item = {"group": g.get("number"), "percentage": g.get("pct"),
+                    "comment": _suit_comment(g, main_num)}
+            # Значимая альтернатива (та же пара, что в блоке «Альтернативы»): второй ряд в шкале
+            ap, asp = g.get("alt_pct"), g.get("alt_spec")
+            if ap is not None and asp and (ap - g["pct"]) >= 12:
+                item["alt_pct"] = ap
+                item["alt_label"] = _SPEC_LABELS.get(asp, asp)
+            suitability.append(item)
         if str(g.get("number")) == main_num:
             main_pace = g.get("work_pace") or ""
 
@@ -1893,6 +1900,7 @@ def recommendation_to_advice(rec: dict, analysis: dict, recovery: dict | None) -
         "recommended_pace": main_pace,
         "reason": reason,
         "suitability_percentages": suitability,
+        "spec_label": rec.get("specialization_label"),
         "if_feeling_good": if_good,
         "if_tired": if_tired,
         "gap_note": gap_note,
@@ -2181,13 +2189,27 @@ def format_evening_message(advice: dict, workout: dict, stats: dict | None = Non
     if suitability:
         sorted_s = sorted(suitability, key=lambda x: x.get("percentage", 0), reverse=True)
         lines.append("📊 <b>Подходимость групп:</b>")
+        has_dual = False
         for item in sorted_s:
             g = _sanitize_group_name(str(item.get("group", "?")))
             pct = int(item.get("percentage", 0))
-            bar = _pct_bar(pct)
             comment = (item.get('comment') or '')[:12]
             comment_str = f" — {_html.escape(comment)}" if comment else ""
-            lines.append(f"<code>Гр.{g:<4} {bar} {pct:>3}%{comment_str}</code>")
+            lines.append(f"<code>Гр.{g:<4} {_pct_bar(pct)} {pct:>3}%{comment_str}</code>")
+            # Второй ряд (🟦) — если есть значимая альтернатива (другая цель)
+            alt_pct = item.get("alt_pct")
+            if alt_pct is not None:
+                has_dual = True
+                alt = int(alt_pct)
+                alt_label = (item.get('alt_label') or '')[:12]
+                alt_str = f" — {_html.escape(alt_label)}" if alt_label else ""
+                lines.append(f"<code>{'':<8}{_pct_bar(alt, color='🟦')} {alt:>3}%{alt_str}</code>")
+        if has_dual:
+            spec_label = _html.escape(advice.get("spec_label") or "твоя цель")
+            legend_alt = next((it.get('alt_label') for it in sorted_s
+                               if it.get('alt_pct') is not None and it.get('alt_label')), "другая цель")
+            lines.append(f"🟩 — для твоей цели ({spec_label})")
+            lines.append(f"🟦 — если сегодня хочешь развить другие качества ({_html.escape(legend_alt)})")
         lines.append(sep)
 
     # Основная рекомендация
