@@ -1163,16 +1163,13 @@ def recommend_group(analysis_json: dict, user_data: dict) -> dict | None:
         r["qvnorm"] = r["qv_raw"] / qv_max if qv_max else 0.0
         if is_borderline:
             r["pct"] = max(0, min(99, round(100 * r["use"] * r["qvnorm"])))
-            # alt_pct = "ценность зоны для другой цели В ПРИНЦИПЕ" — без qvnorm/усталости.
-            # Формула: 100 × char_affinity × spec_value[alt][zone]
-            # (основной pct = usefulness × qvnorm = "по силам сегодня", два разных смысла)
-            char_v = _CHARACTER_ZONE.get(character, _CHARACTER_ZONE["vo2"]).get(r["zone_key"], 0.5)
+            # alt_pct: та же формула что pct, но usefulness считается под альт-специализацию.
+            # qvnorm остаётся тем же — завершаемость не зависит от цели.
             best_spec, best_pct = None, r["pct"]
             for s in _SPEC_ZONE_VALUE:
                 if s == spec:
                     continue
-                sv = _SPEC_ZONE_VALUE[s].get(r["zone_key"], 0.5)
-                p = max(0, min(99, round(100 * char_v * sv)))
+                p = max(0, min(99, round(100 * _zone_usefulness(r["zone_key"], s, character) * r["qvnorm"])))
                 if p > best_pct:
                     best_pct, best_spec = p, s
             r["alt_spec"], r["alt_pct"] = best_spec, best_pct
