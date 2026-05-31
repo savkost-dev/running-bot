@@ -3120,10 +3120,12 @@ def _edit_newer(a: str | None, b: str | None) -> bool:
         return str(a) > str(b)
 
 
-async def _autoanalyze_post(workout: dict) -> None:
+async def _autoanalyze_post(workout: dict, context=None) -> None:
     """Фоновый автоанализ анонса (Шаг 1) → запись в workout_analysis.
     Запускается при: новом анонсе / новой доп. группе / редактировании поста.
     Прод-режим (get_preprocess_mode). Не блокирует цикл проверки.
+    После успешного анализа уведомляет ТОЛЬКО админа (контроль, что бот поймал анонс).
+    Пользователям ничего не шлёт — их единственное сообщение это вечерняя рассылка 20:00.
     """
     import json as _json, functools
     try:
@@ -3170,90 +3172,47 @@ async def _autoanalyze_post(workout: dict) -> None:
             extra_groups_json=extra_json,
             edit_date=edit_date,
         )
+        n_groups = len(result.get("groups") or [])
+        n_extra = len(result.get("extra_groups") or [])
         logger.info(
             f"autoanalyze: post_id={post_id} сохранён ({reason}) — "
             f"type={result.get('workout_type')}, valid={result.get('is_valid')}, "
-            f"groups={len(result.get('groups') or [])}, extra={len(extra)}"
+            f"groups={n_groups}, extra={n_extra}"
         )
+
+        # Запись для /status («последний анонс»)
+        try:
+            save_workout_notification(post_id, result.get("workout_type", ""),
+                                      result.get("workout_date", ""), [], 0)
+        except Exception as e:
+            logger.warning(f"autoanalyze: save_workout_notification error: {e}")
+
+        # Уведомление ТОЛЬКО админу — контроль, что анонс пойман и разобран
+        if context is not None:
+            valid_mark = "✅ валидный" if result.get("is_valid") else "❌ невалидный"
+            await _notify_admin(
+                context.bot,
+                f"🔬 Анонс пойман и проанализирован ({reason})\n"
+                f"Тип: {result.get('workout_type', '—')} | Дата: {result.get('workout_date', '—')}\n"
+                f"{valid_mark} | групп: {n_groups}, доп.групп: {n_extra} | режим {mode}"
+            )
     except Exception as e:
         logger.error(f"autoanalyze error for post {workout.get('post_id')}: {e}")
 
 
 async def scheduled_new_workout_check(context: ContextTypes.DEFAULT_TYPE):
-    """Каждые 30 минут проверяет новые анонсы тренировок и доп. группы.
-    Параллельно запускает фоновый автоанализ (Шаг 1) в workout_analysis.
+    """Каждые 30 минут ловит новые/изменённые анонсы и запускает фоновый автоанализ (Шаг 1).
+    Пользователям НИЧЕГО не шлёт (никакого промежуточного «вышел анонс») — их единственное
+    сообщение про тренировку это вечерняя рассылка 20:00 с готовой рекомендацией.
+    Уведомление о поимке+анализе уходит ТОЛЬКО админу (из _autoanalyze_post).
     """
-
-    # ── Вт/Пт тренировка ──────────────────────────────────────
     workout = await find_next_workout()
     if workout and workout.get("post_id"):
-        # Автоанализ в фоне — новый анонс / новые доп. группы / редактирование
-        asyncio.create_task(_autoanalyze_post(workout))
-    post_id = workout.get("post_id") if workout else None
-    if post_id:
-        existing = get_workout_notification(post_id)
-        if not existing:
-            if workout and not workout.get("is_past"):
-                date_fmt, weekday = _fmt_workout_date(workout["workout_date"])
-                location = workout.get("location") or "—"
-                work_text = (workout.get("work_text") or "").strip()
-                work_line = f"\n💪 Работа: {work_text}" if work_text else ""
-                text = (
-                    f"📢 <b>Вышел анонс тренировки!</b>\n"
-                    f"⚡ {weekday} {date_fmt} | 📍 {location}"
-                    f"{work_line}\n\n"
-                    f"Нажми /workout чтобы получить рекомендацию группы"
-                )
-                simple_text = _build_simple_workout_text(workout)
-                count = await _broadcast_split(context, text, simple_text, "notify_interval")
-                save_workout_notification(post_id, "interval", workout["workout_date"], [], count)
-                logger.info(f"Анонс тренировки {workout['workout_date']}: отправлено {count}")
-            else:
-                # Прошедшая тренировка при старте — запоминаем без рассылки
-                workout_date = workout["workout_date"] if workout else ""
-                save_workout_notification(post_id, "interval", workout_date, [], 0)
-        else:
-            # Проверяем новые доп. группы
-            extra_groups = await get_extra_groups_for_post(post_id)
-            notified_nums = set(existing.get("notified_extra_groups", []))
-            new_groups = [g for g in extra_groups if g["number"] not in notified_nums]
-            if new_groups:
-                date_fmt, weekday = _fmt_workout_date(existing.get("workout_date", ""))
-                for group in new_groups:
-                    raw_text = group.get("raw_text", "")[:300]
-                    text = (
-                        f"➕ <b>Новая группа для тренировки {weekday} {date_fmt}!</b>\n"
-                        f"Группа {group['number']}: {raw_text}\n\n"
-                        f"Нажми /workout чтобы получить обновлённую рекомендацию"
-                    )
-                    count = await _notify_all(context, text, "notify_interval_extra")
-                    logger.info(f"Новая группа {group['number']} поста {post_id}: отправлено {count}")
-                all_notified = list(notified_nums | {g["number"] for g in new_groups})
-                save_workout_notification(post_id, "interval", existing["workout_date"], all_notified, 0)
+        asyncio.create_task(_autoanalyze_post(workout, context))
 
-    # ── Воскресный Long Run ────────────────────────────────────
     workout_lr = await find_next_long_run()
     if workout_lr and workout_lr.get("post_id"):
-        asyncio.create_task(_autoanalyze_post(workout_lr))
-    lr_post_id = workout_lr.get("post_id") if workout_lr else None
-    if lr_post_id:
-        existing_lr = get_workout_notification(lr_post_id)
-        if not existing_lr:
-            if workout_lr and not workout_lr.get("is_past"):
-                date_fmt, weekday = _fmt_workout_date(workout_lr["workout_date"])
-                location = workout_lr.get("location") or "—"
-                text = (
-                    f"📢 <b>Вышел анонс Long Run!</b>\n"
-                    f"🕐 {weekday} {date_fmt} | 📍 {location}\n\n"
-                    f"Нажми /long чтобы получить рекомендацию группы"
-                )
-                simple_text_lr = _build_simple_workout_text(workout_lr)
-                count = await _broadcast_split(context, text, simple_text_lr, "notify_long")
-                save_workout_notification(lr_post_id, "long", workout_lr["workout_date"], [], count)
-                logger.info(f"Анонс Long Run {workout_lr['workout_date']}: отправлено {count}")
-            else:
-                workout_date_lr = workout_lr["workout_date"] if workout_lr else ""
-                save_workout_notification(lr_post_id, "long", workout_date_lr, [], 0)
+        asyncio.create_task(_autoanalyze_post(workout_lr, context))
 
 
 # ── ПЛАНИРОВЩИК ──────────────────────────────────────────────
