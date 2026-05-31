@@ -859,7 +859,7 @@ _SPEC_LABELS = {
 _USEFULNESS_FLOOR = 0.72     # полезность зоны — тилт 0.72..1.0 (характер×специализация)
 _INTENSITY_EXP = 4.0         # крутизна роста интенсивности с темпом (отн. скорости к порогу)
 _TTT_TAU = 28.0              # сек/км превышения порога, где время до отказа ≈ половина
-_TTT_STEEP = 3.8             # крутизна НЕЛИНЕЙНОГО обрыва времени до отказа выше порога
+_TTT_STEEP = 5.5             # крутизна НЕЛИНЕЙНОГО обрыва времени до отказа выше порога
 _TTT_RECOVERY_K = 0.35       # усталость приближает грань отказа (rec 0..1)
 # non-borderline (группы только «быстрее/медленнее»): спец не влияет, % по чистой форме
 _W_FORM_NB, _W_REC_NB = 0.58, 0.42
@@ -1036,7 +1036,11 @@ def _intensity(pace_s: float, thr_sec: float | None) -> float:
     """
     if not thr_sec or pace_s <= 0:
         return 1.0
-    return (thr_sec / pace_s) ** _INTENSITY_EXP   # скорость ∝ 1/темп
+    ratio = thr_sec / pace_s
+    if ratio <= 1.0:
+        return ratio ** _INTENSITY_EXP        # ниже/на пороге — степенной
+    else:
+        return 1.0 + (ratio - 1.0) ** 0.5    # выше порога — корневой (медленнее)
 
 
 def _time_to_termination(pace_s: float, thr_sec: float | None, rec: float) -> float:
