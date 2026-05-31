@@ -781,34 +781,35 @@ async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+# Режим формирования РЕКОМЕНДАЦИИ (Шаг 2). Анализ анонса (Шаг 1) всегда deep (админ).
 _MODE_INFO = {
-    "deep":  ("🧠", "Глубокое",  "~2 мин",    "максимальное качество"),
-    "smart": ("⚡", "Умное",     "~30-60 сек", "баланс скорости и качества"),
-    "fast":  ("🔥", "Быстрое",   "~10 сек",   "быстрый анализ"),
+    "deep":  ("🧠", "Глубокий (ИИ)", "~2 мин",     "ИИ формулирует рекомендацию, макс. качество"),
+    "smart": ("⚡", "Быстрый (ИИ)",  "~30-60 сек", "баланс качества и скорости"),
+    "fast":  ("🪶", "Лёгкий (ИИ)",   "~10 сек",    "короткое ИИ-объяснение"),
+    "calc":  ("📊", "Расчётный",      "формулы",    "группа и % по формулам, текст коротко от ИИ"),
 }
 
 
 def _build_mode_text(current_mode: str) -> str:
-    lines = []
+    lines = ["🧠 Режим рекомендации (как бот формулирует совет по группе):\n"]
     for key, (emoji, label, timing, desc) in _MODE_INFO.items():
-        mark = "✓ " if key == current_mode else "   "
+        mark = "✅ " if key == current_mode else "   "
         lines.append(f"{mark}{emoji} {label} ({timing}) — {desc}")
-    lines.append("\nВыбери режим:")
+    lines.append("\nЧисла (группа, %, зоны) всегда считаются формулами; режим влияет на то,\n"
+                 "насколько глубоко ИИ объясняет и формулирует текст. Выбери режим:")
     return "\n".join(lines)
 
 
 def _build_mode_keyboard(current_mode: str) -> InlineKeyboardMarkup:
     def btn(key):
-        emoji, label, timing, _ = _MODE_INFO[key]
-        mark = "✓ " if key == current_mode else ""
-        return InlineKeyboardButton(
-            f"{mark}{emoji} {label} ({timing})",
-            callback_data=f"mode_set_{key}"
-        )
+        emoji, label, _timing, _ = _MODE_INFO[key]
+        mark = "✅ " if key == current_mode else ""
+        return InlineKeyboardButton(f"{mark}{emoji} {label}", callback_data=f"mode_set_{key}")
     return InlineKeyboardMarkup([
         [btn("deep")],
         [btn("smart")],
         [btn("fast")],
+        [btn("calc")],
     ])
 
 
@@ -1828,7 +1829,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=_merge_keyboards(_build_mode_keyboard(current_mode), back_btn)
         )
 
-    elif query.data in ("mode_set_deep", "mode_set_smart", "mode_set_fast"):
+    elif query.data in ("mode_set_deep", "mode_set_smart", "mode_set_fast", "mode_set_calc"):
         db_user_id = get_or_create_user(user.id, user.full_name, user.username)
         new_mode = query.data.replace("mode_set_", "")
         set_preference(db_user_id, "ai_mode", new_mode)
@@ -2498,18 +2499,47 @@ async def _send_recommendation(
     )
     weather_line = format_weather_for_message(weather) if weather else ""
     has_tracker = any(get_token(db_user_id, s) for s in ("garmin", "coros", "polar", "strava"))
-    stats = analysis.get("_stats")
 
+    # Числа/структура — формулами (детерминированно)
     if long:
-        # Long — ПРЕЖНЯЯ богатая вёрстка (format_long_run_message) на новом движке
         advice = claude_advisor.recommendation_to_long_advice(rec, analysis, user_data["recovery"])
-        body = claude_advisor.format_long_run_message(
-            advice, workout_dict, stats=stats, weather_line=weather_line, has_tracker=has_tracker)
     else:
-        # Interval — ПРЕЖНЯЯ богатая вёрстка (format_evening_message)
         advice = claude_advisor.recommendation_to_advice(rec, analysis, user_data["recovery"])
+
+    # Режим рекомендации (Шаг 2) из настроек пользователя; анализ (Шаг 1) всегда deep
+    rec_mode = (get_preferences(db_user_id) or {}).get("ai_mode", "smart")
+    main = rec.get("main_group") or {}
+    facts = {
+        "group": advice.get("recommended_group"),
+        "pace": advice.get("recommended_pace") or advice.get("first_half_pace"),
+        "zone": main.get("zone_disp") or main.get("zone_label"),
+        "pct": main.get("pct"),
+        "suitability": advice.get("suitability_percentages"),
+        "specialization": rec.get("specialization_label") or user_data.get("specialization"),
+        "character": rec.get("workout_character"),
+        "recovery": claude_advisor._recovery_descriptor(user_data["recovery"]),
+        "overall_purpose": analysis.get("overall_purpose"),
+        "block_contrast": analysis.get("block_contrast"),
+        "strategy": advice.get("run_strategy"),
+        "first_half_pace": advice.get("first_half_pace"),
+        "second_half_pace": advice.get("second_half_pace"),
+    }
+    import functools
+    prose, stats2 = await asyncio.get_event_loop().run_in_executor(
+        None, functools.partial(claude_advisor.generate_step2_prose, facts, rec_mode, long))
+    # ИИ-проза поверх посчитанного (фолбэк на шаблон, если модель не ответила)
+    if prose.get("reason"):
+        advice["reason"] = prose["reason"]
+    if long and prose.get("strategy_reason"):
+        advice["strategy_reason"] = prose["strategy_reason"]
+
+    # Футер отражает СВОЙ экран — режим/стоимость рекомендации (Шаг 2), не анализа
+    if long:
+        body = claude_advisor.format_long_run_message(
+            advice, workout_dict, stats=stats2, weather_line=weather_line, has_tracker=has_tracker)
+    else:
         body = claude_advisor.format_evening_message(
-            advice, workout_dict, stats=stats, weather_line=weather_line, has_tracker=has_tracker)
+            advice, workout_dict, stats=stats2, weather_line=weather_line, has_tracker=has_tracker)
 
     await _out(banner + body, final_markup, parse_mode="HTML")
 

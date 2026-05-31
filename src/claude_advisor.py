@@ -16,7 +16,8 @@ MODEL_DEEP  = "deepseek-v4-pro"    # thinking=True  — 🧠 Глубокое
 MODEL_SMART = "deepseek-v4-flash"  # thinking=True  — ⚡ Умное
 MODEL_FAST  = "deepseek-v4-flash"  # thinking=False — 🔥 Быстрое
 
-_MODE_LABELS = {"deep": "🧠 Глубокое", "smart": "⚡ Умное", "fast": "🔥 Быстрое"}
+_MODE_LABELS = {"deep": "🧠 Глубокий (ИИ)", "smart": "⚡ Быстрый (ИИ)",
+                "fast": "🪶 Лёгкий (ИИ)", "calc": "📊 Расчётный"}
 
 
 def _get_client() -> OpenAI:
@@ -1898,6 +1899,114 @@ def recommendation_to_advice(rec: dict, analysis: dict, recovery: dict | None) -
         "preparation_tips": tips,
         "warning": _recovery_warning(analysis, main_num, recovery),
     }
+
+
+def _build_step2_prompt(facts: dict, mode: str, long: bool) -> str:
+    """Промпт Шага 2: модель ОБЪЯСНЯЕТ посчитанное (числа не меняет), формулирует живой текст."""
+    calc = (mode == "calc")
+    p = [
+        "Ты — беговой тренер клуба Dusty Dumbbells. Пиши живым тёплым тоном, по-русски, кратко.",
+        "ВАЖНО: числа уже посчитаны формулами — НЕ меняй и НЕ выдумывай группы/темпы/проценты, "
+        "только объясни и сформулируй текст.",
+    ]
+    if not calc:
+        p.append(
+            "Логика выбора (рассуждай в ней):\n"
+            "- Оптимум группы = максимум объёма качественной работы = интенсивность × время до отказа.\n"
+            "- Слишком быстро → мало времени работы, риск схода/травмы. Слишком медленно → нет интенсивности.\n"
+            "- Оптимум — у порога с лёгким заходом выше; группа должна быть посильна ВСЮ тренировку.\n"
+            "- Специализация смещает акцент среди посильных групп (5к/10к→МПК/скорость; "
+            "полумарафон/марафон→ПАНО/темп; speed→скорость; fitness→умеренное)."
+        )
+    f = facts
+    p.append("ПОСЧИТАНО (не менять):")
+    p.append(f"- Рекомендованная группа: {f.get('group')}, темп {f.get('pace')}, "
+             f"зона {f.get('zone')}, подходимость {f.get('pct')}%")
+    if long:
+        strat = "прогрессия" if f.get("strategy") == "progressive" else "ровный темп"
+        sp = f", вторая половина {f.get('second_half_pace')}" if f.get("second_half_pace") else ""
+        p.append(f"- Стратегия: {strat}; первая половина {f.get('first_half_pace')}{sp}")
+    if f.get("suitability"):
+        p.append("- Шкала групп: " + ", ".join(
+            f"гр.{s['group']} {s['percentage']}%" for s in f["suitability"][:8]))
+    if f.get("specialization"):
+        p.append(f"- Специализация бегуна: {f.get('specialization')}")
+    if f.get("character"):
+        p.append(f"- Характер тренировки: {f.get('character')}")
+    if f.get("recovery"):
+        p.append(f"- Восстановление сегодня: {f.get('recovery')}")
+    if f.get("overall_purpose"):
+        p.append(f"- Что развивает тренировка: {f.get('overall_purpose')}")
+    if f.get("block_contrast"):
+        p.append(f"- Контраст блоков: {f.get('block_contrast')}")
+    if calc:
+        p.append("Задача: опиши посчитанный результат понятным языком — почему эта группа "
+                 "(по % и зоне), что делать. Без переусложнения, 1-3 предложения.")
+    else:
+        what = " и эта стратегия" if long else ""
+        p.append(f"Задача: объясни ПОЧЕМУ именно эта группа{what} оптимальны — в логике выше, "
+                 "на данных бегуна. Тёплый тренерский тон, 2-4 предложения.")
+    schema = '{"reason": "почему эта группа"'
+    if long:
+        schema += ', "strategy_reason": "почему такая стратегия"'
+    schema += "}"
+    p.append(f"Верни строго JSON: {schema}\nОтвечай только JSON.")
+    return "\n".join(p)
+
+
+def generate_step2_prose(facts: dict, mode: str = "smart", long: bool = False) -> tuple[dict, dict]:
+    """Генерирует ИИ-прозу обоснования (Шаг 2) поверх посчитанных формулами чисел.
+    Возвращает ({reason, strategy_reason?}, stats). При сбое — ({}, stats) (фолбэк на шаблон).
+    """
+    import re as _re
+    if mode == "deep":
+        model, max_tok, to = MODEL_DEEP, 1600, 180
+    elif mode == "fast":
+        model, max_tok, to = MODEL_FAST, 1200, 60
+    elif mode == "calc":
+        model, max_tok, to = MODEL_FAST, 900, 60
+    else:
+        model, max_tok, to = MODEL_SMART, 1400, 120
+
+    prompt = _build_step2_prompt(facts, mode, long)
+    t0 = _time.time()
+    stats = {"time_sec": 0, "input_tokens": None, "output_tokens": None, "mode": mode}
+    try:
+        resp = _get_client().chat.completions.create(
+            model=model, messages=[{"role": "user", "content": prompt}],
+            max_tokens=max_tok, temperature=0.3, timeout=to)
+        usage = resp.usage
+        stats = {"time_sec": round(_time.time() - t0, 1),
+                 "input_tokens": usage.prompt_tokens if usage else None,
+                 "output_tokens": usage.completion_tokens if usage else None, "mode": mode}
+        msg = resp.choices[0].message
+        raw = (msg.content or "").strip()
+        reasoning = getattr(msg, "reasoning_content", None)
+        if not raw and reasoning:
+            m = _re.search(r'\{[\s\S]*\}', reasoning)
+            if m:
+                raw = m.group(0)
+        raw = _re.sub(r"<think>.*?</think>", "", raw, flags=_re.DOTALL).replace("```json", "").replace("```", "").strip()
+        prose = {}
+        try:
+            prose = json.loads(raw)
+        except Exception:
+            m = _re.search(r'\{[\s\S]*\}', raw)
+            if m:
+                try:
+                    prose = json.loads(m.group(0))
+                except Exception:
+                    prose = {}
+        if not isinstance(prose, dict):
+            prose = {}
+        logger.info(f"step2 prose: mode={mode}, time={stats['time_sec']}s, "
+                    f"tokens={stats['input_tokens']}/{stats['output_tokens']}, "
+                    f"reason={'y' if prose.get('reason') else 'n'}")
+        return prose, stats
+    except Exception as e:
+        logger.warning(f"step2 prose error (mode={mode}): {e}")
+        stats["time_sec"] = round(_time.time() - t0, 1)
+        return {}, stats
 
 
 def _sec_to_pace(sec: float) -> str:
