@@ -1,4 +1,4 @@
-import os
+﻿import os
 import asyncio
 import logging
 from datetime import datetime, time
@@ -53,7 +53,7 @@ ADMIN_ID = 273726778
 
 
 def _mark_user_inactive(telegram_id: int) -> None:
-    """Помечает пользователя как неактивного (заблокировал бота)."""
+    """РџРѕРјРµС‡Р°РµС‚ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ РєР°Рє РЅРµР°РєС‚РёРІРЅРѕРіРѕ (Р·Р°Р±Р»РѕРєРёСЂРѕРІР°Р» Р±РѕС‚Р°)."""
     try:
         db_user_id = get_or_create_user(telegram_id, "")
         set_preference(db_user_id, "is_active", 0)
@@ -63,18 +63,18 @@ def _mark_user_inactive(telegram_id: int) -> None:
 
 
 def _mark_user_active_if_needed(telegram_id: int, name: str = "", username: str = None) -> int:
-    """Восстанавливает is_active=1 при входящем сообщении. Возвращает db_user_id."""
+    """Р’РѕСЃСЃС‚Р°РЅР°РІР»РёРІР°РµС‚ is_active=1 РїСЂРё РІС…РѕРґСЏС‰РµРј СЃРѕРѕР±С‰РµРЅРёРё. Р’РѕР·РІСЂР°С‰Р°РµС‚ db_user_id."""
     db_user_id = get_or_create_user(telegram_id, name, username)
     prefs = get_preferences(db_user_id)
     if prefs and not prefs.get("is_active", True):
         set_preference(db_user_id, "is_active", 1)
         set_preference(db_user_id, "deactivated_at", None)
-        logger.info(f"Пользователь {telegram_id} снова активен")
+        logger.info(f"РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ {telegram_id} СЃРЅРѕРІР° Р°РєС‚РёРІРµРЅ")
     return db_user_id
 
 
 async def _notify_admin(bot, text: str) -> None:
-    """Отправляет уведомление администратору. Тихо игнорирует ошибки."""
+    """РћС‚РїСЂР°РІР»СЏРµС‚ СѓРІРµРґРѕРјР»РµРЅРёРµ Р°РґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂСѓ. РўРёС…Рѕ РёРіРЅРѕСЂРёСЂСѓРµС‚ РѕС€РёР±РєРё."""
     try:
         await bot.send_message(ADMIN_ID, text)
     except Exception as e:
@@ -84,9 +84,9 @@ async def _notify_admin(bot, text: str) -> None:
 last_workout: dict | None = None
 last_long_run: dict | None = None
 
-# In-memory cache: telegram_id → FIT generation params (set after recommendation)
+# In-memory cache: telegram_id в†’ FIT generation params (set after recommendation)
 _fit_data: dict[int, dict] = {}
-# In-memory cache: telegram_id → rating context (workout_date, ai_mode)
+# In-memory cache: telegram_id в†’ rating context (workout_date, ai_mode)
 _rating_data: dict[int, dict] = {}
 
 logging.basicConfig(
@@ -98,18 +98,18 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 
-# ── КЭШ АТЛЕТА ───────────────────────────────────────────────
+# в”Ђв”Ђ РљР­РЁ РђРўР›Р•РўРђ в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 async def refresh_athlete_cache(db_user_id: int, access_token: str, notify_msg=None) -> dict | None:
     """
-    Обновляет кэш данных атлета (CTL/ATL/TSB, прогнозы, соревнования).
-    Занимает 30-60 сек — вызывать только при подключении или по запросу.
+    РћР±РЅРѕРІР»СЏРµС‚ РєСЌС€ РґР°РЅРЅС‹С… Р°С‚Р»РµС‚Р° (CTL/ATL/TSB, РїСЂРѕРіРЅРѕР·С‹, СЃРѕСЂРµРІРЅРѕРІР°РЅРёСЏ).
+    Р—Р°РЅРёРјР°РµС‚ 30-60 СЃРµРє вЂ” РІС‹Р·С‹РІР°С‚СЊ С‚РѕР»СЊРєРѕ РїСЂРё РїРѕРґРєР»СЋС‡РµРЅРёРё РёР»Рё РїРѕ Р·Р°РїСЂРѕСЃСѓ.
     """
     try:
         if notify_msg:
             await notify_msg.edit_text(
-                "⏳ Загружаю данные из Strava...\n"
-                "Это займёт около минуты (только первый раз)"
+                "вЏі Р—Р°РіСЂСѓР¶Р°СЋ РґР°РЅРЅС‹Рµ РёР· Strava...\n"
+                "Р­С‚Рѕ Р·Р°Р№РјС‘С‚ РѕРєРѕР»Рѕ РјРёРЅСѓС‚С‹ (С‚РѕР»СЊРєРѕ РїРµСЂРІС‹Р№ СЂР°Р·)"
             )
 
         athlete_data = await get_full_athlete_data(access_token)
@@ -121,23 +121,23 @@ async def refresh_athlete_cache(db_user_id: int, access_token: str, notify_msg=N
             athlete_data["last_race"]
         )
 
-        logger.info(f"Кэш атлета обновлён для user_id={db_user_id}")
+        logger.info(f"РљСЌС€ Р°С‚Р»РµС‚Р° РѕР±РЅРѕРІР»С‘РЅ РґР»СЏ user_id={db_user_id}")
         return athlete_data
 
     except Exception as e:
-        logger.error(f"Ошибка обновления кэша для user_id={db_user_id}: {e}")
+        logger.error(f"РћС€РёР±РєР° РѕР±РЅРѕРІР»РµРЅРёСЏ РєСЌС€Р° РґР»СЏ user_id={db_user_id}: {e}")
         return None
 
 
 async def get_fitness_data(db_user_id: int, access_token: str) -> dict | None:
     """
-    Получает данные атлета:
-    - Быстрые (всегда свежие): пробежки за 14 дней + острая нагрузка за 48 ч
-    - Медленные (из кэша): CTL/ATL/TSB, прогнозы Риегеля, последнее соревнование
+    РџРѕР»СѓС‡Р°РµС‚ РґР°РЅРЅС‹Рµ Р°С‚Р»РµС‚Р°:
+    - Р‘С‹СЃС‚СЂС‹Рµ (РІСЃРµРіРґР° СЃРІРµР¶РёРµ): РїСЂРѕР±РµР¶РєРё Р·Р° 14 РґРЅРµР№ + РѕСЃС‚СЂР°СЏ РЅР°РіСЂСѓР·РєР° Р·Р° 48 С‡
+    - РњРµРґР»РµРЅРЅС‹Рµ (РёР· РєСЌС€Р°): CTL/ATL/TSB, РїСЂРѕРіРЅРѕР·С‹ Р РёРµРіРµР»СЏ, РїРѕСЃР»РµРґРЅРµРµ СЃРѕСЂРµРІРЅРѕРІР°РЅРёРµ
     """
     from strava import get_recent_runs, analyze_fitness, get_recent_48h_load
 
-    # ── Быстрые данные (2 запроса к Strava API) ──────────────
+    # в”Ђв”Ђ Р‘С‹СЃС‚СЂС‹Рµ РґР°РЅРЅС‹Рµ (2 Р·Р°РїСЂРѕСЃР° Рє Strava API) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
     try:
         runs, load_48h = await asyncio.gather(
             get_recent_runs(access_token, days=14),
@@ -146,19 +146,19 @@ async def get_fitness_data(db_user_id: int, access_token: str) -> dict | None:
         fitness = analyze_fitness(runs)
         fitness["load_48h"] = load_48h
     except Exception as e:
-        logger.error(f"Ошибка получения пробежек: {e}")
-        fitness = {"summary": "Нет данных", "total_km": 0, "run_count": 0,
-                   "avg_pace": "—", "avg_hr": None, "fatigue_level": "unknown",
+        logger.error(f"РћС€РёР±РєР° РїРѕР»СѓС‡РµРЅРёСЏ РїСЂРѕР±РµР¶РµРє: {e}")
+        fitness = {"summary": "РќРµС‚ РґР°РЅРЅС‹С…", "total_km": 0, "run_count": 0,
+                   "avg_pace": "вЂ”", "avg_hr": None, "fatigue_level": "unknown",
                    "load_48h": None}
 
-    # ── Медленные данные (из кэша) ────────────────────────────
+    # в”Ђв”Ђ РњРµРґР»РµРЅРЅС‹Рµ РґР°РЅРЅС‹Рµ (РёР· РєСЌС€Р°) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
     cache = get_athlete_cache(db_user_id)
     if cache:
         fitness["training_load"] = cache["training_load"]
         fitness["predictions"]   = cache["predictions"]
         fitness["last_race"]     = cache["last_race"]
     else:
-        logger.info(f"Кэш отсутствует для user_id={db_user_id}, обновляю...")
+        logger.info(f"РљСЌС€ РѕС‚СЃСѓС‚СЃС‚РІСѓРµС‚ РґР»СЏ user_id={db_user_id}, РѕР±РЅРѕРІР»СЏСЋ...")
         athlete_data = await refresh_athlete_cache(db_user_id, access_token)
         if athlete_data:
             fitness["training_load"] = athlete_data["training_load"]
@@ -170,8 +170,8 @@ async def get_fitness_data(db_user_id: int, access_token: str) -> dict | None:
 
 async def get_garmin_fitness_data(db_user_id: int) -> dict | None:
     """
-    Получает данные атлета из Garmin Connect — аналог get_fitness_data() для Strava.
-    Возвращает dict, совместимый со структурой fitness для промта.
+    РџРѕР»СѓС‡Р°РµС‚ РґР°РЅРЅС‹Рµ Р°С‚Р»РµС‚Р° РёР· Garmin Connect вЂ” Р°РЅР°Р»РѕРі get_fitness_data() РґР»СЏ Strava.
+    Р’РѕР·РІСЂР°С‰Р°РµС‚ dict, СЃРѕРІРјРµСЃС‚РёРјС‹Р№ СЃРѕ СЃС‚СЂСѓРєС‚СѓСЂРѕР№ fitness РґР»СЏ РїСЂРѕРјС‚Р°.
     """
     import garmin as _garmin
     if not get_token(db_user_id, "garmin"):
@@ -196,7 +196,7 @@ async def get_garmin_fitness_data(db_user_id: int) -> dict | None:
         "summary": "",
         "total_km": 0,
         "run_count": 0,
-        "avg_pace": "—",
+        "avg_pace": "вЂ”",
         "avg_hr": None,
         "fatigue_level": "unknown",
     }
@@ -223,8 +223,8 @@ async def get_garmin_fitness_data(db_user_id: int) -> dict | None:
 
 async def get_coros_fitness_data(db_user_id: int) -> dict | None:
     """
-    Получает данные атлета из COROS — аналог get_garmin_fitness_data().
-    Возвращает dict, совместимый со структурой fitness для промта.
+    РџРѕР»СѓС‡Р°РµС‚ РґР°РЅРЅС‹Рµ Р°С‚Р»РµС‚Р° РёР· COROS вЂ” Р°РЅР°Р»РѕРі get_garmin_fitness_data().
+    Р’РѕР·РІСЂР°С‰Р°РµС‚ dict, СЃРѕРІРјРµСЃС‚РёРјС‹Р№ СЃРѕ СЃС‚СЂСѓРєС‚СѓСЂРѕР№ fitness РґР»СЏ РїСЂРѕРјС‚Р°.
     """
     import coros as _coros
     if not get_token(db_user_id, "coros"):
@@ -238,8 +238,8 @@ async def get_coros_fitness_data(db_user_id: int) -> dict | None:
 
 async def get_polar_fitness_data(db_user_id: int) -> dict | None:
     """
-    Получает данные атлета из Polar — аналог get_coros_fitness_data().
-    Возвращает dict, совместимый со структурой fitness для промта.
+    РџРѕР»СѓС‡Р°РµС‚ РґР°РЅРЅС‹Рµ Р°С‚Р»РµС‚Р° РёР· Polar вЂ” Р°РЅР°Р»РѕРі get_coros_fitness_data().
+    Р’РѕР·РІСЂР°С‰Р°РµС‚ dict, СЃРѕРІРјРµСЃС‚РёРјС‹Р№ СЃРѕ СЃС‚СЂСѓРєС‚СѓСЂРѕР№ fitness РґР»СЏ РїСЂРѕРјС‚Р°.
     """
     import polar as _polar
     if not get_token(db_user_id, "polar"):
@@ -251,23 +251,23 @@ async def get_polar_fitness_data(db_user_id: int) -> dict | None:
         return None
 
 
-# ── НАВИГАЦИЯ ─────────────────────────────────────────────────
+# в”Ђв”Ђ РќРђР’РР“РђР¦РРЇ в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 def get_main_keyboard(from_recommendation: bool = False) -> InlineKeyboardMarkup:
-    """Краткое меню под каждым ответом.
-    from_recommendation=True → главное меню открывается новым сообщением (/start-поведение).
-    from_recommendation=False → редактирует текущее сообщение (навигационные экраны).
+    """РљСЂР°С‚РєРѕРµ РјРµРЅСЋ РїРѕРґ РєР°Р¶РґС‹Рј РѕС‚РІРµС‚РѕРј.
+    from_recommendation=True в†’ РіР»Р°РІРЅРѕРµ РјРµРЅСЋ РѕС‚РєСЂС‹РІР°РµС‚СЃСЏ РЅРѕРІС‹Рј СЃРѕРѕР±С‰РµРЅРёРµРј (/start-РїРѕРІРµРґРµРЅРёРµ).
+    from_recommendation=False в†’ СЂРµРґР°РєС‚РёСЂСѓРµС‚ С‚РµРєСѓС‰РµРµ СЃРѕРѕР±С‰РµРЅРёРµ (РЅР°РІРёРіР°С†РёРѕРЅРЅС‹Рµ СЌРєСЂР°РЅС‹).
     """
     home_data = "main_menu_new" if from_recommendation else "main_menu"
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📋 Тренировка", callback_data="get_workout"),
-         InlineKeyboardButton("🕐 Long Run",   callback_data="get_long_run")],
-        [InlineKeyboardButton("🏠 Главное меню", callback_data=home_data)],
+        [InlineKeyboardButton("рџ“‹ РўСЂРµРЅРёСЂРѕРІРєР°", callback_data="get_workout"),
+         InlineKeyboardButton("рџ•ђ Long Run",   callback_data="get_long_run")],
+        [InlineKeyboardButton("рџЏ  Р“Р»Р°РІРЅРѕРµ РјРµРЅСЋ", callback_data=home_data)],
     ])
 
 
 def _merge_keyboards(*keyboards) -> InlineKeyboardMarkup:
-    """Объединяет несколько InlineKeyboardMarkup в один."""
+    """РћР±СЉРµРґРёРЅСЏРµС‚ РЅРµСЃРєРѕР»СЊРєРѕ InlineKeyboardMarkup РІ РѕРґРёРЅ."""
     rows = []
     for kb in keyboards:
         if kb:
@@ -276,92 +276,92 @@ def _merge_keyboards(*keyboards) -> InlineKeyboardMarkup:
 
 
 def _build_screen1_keyboard() -> InlineKeyboardMarkup:
-    """Экран 1 /start — основные действия."""
+    """Р­РєСЂР°РЅ 1 /start вЂ” РѕСЃРЅРѕРІРЅС‹Рµ РґРµР№СЃС‚РІРёСЏ."""
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📋 Тренировка", callback_data="get_workout"),
-         InlineKeyboardButton("🕐 Long Run",   callback_data="get_long_run")],
-        [InlineKeyboardButton("☀️ Утро",       callback_data="get_morning"),
-         InlineKeyboardButton("🧠 Режим AI",   callback_data="ai_mode")],
-        [InlineKeyboardButton("💬 Обратная связь", callback_data="feedback_show"),
-         InlineKeyboardButton("❓ Справка",        callback_data="help")],
-        [InlineKeyboardButton("⚙️ Настройки →",   callback_data="show_settings")],
+        [InlineKeyboardButton("рџ“‹ РўСЂРµРЅРёСЂРѕРІРєР°", callback_data="get_workout"),
+         InlineKeyboardButton("рџ•ђ Long Run",   callback_data="get_long_run")],
+        [InlineKeyboardButton("вЂпёЏ РЈС‚СЂРѕ",       callback_data="get_morning"),
+         InlineKeyboardButton("рџ§  Р РµР¶РёРј AI",   callback_data="ai_mode")],
+        [InlineKeyboardButton("рџ’¬ РћР±СЂР°С‚РЅР°СЏ СЃРІСЏР·СЊ", callback_data="feedback_show"),
+         InlineKeyboardButton("вќ“ РЎРїСЂР°РІРєР°",        callback_data="help")],
+        [InlineKeyboardButton("вљ™пёЏ РќР°СЃС‚СЂРѕР№РєРё в†’",   callback_data="show_settings")],
     ])
 
 
 def _build_screen1_onboarding_keyboard() -> InlineKeyboardMarkup:
-    """Экран 1 — онбординг нового пользователя (нет профиля или трекера)."""
+    """Р­РєСЂР°РЅ 1 вЂ” РѕРЅР±РѕСЂРґРёРЅРі РЅРѕРІРѕРіРѕ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ (РЅРµС‚ РїСЂРѕС„РёР»СЏ РёР»Рё С‚СЂРµРєРµСЂР°)."""
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("👤 1. Заполнить профиль",  callback_data="my_profile")],
-        [InlineKeyboardButton("🔗 2. Подключить трекер",  callback_data="show_services")],
-        [InlineKeyboardButton("📋 Тренировка", callback_data="get_workout"),
-         InlineKeyboardButton("🕐 Long Run",   callback_data="get_long_run")],
+        [InlineKeyboardButton("рџ‘¤ 1. Р—Р°РїРѕР»РЅРёС‚СЊ РїСЂРѕС„РёР»СЊ",  callback_data="my_profile")],
+        [InlineKeyboardButton("рџ”— 2. РџРѕРґРєР»СЋС‡РёС‚СЊ С‚СЂРµРєРµСЂ",  callback_data="show_services")],
+        [InlineKeyboardButton("рџ“‹ РўСЂРµРЅРёСЂРѕРІРєР°", callback_data="get_workout"),
+         InlineKeyboardButton("рџ•ђ Long Run",   callback_data="get_long_run")],
     ])
 
 
 def _build_screen2_keyboard() -> InlineKeyboardMarkup:
-    """Экран 2 — настройки."""
+    """Р­РєСЂР°РЅ 2 вЂ” РЅР°СЃС‚СЂРѕР№РєРё."""
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("👤 Профиль",        callback_data="my_profile"),
-         InlineKeyboardButton("🔔 Уведомления",    callback_data="notifications")],
-        [InlineKeyboardButton("🔄 Обновить данные", callback_data="refresh_cache"),
-         InlineKeyboardButton("🔗 Сервисы →",       callback_data="show_services")],
-        [InlineKeyboardButton("← Назад",            callback_data="main_menu")],
+        [InlineKeyboardButton("рџ‘¤ РџСЂРѕС„РёР»СЊ",        callback_data="my_profile"),
+         InlineKeyboardButton("рџ”” РЈРІРµРґРѕРјР»РµРЅРёСЏ",    callback_data="notifications")],
+        [InlineKeyboardButton("рџ”„ РћР±РЅРѕРІРёС‚СЊ РґР°РЅРЅС‹Рµ", callback_data="refresh_cache"),
+         InlineKeyboardButton("рџ”— РЎРµСЂРІРёСЃС‹ в†’",       callback_data="show_services")],
+        [InlineKeyboardButton("в†ђ РќР°Р·Р°Рґ",            callback_data="main_menu")],
     ])
 
 
 def _settings_nav() -> list:
-    """Строка навигации: ← Настройки + 🏠 Главное меню."""
+    """РЎС‚СЂРѕРєР° РЅР°РІРёРіР°С†РёРё: в†ђ РќР°СЃС‚СЂРѕР№РєРё + рџЏ  Р“Р»Р°РІРЅРѕРµ РјРµРЅСЋ."""
     return [
-        InlineKeyboardButton("← Настройки", callback_data="settings_menu"),
-        InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu"),
+        InlineKeyboardButton("в†ђ РќР°СЃС‚СЂРѕР№РєРё", callback_data="settings_menu"),
+        InlineKeyboardButton("рџЏ  Р“Р»Р°РІРЅРѕРµ РјРµРЅСЋ", callback_data="main_menu"),
     ]
 
 
-# Метаданные сервисов: (ключ, эмодзи, название, connect_callback, disconnect_done_msg)
+# РњРµС‚Р°РґР°РЅРЅС‹Рµ СЃРµСЂРІРёСЃРѕРІ: (РєР»СЋС‡, СЌРјРѕРґР·Рё, РЅР°Р·РІР°РЅРёРµ, connect_callback, disconnect_done_msg)
 _SERVICES = [
-    ("strava", "🟠", "Strava",  "connect_strava",      "Strava отключена"),
-    ("whoop",  "⚪", "Whoop",   "connect_whoop_btn",   "Whoop отключён"),
-    ("garmin", "🔵", "Garmin",  "connect_garmin_btn",  "Garmin отключён"),
-    ("coros",  "🔴", "COROS",   "connect_coros_btn",   "COROS отключён"),
-    ("polar",  "❄️", "Polar",   "connect_polar_btn",   "Polar отключён"),
+    ("strava", "рџџ ", "Strava",  "connect_strava",      "Strava РѕС‚РєР»СЋС‡РµРЅР°"),
+    ("whoop",  "вљЄ", "Whoop",   "connect_whoop_btn",   "Whoop РѕС‚РєР»СЋС‡С‘РЅ"),
+    ("garmin", "рџ”µ", "Garmin",  "connect_garmin_btn",  "Garmin РѕС‚РєР»СЋС‡С‘РЅ"),
+    ("coros",  "рџ”ґ", "COROS",   "connect_coros_btn",   "COROS РѕС‚РєР»СЋС‡С‘РЅ"),
+    ("polar",  "вќ„пёЏ", "Polar",   "connect_polar_btn",   "Polar РѕС‚РєР»СЋС‡С‘РЅ"),
 ]
 
 
 def _svc_name(svc: str) -> str:
-    """Возвращает отображаемое имя сервиса по ключу."""
+    """Р’РѕР·РІСЂР°С‰Р°РµС‚ РѕС‚РѕР±СЂР°Р¶Р°РµРјРѕРµ РёРјСЏ СЃРµСЂРІРёСЃР° РїРѕ РєР»СЋС‡Сѓ."""
     return next((name for s, _, name, _, _ in _SERVICES if s == svc), svc)
 
 
 def _svc_done_msg(svc: str) -> str:
-    """Возвращает сообщение после отключения сервиса."""
-    return next((msg for s, _, _, _, msg in _SERVICES if s == svc), f"{svc} отключён")
+    """Р’РѕР·РІСЂР°С‰Р°РµС‚ СЃРѕРѕР±С‰РµРЅРёРµ РїРѕСЃР»Рµ РѕС‚РєР»СЋС‡РµРЅРёСЏ СЃРµСЂРІРёСЃР°."""
+    return next((msg for s, _, _, _, msg in _SERVICES if s == svc), f"{svc} РѕС‚РєР»СЋС‡С‘РЅ")
 
 
 def _build_screen3_keyboard(db_user_id: int) -> InlineKeyboardMarkup:
-    """Экран 3 — подключение/отключение сервисов.
+    """Р­РєСЂР°РЅ 3 вЂ” РїРѕРґРєР»СЋС‡РµРЅРёРµ/РѕС‚РєР»СЋС‡РµРЅРёРµ СЃРµСЂРІРёСЃРѕРІ.
 
-    Подключён:    [🟠 Strava ✅]  [❌ Отключить]
-    Не подключён: [🟠 Strava ❌  Подключить]
+    РџРѕРґРєР»СЋС‡С‘РЅ:    [рџџ  Strava вњ…]  [вќЊ РћС‚РєР»СЋС‡РёС‚СЊ]
+    РќРµ РїРѕРґРєР»СЋС‡С‘РЅ: [рџџ  Strava вќЊ  РџРѕРґРєР»СЋС‡РёС‚СЊ]
     """
     rows = []
     for svc, emoji, name, connect_cb, _ in _SERVICES:
         if get_token(db_user_id, svc):
             rows.append([
-                InlineKeyboardButton(f"{emoji} {name} ✅", callback_data="svc_noop"),
-                InlineKeyboardButton("❌ Отключить",        callback_data=f"disc_ask_{svc}"),
+                InlineKeyboardButton(f"{emoji} {name} вњ…", callback_data="svc_noop"),
+                InlineKeyboardButton("вќЊ РћС‚РєР»СЋС‡РёС‚СЊ",        callback_data=f"disc_ask_{svc}"),
             ])
         else:
             if svc == "strava":
-                label = f"{emoji} {name} ❌  (на проверке)"
+                label = f"{emoji} {name} вќЊ  (РЅР° РїСЂРѕРІРµСЂРєРµ)"
             else:
-                label = f"{emoji} {name} ❌  Подключить"
+                label = f"{emoji} {name} вќЊ  РџРѕРґРєР»СЋС‡РёС‚СЊ"
             rows.append([InlineKeyboardButton(label, callback_data=connect_cb)])
     rows.append(_settings_nav())
     return InlineKeyboardMarkup(rows)
 
 
 def _build_main_menu_content(user, db_user_id: int) -> tuple[str, InlineKeyboardMarkup]:
-    """Строит (text, keyboard) для главного меню — используется и при edit, и при send."""
+    """РЎС‚СЂРѕРёС‚ (text, keyboard) РґР»СЏ РіР»Р°РІРЅРѕРіРѕ РјРµРЅСЋ вЂ” РёСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ Рё РїСЂРё edit, Рё РїСЂРё send."""
     strava  = get_token(db_user_id, "strava")
     whoop   = get_token(db_user_id, "whoop")
     garmin  = get_token(db_user_id, "garmin")
@@ -374,54 +374,54 @@ def _build_main_menu_content(user, db_user_id: int) -> tuple[str, InlineKeyboard
     all_set      = profile_ok and fitness_ok and recovery_ok
 
     if all_set:
-        status_lines = ["✅ Профиль заполнен"]
+        status_lines = ["вњ… РџСЂРѕС„РёР»СЊ Р·Р°РїРѕР»РЅРµРЅ"]
         if strava:
-            status_lines.append("✅ Strava подключена")
+            status_lines.append("вњ… Strava РїРѕРґРєР»СЋС‡РµРЅР°")
         if garmin:
-            status_lines.append("✅ Garmin подключён")
+            status_lines.append("вњ… Garmin РїРѕРґРєР»СЋС‡С‘РЅ")
         if whoop:
-            status_lines.append("✅ Whoop подключён")
+            status_lines.append("вњ… Whoop РїРѕРґРєР»СЋС‡С‘РЅ")
 
         fitness_src   = "CTL/ATL/TSB (Strava)" if strava else "Training Load (Garmin)"
         recovery_name = "Whoop" if whoop else "Garmin"
 
         text = (
-            f"Привет, {user.first_name}! 👋\n\n"
+            f"РџСЂРёРІРµС‚, {user.first_name}! рџ‘‹\n\n"
             + "\n".join(status_lines) + "\n\n"
-            "Что умею:\n"
-            f"🏃 Анализирую форму ({fitness_src}), восстановление и рекомендую группу "
-            "для тренировки вт/пт с процентной шкалой подходимости\n"
-            "🕐 То же самое для воскресного Long Run с рекомендацией стратегии "
-            "(ровный темп или прогрессия)\n"
-            f"☀️ Утром в день тренировки проверяю восстановление и корректирую план\n"
-            "📢 Автоматически уведомляю когда выходит новый анонс тренировки\n\n"
-            "Выбери действие 👇"
+            "Р§С‚Рѕ СѓРјРµСЋ:\n"
+            f"рџЏѓ РђРЅР°Р»РёР·РёСЂСѓСЋ С„РѕСЂРјСѓ ({fitness_src}), РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРёРµ Рё СЂРµРєРѕРјРµРЅРґСѓСЋ РіСЂСѓРїРїСѓ "
+            "РґР»СЏ С‚СЂРµРЅРёСЂРѕРІРєРё РІС‚/РїС‚ СЃ РїСЂРѕС†РµРЅС‚РЅРѕР№ С€РєР°Р»РѕР№ РїРѕРґС…РѕРґРёРјРѕСЃС‚Рё\n"
+            "рџ•ђ РўРѕ Р¶Рµ СЃР°РјРѕРµ РґР»СЏ РІРѕСЃРєСЂРµСЃРЅРѕРіРѕ Long Run СЃ СЂРµРєРѕРјРµРЅРґР°С†РёРµР№ СЃС‚СЂР°С‚РµРіРёРё "
+            "(СЂРѕРІРЅС‹Р№ С‚РµРјРї РёР»Рё РїСЂРѕРіСЂРµСЃСЃРёСЏ)\n"
+            f"вЂпёЏ РЈС‚СЂРѕРј РІ РґРµРЅСЊ С‚СЂРµРЅРёСЂРѕРІРєРё РїСЂРѕРІРµСЂСЏСЋ РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРёРµ Рё РєРѕСЂСЂРµРєС‚РёСЂСѓСЋ РїР»Р°РЅ\n"
+            "рџ“ў РђРІС‚РѕРјР°С‚РёС‡РµСЃРєРё СѓРІРµРґРѕРјР»СЏСЋ РєРѕРіРґР° РІС‹С…РѕРґРёС‚ РЅРѕРІС‹Р№ Р°РЅРѕРЅСЃ С‚СЂРµРЅРёСЂРѕРІРєРё\n\n"
+            "Р’С‹Р±РµСЂРё РґРµР№СЃС‚РІРёРµ рџ‘‡"
         )
     else:
-        # Показываем чек-лист того, что уже подключено
+        # РџРѕРєР°Р·С‹РІР°РµРј С‡РµРє-Р»РёСЃС‚ С‚РѕРіРѕ, С‡С‚Рѕ СѓР¶Рµ РїРѕРґРєР»СЋС‡РµРЅРѕ
         done = []
         if profile_ok:
-            done.append("✅ Профиль заполнен")
+            done.append("вњ… РџСЂРѕС„РёР»СЊ Р·Р°РїРѕР»РЅРµРЅ")
         if fitness_ok:
             svc_names = []
             if garmin: svc_names.append("Garmin")
             if coros:  svc_names.append("COROS")
             if polar:  svc_names.append("Polar")
             if strava: svc_names.append("Strava")
-            done.append("✅ Трекер: " + ", ".join(svc_names))
+            done.append("вњ… РўСЂРµРєРµСЂ: " + ", ".join(svc_names))
         if whoop:
-            done.append("✅ Whoop подключён")
+            done.append("вњ… Whoop РїРѕРґРєР»СЋС‡С‘РЅ")
 
         done_block = ("\n" + "\n".join(done) + "\n") if done else ""
 
         text = (
-            f"Привет, {user.first_name}! 👋\n"
+            f"РџСЂРёРІРµС‚, {user.first_name}! рџ‘‹\n"
             f"{done_block}\n"
-            "Я помогу подготовиться к тренировкам Dusty Dumbbells.\n\n"
-            "Для начала сделай два шага:\n"
-            "1️⃣ Заполни профиль — VO2max и лактатный порог\n"
-            "2️⃣ Подключи трекер — Garmin, COROS, Polar или Strava\n\n"
-            "Выбери действие 👇"
+            "РЇ РїРѕРјРѕРіСѓ РїРѕРґРіРѕС‚РѕРІРёС‚СЊСЃСЏ Рє С‚СЂРµРЅРёСЂРѕРІРєР°Рј Dusty Dumbbells.\n\n"
+            "Р”Р»СЏ РЅР°С‡Р°Р»Р° СЃРґРµР»Р°Р№ РґРІР° С€Р°РіР°:\n"
+            "1пёЏвѓЈ Р—Р°РїРѕР»РЅРё РїСЂРѕС„РёР»СЊ вЂ” VO2max Рё Р»Р°РєС‚Р°С‚РЅС‹Р№ РїРѕСЂРѕРі\n"
+            "2пёЏвѓЈ РџРѕРґРєР»СЋС‡Рё С‚СЂРµРєРµСЂ вЂ” Garmin, COROS, Polar РёР»Рё Strava\n\n"
+            "Р’С‹Р±РµСЂРё РґРµР№СЃС‚РІРёРµ рџ‘‡"
         )
         return text, _build_screen1_onboarding_keyboard()
 
@@ -429,7 +429,7 @@ def _build_main_menu_content(user, db_user_id: int) -> tuple[str, InlineKeyboard
 
 
 async def _show_main_menu(query_or_update, user, db_user_id: int):
-    """Показывает Экран 1 редактируя текущее сообщение (для навигационных экранов)."""
+    """РџРѕРєР°Р·С‹РІР°РµС‚ Р­РєСЂР°РЅ 1 СЂРµРґР°РєС‚РёСЂСѓСЏ С‚РµРєСѓС‰РµРµ СЃРѕРѕР±С‰РµРЅРёРµ (РґР»СЏ РЅР°РІРёРіР°С†РёРѕРЅРЅС‹С… СЌРєСЂР°РЅРѕРІ)."""
     text, keyboard = _build_main_menu_content(user, db_user_id)
     if hasattr(query_or_update, 'edit_message_text'):
         try:
@@ -440,7 +440,7 @@ async def _show_main_menu(query_or_update, user, db_user_id: int):
         await query_or_update.message.reply_text(text, reply_markup=keyboard)
 
 
-# ── КОМАНДЫ ───────────────────────────────────────────────────
+# в”Ђв”Ђ РљРћРњРђРќР”Р« в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -451,8 +451,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         uname = f" (@{user.username})" if user.username else ""
         await _notify_admin(
             context.bot,
-            f"👤 Новый пользователь: {user.full_name}{uname}\n"
-            f"Всего пользователей: {total}"
+            f"рџ‘¤ РќРѕРІС‹Р№ РїРѕР»СЊР·РѕРІР°С‚РµР»СЊ: {user.full_name}{uname}\n"
+            f"Р’СЃРµРіРѕ РїРѕР»СЊР·РѕРІР°С‚РµР»РµР№: {total}"
         )
     await _show_main_menu(update, user, db_user_id)
 
@@ -461,7 +461,7 @@ async def cmd_workout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db_user_id = _mark_user_active_if_needed(user.id, user.full_name, user.username)
     log_activity(db_user_id, '/workout')
-    msg = await update.message.reply_text("🔍 Подбираю тренировку...")
+    msg = await update.message.reply_text("рџ”Ќ РџРѕРґР±РёСЂР°СЋ С‚СЂРµРЅРёСЂРѕРІРєСѓ...")
     await _send_recommendation(user.id, user.full_name, context, long=False, msg=msg)
 
 
@@ -469,7 +469,7 @@ async def cmd_long(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db_user_id = _mark_user_active_if_needed(user.id, user.full_name, user.username)
     log_activity(db_user_id, '/long')
-    msg = await update.message.reply_text("🔍 Подбираю Long Run...")
+    msg = await update.message.reply_text("рџ”Ќ РџРѕРґР±РёСЂР°СЋ Long Run...")
     await _send_recommendation(user.id, user.full_name, context, long=True, msg=msg)
 
 
@@ -477,42 +477,42 @@ async def cmd_morning(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db_user_id = _mark_user_active_if_needed(user.id, user.full_name, user.username)
     log_activity(db_user_id, '/morning')
-    msg = await update.message.reply_text("☀️ Проверяю твоё восстановление...")
+    msg = await update.message.reply_text("вЂпёЏ РџСЂРѕРІРµСЂСЏСЋ С‚РІРѕС‘ РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРёРµ...")
     await _send_morning_check(user.id, context, msg)
 
 
 async def cmd_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Принудительное обновление кэша данных атлета"""
+    """РџСЂРёРЅСѓРґРёС‚РµР»СЊРЅРѕРµ РѕР±РЅРѕРІР»РµРЅРёРµ РєСЌС€Р° РґР°РЅРЅС‹С… Р°С‚Р»РµС‚Р°"""
     user = update.effective_user
     db_user_id = _mark_user_active_if_needed(user.id, user.full_name, user.username)
 
     access_token = await ensure_valid_token(db_user_id)
     if not access_token:
-        await update.message.reply_text("❌ Strava не подключена. Сначала /connect_strava")
+        await update.message.reply_text("вќЊ Strava РЅРµ РїРѕРґРєР»СЋС‡РµРЅР°. РЎРЅР°С‡Р°Р»Р° /connect_strava")
         return
 
-    msg = await update.message.reply_text("⏳ Обновляю данные...")
+    msg = await update.message.reply_text("вЏі РћР±РЅРѕРІР»СЏСЋ РґР°РЅРЅС‹Рµ...")
     athlete_data = await refresh_athlete_cache(db_user_id, access_token, msg)
 
     if athlete_data:
         load = athlete_data["training_load"]
         cache = get_athlete_cache(db_user_id)
-        updated_at = cache["updated_at"] if cache else "только что"
+        updated_at = cache["updated_at"] if cache else "С‚РѕР»СЊРєРѕ С‡С‚Рѕ"
         await msg.edit_text(
-            f"✅ Данные обновлены!\n\n"
-            f"Тренированность (CTL): {load.get('ctl', '—')}\n"
-            f"Усталость (ATL): {load.get('atl', '—')}\n"
-            f"Форма (TSB): {load.get('tsb', '—')} — {load.get('form_text', '—')}\n"
-            f"Тренд: {load.get('trend_text', '—')}\n\n"
-            f"Обновлено: {updated_at}"
+            f"вњ… Р”Р°РЅРЅС‹Рµ РѕР±РЅРѕРІР»РµРЅС‹!\n\n"
+            f"РўСЂРµРЅРёСЂРѕРІР°РЅРЅРѕСЃС‚СЊ (CTL): {load.get('ctl', 'вЂ”')}\n"
+            f"РЈСЃС‚Р°Р»РѕСЃС‚СЊ (ATL): {load.get('atl', 'вЂ”')}\n"
+            f"Р¤РѕСЂРјР° (TSB): {load.get('tsb', 'вЂ”')} вЂ” {load.get('form_text', 'вЂ”')}\n"
+            f"РўСЂРµРЅРґ: {load.get('trend_text', 'вЂ”')}\n\n"
+            f"РћР±РЅРѕРІР»РµРЅРѕ: {updated_at}"
         )
     else:
-        await msg.edit_text("❌ Не удалось обновить данные. Попробуй позже.")
+        await msg.edit_text("вќЊ РќРµ СѓРґР°Р»РѕСЃСЊ РѕР±РЅРѕРІРёС‚СЊ РґР°РЅРЅС‹Рµ. РџРѕРїСЂРѕР±СѓР№ РїРѕР·Р¶Рµ.")
 
 
 def _fmt_workout_date(workout_date: str) -> tuple[str, str]:
-    """Возвращает (date_fmt '27.05', weekday 'Вторник')."""
-    _WEEKDAYS_RU = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+    """Р’РѕР·РІСЂР°С‰Р°РµС‚ (date_fmt '27.05', weekday 'Р’С‚РѕСЂРЅРёРє')."""
+    _WEEKDAYS_RU = ["РџРѕРЅРµРґРµР»СЊРЅРёРє", "Р’С‚РѕСЂРЅРёРє", "РЎСЂРµРґР°", "Р§РµС‚РІРµСЂРі", "РџСЏС‚РЅРёС†Р°", "РЎСѓР±Р±РѕС‚Р°", "Р’РѕСЃРєСЂРµСЃРµРЅСЊРµ"]
     try:
         from datetime import datetime as _dt
         dt_obj = _dt.strptime(workout_date, "%Y-%m-%d")
@@ -522,28 +522,28 @@ def _fmt_workout_date(workout_date: str) -> tuple[str, str]:
 
 
 def _build_simple_workout_text(workout: dict) -> str:
-    """Упрощённое уведомление для пользователей без профиля/трекера."""
+    """РЈРїСЂРѕС‰С‘РЅРЅРѕРµ СѓРІРµРґРѕРјР»РµРЅРёРµ РґР»СЏ РїРѕР»СЊР·РѕРІР°С‚РµР»РµР№ Р±РµР· РїСЂРѕС„РёР»СЏ/С‚СЂРµРєРµСЂР°."""
     date_fmt, weekday = _fmt_workout_date(workout.get("workout_date", ""))
-    location  = workout.get("location") or "—"
-    schedule  = workout.get("schedule") or "—"
+    location  = workout.get("location") or "вЂ”"
+    schedule  = workout.get("schedule") or "вЂ”"
     work_text = (workout.get("work_text") or "").strip()
     groups_raw = (workout.get("groups_raw") or "").strip()
 
-    lines = [f"📢 Завтра тренировка Dusty Dumbbells!\n"]
-    lines.append(f"{weekday} {date_fmt} | 📍 {location}")
-    lines.append(f"⏰ {schedule}")
+    lines = [f"рџ“ў Р—Р°РІС‚СЂР° С‚СЂРµРЅРёСЂРѕРІРєР° Dusty Dumbbells!\n"]
+    lines.append(f"{weekday} {date_fmt} | рџ“Ќ {location}")
+    lines.append(f"вЏ° {schedule}")
     if work_text:
-        lines.append(f"\n💪 {work_text}")
+        lines.append(f"\nрџ’Є {work_text}")
     if groups_raw:
-        lines.append(f"\nГруппы:\n{groups_raw[:400]}")
+        lines.append(f"\nР“СЂСѓРїРїС‹:\n{groups_raw[:400]}")
     lines.append(
-        "\nМне очень жаль, что могу только напомнить тебе о тренировке, "
-        "но не могу дать рекомендаций о погоде, разминке, группе, питании и стратегии. 🤷"
+        "\nРњРЅРµ РѕС‡РµРЅСЊ Р¶Р°Р»СЊ, С‡С‚Рѕ РјРѕРіСѓ С‚РѕР»СЊРєРѕ РЅР°РїРѕРјРЅРёС‚СЊ С‚РµР±Рµ Рѕ С‚СЂРµРЅРёСЂРѕРІРєРµ, "
+        "РЅРѕ РЅРµ РјРѕРіСѓ РґР°С‚СЊ СЂРµРєРѕРјРµРЅРґР°С†РёР№ Рѕ РїРѕРіРѕРґРµ, СЂР°Р·РјРёРЅРєРµ, РіСЂСѓРїРїРµ, РїРёС‚Р°РЅРёРё Рё СЃС‚СЂР°С‚РµРіРёРё. рџ¤·"
     )
     lines.append(
-        "\nЧтобы получить полный анализ — заполни профиль и подключи трекер:\n"
-        "👤 /profile — VO2max и лактатный порог\n"
-        "🔗 Garmin, COROS или Polar — /connect_garmin, /connect_coros"
+        "\nР§С‚РѕР±С‹ РїРѕР»СѓС‡РёС‚СЊ РїРѕР»РЅС‹Р№ Р°РЅР°Р»РёР· вЂ” Р·Р°РїРѕР»РЅРё РїСЂРѕС„РёР»СЊ Рё РїРѕРґРєР»СЋС‡Рё С‚СЂРµРєРµСЂ:\n"
+        "рџ‘¤ /profile вЂ” VO2max Рё Р»Р°РєС‚Р°С‚РЅС‹Р№ РїРѕСЂРѕРі\n"
+        "рџ”— Garmin, COROS РёР»Рё Polar вЂ” /connect_garmin, /connect_coros"
     )
     return "\n".join(lines)
 
@@ -556,46 +556,46 @@ def _build_status_text(db_user_id: int) -> tuple[str, InlineKeyboardMarkup | Non
     prefs = get_preferences(db_user_id)
     use_garmin_rec = prefs.get("use_garmin_recovery", True) if prefs else True
 
-    lines = ["Подключённые сервисы:\n"]
-    lines.append(f"{'✅' if strava else '❌'} Strava")
-    lines.append(f"{'✅' if whoop else '❌'} Whoop")
-    lines.append(f"{'✅' if garmin else '❌'} Garmin")
+    lines = ["РџРѕРґРєР»СЋС‡С‘РЅРЅС‹Рµ СЃРµСЂРІРёСЃС‹:\n"]
+    lines.append(f"{'вњ…' if strava else 'вќЊ'} Strava")
+    lines.append(f"{'вњ…' if whoop else 'вќЊ'} Whoop")
+    lines.append(f"{'вњ…' if garmin else 'вќЊ'} Garmin")
 
     if cache:
-        lines.append(f"\nДанные Strava: обновлены {cache['updated_at'][:10]}")
+        lines.append(f"\nР”Р°РЅРЅС‹Рµ Strava: РѕР±РЅРѕРІР»РµРЅС‹ {cache['updated_at'][:10]}")
     else:
-        lines.append("\nДанные Strava: не загружены (/refresh)")
+        lines.append("\nР”Р°РЅРЅС‹Рµ Strava: РЅРµ Р·Р°РіСЂСѓР¶РµРЅС‹ (/refresh)")
 
-    # Источник данных восстановления
-    lines.append("\nИсточник восстановления:")
+    # РСЃС‚РѕС‡РЅРёРє РґР°РЅРЅС‹С… РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРёСЏ
+    lines.append("\nРСЃС‚РѕС‡РЅРёРє РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРёСЏ:")
     if whoop:
-        lines.append("  Whoop (приоритет)")
+        lines.append("  Whoop (РїСЂРёРѕСЂРёС‚РµС‚)")
         if garmin:
-            lines.append("  Garmin — резерв если Whoop недоступен")
+            lines.append("  Garmin вЂ” СЂРµР·РµСЂРІ РµСЃР»Рё Whoop РЅРµРґРѕСЃС‚СѓРїРµРЅ")
     elif garmin:
         if use_garmin_rec:
             lines.append("  Garmin (Body Battery, HRV)")
         else:
-            lines.append("  Garmin подключён, но данные восстановления отключены")
+            lines.append("  Garmin РїРѕРґРєР»СЋС‡С‘РЅ, РЅРѕ РґР°РЅРЅС‹Рµ РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРёСЏ РѕС‚РєР»СЋС‡РµРЅС‹")
     else:
-        lines.append("  Нет данных (подключи Whoop или Garmin)")
+        lines.append("  РќРµС‚ РґР°РЅРЅС‹С… (РїРѕРґРєР»СЋС‡Рё Whoop РёР»Рё Garmin)")
 
     keyboard = None
     if garmin and not whoop:
-        toggle_label = "Отключить Garmin для восстановления" if use_garmin_rec else "Включить Garmin для восстановления"
+        toggle_label = "РћС‚РєР»СЋС‡РёС‚СЊ Garmin РґР»СЏ РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРёСЏ" if use_garmin_rec else "Р’РєР»СЋС‡РёС‚СЊ Garmin РґР»СЏ РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРёСЏ"
         keyboard = InlineKeyboardMarkup([[
             InlineKeyboardButton(toggle_label, callback_data="toggle_garmin_recovery")
         ]])
 
     if not strava:
-        lines.append("\nПодключи Strava: /connect_strava")
+        lines.append("\nРџРѕРґРєР»СЋС‡Рё Strava: /connect_strava")
 
     last_notif = get_last_workout_notification()
     if last_notif and last_notif.get("workout_date"):
         date_fmt, weekday = _fmt_workout_date(last_notif["workout_date"])
-        lines.append(f"\nПоследний анонс: {weekday} {date_fmt} (уведомлено {last_notif['users_notified']} польз.)")
+        lines.append(f"\nРџРѕСЃР»РµРґРЅРёР№ Р°РЅРѕРЅСЃ: {weekday} {date_fmt} (СѓРІРµРґРѕРјР»РµРЅРѕ {last_notif['users_notified']} РїРѕР»СЊР·.)")
 
-    lines.append(f"\nВерсия бота: {VERSION} ({BUILD_DATE})")
+    lines.append(f"\nР’РµСЂСЃРёСЏ Р±РѕС‚Р°: {VERSION} ({BUILD_DATE})")
 
     return '\n'.join(lines), keyboard
 
@@ -619,12 +619,12 @@ async def cmd_connect_strava(update: Update, context: ContextTypes.DEFAULT_TYPE)
     user = update.effective_user
     _mark_user_active_if_needed(user.id, user.full_name, user.username)
     auth_url = get_auth_url(user.id)
-    keyboard = [[InlineKeyboardButton("🔗 Войти в Strava", url=auth_url)]]
+    keyboard = [[InlineKeyboardButton("рџ”— Р’РѕР№С‚Рё РІ Strava", url=auth_url)]]
     await update.message.reply_text(
-        "⚠️ Strava временно ограничена — подключение новых пользователей на проверке у Strava.\n"
-        "Используй Garmin или COROS (/connect_garmin, /connect_coros) для полноценной работы.\n\n"
-        "Нажми кнопку и авторизуйся в Strava.\n\n"
-        "После авторизации ты автоматически получишь сообщение в Telegram — ничего копировать не нужно.",
+        "вљ пёЏ Strava РІСЂРµРјРµРЅРЅРѕ РѕРіСЂР°РЅРёС‡РµРЅР° вЂ” РїРѕРґРєР»СЋС‡РµРЅРёРµ РЅРѕРІС‹С… РїРѕР»СЊР·РѕРІР°С‚РµР»РµР№ РЅР° РїСЂРѕРІРµСЂРєРµ Сѓ Strava.\n"
+        "РСЃРїРѕР»СЊР·СѓР№ Garmin РёР»Рё COROS (/connect_garmin, /connect_coros) РґР»СЏ РїРѕР»РЅРѕС†РµРЅРЅРѕР№ СЂР°Р±РѕС‚С‹.\n\n"
+        "РќР°Р¶РјРё РєРЅРѕРїРєСѓ Рё Р°РІС‚РѕСЂРёР·СѓР№СЃСЏ РІ Strava.\n\n"
+        "РџРѕСЃР»Рµ Р°РІС‚РѕСЂРёР·Р°С†РёРё С‚С‹ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё РїРѕР»СѓС‡РёС€СЊ СЃРѕРѕР±С‰РµРЅРёРµ РІ Telegram вЂ” РЅРёС‡РµРіРѕ РєРѕРїРёСЂРѕРІР°С‚СЊ РЅРµ РЅСѓР¶РЅРѕ.",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
@@ -634,11 +634,11 @@ async def cmd_connect_whoop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     _mark_user_active_if_needed(user.id, user.full_name, user.username)
     auth_url = whoop_auth_url(user.id)
-    keyboard = [[InlineKeyboardButton("🔗 Войти в Whoop", url=auth_url)]]
+    keyboard = [[InlineKeyboardButton("рџ”— Р’РѕР№С‚Рё РІ Whoop", url=auth_url)]]
     await update.message.reply_text(
-        "Нажми кнопку и авторизуйся в Whoop.\n\n"
-        "После авторизации браузер откроет страницу с JSON — "
-        "скопируй весь URL из адресной строки и отправь мне сюда.",
+        "РќР°Р¶РјРё РєРЅРѕРїРєСѓ Рё Р°РІС‚РѕСЂРёР·СѓР№СЃСЏ РІ Whoop.\n\n"
+        "РџРѕСЃР»Рµ Р°РІС‚РѕСЂРёР·Р°С†РёРё Р±СЂР°СѓР·РµСЂ РѕС‚РєСЂРѕРµС‚ СЃС‚СЂР°РЅРёС†Сѓ СЃ JSON вЂ” "
+        "СЃРєРѕРїРёСЂСѓР№ РІРµСЃСЊ URL РёР· Р°РґСЂРµСЃРЅРѕР№ СЃС‚СЂРѕРєРё Рё РѕС‚РїСЂР°РІСЊ РјРЅРµ СЃСЋРґР°.",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
     context.user_data["awaiting_whoop_code"] = True
@@ -647,10 +647,10 @@ async def cmd_connect_whoop(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_connect_garmin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _mark_user_active_if_needed(update.effective_user.id, update.effective_user.full_name, update.effective_user.username)
     await update.message.reply_text(
-        "Подключение Garmin Connect\n\n"
-        "Email и пароль хранятся на сервере в зашифрованном виде (AES-256) — "
-        "в открытом виде они нигде не сохраняются.\n\n"
-        "Введи email от Garmin Connect:"
+        "РџРѕРґРєР»СЋС‡РµРЅРёРµ Garmin Connect\n\n"
+        "Email Рё РїР°СЂРѕР»СЊ С…СЂР°РЅСЏС‚СЃСЏ РЅР° СЃРµСЂРІРµСЂРµ РІ Р·Р°С€РёС„СЂРѕРІР°РЅРЅРѕРј РІРёРґРµ (AES-256) вЂ” "
+        "РІ РѕС‚РєСЂС‹С‚РѕРј РІРёРґРµ РѕРЅРё РЅРёРіРґРµ РЅРµ СЃРѕС…СЂР°РЅСЏСЋС‚СЃСЏ.\n\n"
+        "Р’РІРµРґРё email РѕС‚ Garmin Connect:"
     )
     context.user_data["awaiting_garmin"] = "email"
 
@@ -658,10 +658,10 @@ async def cmd_connect_garmin(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def cmd_connect_coros(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _mark_user_active_if_needed(update.effective_user.id, update.effective_user.full_name, update.effective_user.username)
     await update.message.reply_text(
-        "Подключение COROS\n\n"
-        "Email и пароль хранятся на сервере в зашифрованном виде (AES-256) — "
-        "в открытом виде они нигде не сохраняются.\n\n"
-        "Введи email от аккаунта COROS:"
+        "РџРѕРґРєР»СЋС‡РµРЅРёРµ COROS\n\n"
+        "Email Рё РїР°СЂРѕР»СЊ С…СЂР°РЅСЏС‚СЃСЏ РЅР° СЃРµСЂРІРµСЂРµ РІ Р·Р°С€РёС„СЂРѕРІР°РЅРЅРѕРј РІРёРґРµ (AES-256) вЂ” "
+        "РІ РѕС‚РєСЂС‹С‚РѕРј РІРёРґРµ РѕРЅРё РЅРёРіРґРµ РЅРµ СЃРѕС…СЂР°РЅСЏСЋС‚СЃСЏ.\n\n"
+        "Р’РІРµРґРё email РѕС‚ Р°РєРєР°СѓРЅС‚Р° COROS:"
     )
     context.user_data["awaiting_coros"] = "email"
 
@@ -673,28 +673,28 @@ async def cmd_connect_polar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     auth_url = polar_auth_url(user.id)
     if not auth_url:
         await update.message.reply_text(
-            "❌ Polar не настроен. Обратитесь к администратору."
+            "вќЊ Polar РЅРµ РЅР°СЃС‚СЂРѕРµРЅ. РћР±СЂР°С‚РёС‚РµСЃСЊ Рє Р°РґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂСѓ."
         )
         return
-    keyboard = [[InlineKeyboardButton("🔗 Войти в Polar", url=auth_url)]]
+    keyboard = [[InlineKeyboardButton("рџ”— Р’РѕР№С‚Рё РІ Polar", url=auth_url)]]
     await update.message.reply_text(
-        "Подключение Polar\n\n"
-        "Нажми кнопку и авторизуйся в Polar Flow.\n\n"
-        "После авторизации ты автоматически получишь сообщение в Telegram — ничего копировать не нужно.",
+        "РџРѕРґРєР»СЋС‡РµРЅРёРµ Polar\n\n"
+        "РќР°Р¶РјРё РєРЅРѕРїРєСѓ Рё Р°РІС‚РѕСЂРёР·СѓР№СЃСЏ РІ Polar Flow.\n\n"
+        "РџРѕСЃР»Рµ Р°РІС‚РѕСЂРёР·Р°С†РёРё С‚С‹ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё РїРѕР»СѓС‡РёС€СЊ СЃРѕРѕР±С‰РµРЅРёРµ РІ Telegram вЂ” РЅРёС‡РµРіРѕ РєРѕРїРёСЂРѕРІР°С‚СЊ РЅРµ РЅСѓР¶РЅРѕ.",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 
 async def cmd_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показывает последний промпт (только для админов)."""
+    """РџРѕРєР°Р·С‹РІР°РµС‚ РїРѕСЃР»РµРґРЅРёР№ РїСЂРѕРјРїС‚ (С‚РѕР»СЊРєРѕ РґР»СЏ Р°РґРјРёРЅРѕРІ)."""
     if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
-        await update.message.reply_text("Нет доступа.")
+        await update.message.reply_text("РќРµС‚ РґРѕСЃС‚СѓРїР°.")
         return
     prompt = claude_advisor.last_prompt
     if not prompt:
-        await update.message.reply_text("Промпт ещё не отправлялся. Сначала /workout.")
+        await update.message.reply_text("РџСЂРѕРјРїС‚ РµС‰С‘ РЅРµ РѕС‚РїСЂР°РІР»СЏР»СЃСЏ. РЎРЅР°С‡Р°Р»Р° /workout.")
         return
-    text = f"Последний промпт ({len(prompt)} симв.):\n\n{prompt}"
+    text = f"РџРѕСЃР»РµРґРЅРёР№ РїСЂРѕРјРїС‚ ({len(prompt)} СЃРёРјРІ.):\n\n{prompt}"
     for i in range(0, len(text), 4096):
         await update.message.reply_text(text[i:i + 4096])
 
@@ -710,66 +710,84 @@ def _vo2max_tag(profile: dict) -> str:
         except Exception:
             days = 999
         if days > 30:
-            return f"Garmin · {date_str} · устарело"
-        return f"Garmin · {date_str}"
+            return f"Garmin В· {date_str} В· СѓСЃС‚Р°СЂРµР»Рѕ"
+        return f"Garmin В· {date_str}"
     if source == "manual":
-        return "вручную"
-    return "вручную" if updated else ""
+        return "РІСЂСѓС‡РЅСѓСЋ"
+    return "РІСЂСѓС‡РЅСѓСЋ" if updated else ""
 
 
 SPECIALIZATIONS = {
-    "5k": "5 км",
-    "10k": "10 км",
-    "half_marathon": "Полумарафон",
-    "marathon": "Марафон",
-    "speed": "Развитие скорости",
-    "fitness": "Общая форма",
+    "5k": "5 РєРј",
+    "10k": "10 РєРј",
+    "half_marathon": "РџРѕР»СѓРјР°СЂР°С„РѕРЅ",
+    "marathon": "РњР°СЂР°С„РѕРЅ",
+    "speed": "Р Р°Р·РІРёС‚РёРµ СЃРєРѕСЂРѕСЃС‚Рё",
+    "fitness": "РћР±С‰Р°СЏ С„РѕСЂРјР°",
 }
 
 
 def _build_profile_text(profile: dict | None) -> str:
     if not profile or not any([profile.get("vo2max"), profile.get("lactate_threshold_pace"), profile.get("gender")]):
-        return "Профиль не заполнен. Используй кнопки ниже чтобы добавить данные."
-    lines = ["Твой профиль:\n"]
+        return "РџСЂРѕС„РёР»СЊ РЅРµ Р·Р°РїРѕР»РЅРµРЅ. РСЃРїРѕР»СЊР·СѓР№ РєРЅРѕРїРєРё РЅРёР¶Рµ С‡С‚РѕР±С‹ РґРѕР±Р°РІРёС‚СЊ РґР°РЅРЅС‹Рµ."
+    lines = ["РўРІРѕР№ РїСЂРѕС„РёР»СЊ:\n"]
     if profile.get("gender"):
-        lines.append(f"Пол: {'Мужской' if profile['gender'] == 'male' else 'Женский'}")
+        lines.append(f"РџРѕР»: {'РњСѓР¶СЃРєРѕР№' if profile['gender'] == 'male' else 'Р–РµРЅСЃРєРёР№'}")
     if profile.get("vo2max"):
         tag = _vo2max_tag(profile)
-        lines.append(f"VO2max: {profile['vo2max']} мл/кг/мин{f'  ({tag})' if tag else ''}")
+        vo2_lock = " рџ”’" if profile.get("vo2max_locked") else ""
+        lines.append(f"VO2max: {profile['vo2max']} РјР»/РєРі/РјРёРЅ{f'  ({tag})' if tag else ''}{vo2_lock}")
     if profile.get("lactate_threshold_pace"):
-        lt = f"Лактатный порог: {profile['lactate_threshold_pace']} мин/км"
+        lt = f"Р›Р°РєС‚Р°С‚РЅС‹Р№ РїРѕСЂРѕРі: {profile['lactate_threshold_pace']} РјРёРЅ/РєРј"
         if profile.get("lactate_threshold_hr"):
-            lt += f" при ЧСС {profile['lactate_threshold_hr']} уд/мин"
+            lt += f" РїСЂРё Р§РЎРЎ {profile['lactate_threshold_hr']} СѓРґ/РјРёРЅ"
         lt_source = profile.get("lactate_source")
+        lt_lock = " рџ”’" if profile.get("lactate_locked") else ""
         if lt_source:
-            lt += f"  ({'вручную' if lt_source == 'manual' else 'из сервиса'})"
+            lt += f"  ({'РІСЂСѓС‡РЅСѓСЋ' if lt_source == 'manual' else 'РёР· СЃРµСЂРІРёСЃР°'}){lt_lock}"
+        elif lt_lock:
+            lt += f"  {lt_lock.strip()}"
         lines.append(lt)
     spec = profile.get("specialization")
     spec_label = SPECIALIZATIONS.get(spec) if spec else None
-    lines.append(f"Специализация: {spec_label or 'Полумарафон (по умолчанию)'}")
+    lines.append(f"РЎРїРµС†РёР°Р»РёР·Р°С†РёСЏ: {spec_label or 'РџРѕР»СѓРјР°СЂР°С„РѕРЅ (РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ)'}")
     if profile.get("updated_at"):
-        lines.append(f"\nОбновлено: {profile['updated_at'][:10]}")
+        lines.append(f"\nРћР±РЅРѕРІР»РµРЅРѕ: {profile['updated_at'][:10]}")
     return '\n'.join(lines)
 
 
-def _build_profile_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📊 Указать VO2max",   callback_data="profile_set_vo2max"),
-         InlineKeyboardButton("🏃 Лактатный порог", callback_data="profile_set_lactate")],
-        [InlineKeyboardButton("👤 Пол", callback_data="profile_set_gender"),
-         InlineKeyboardButton("🎯 Специализация", callback_data="profile_set_specialization")],
-        _settings_nav(),
-    ])
+def _build_profile_keyboard(profile: dict | None = None) -> InlineKeyboardMarkup:
+    p = profile or {}
+    vo2_locked = bool(p.get("vo2max_locked"))
+    lt_locked = bool(p.get("lactate_locked"))
+    rows = [
+        [InlineKeyboardButton("рџ“Љ РЈРєР°Р·Р°С‚СЊ VO2max",   callback_data="profile_set_vo2max"),
+         InlineKeyboardButton("рџЏѓ Р›Р°РєС‚Р°С‚РЅС‹Р№ РїРѕСЂРѕРі", callback_data="profile_set_lactate")],
+        [InlineKeyboardButton("рџ‘¤ РџРѕР»", callback_data="profile_set_gender"),
+         InlineKeyboardButton("рџЋЇ РЎРїРµС†РёР°Р»РёР·Р°С†РёСЏ", callback_data="profile_set_specialization")],
+    ]
+    # РўСѓРјР±Р»РµСЂС‹ Р±Р»РѕРєРёСЂРѕРІРєРё вЂ” С‚РѕР»СЊРєРѕ РµСЃР»Рё Р·РЅР°С‡РµРЅРёРµ Р·Р°РґР°РЅРѕ
+    lock_row = []
+    if p.get("vo2max"):
+        lbl = "рџ”’ VO2max (РЅРµ РѕР±РЅРѕРІР»СЏС‚СЊ)" if vo2_locked else "рџ”“ VO2max (РѕР±РЅРѕРІР»СЏС‚СЊ)"
+        lock_row.append(InlineKeyboardButton(lbl, callback_data="profile_toggle_vo2max_lock"))
+    if p.get("lactate_threshold_pace"):
+        lbl = "рџ”’ Р›Рџ (РЅРµ РѕР±РЅРѕРІР»СЏС‚СЊ)" if lt_locked else "рџ”“ Р›Рџ (РѕР±РЅРѕРІР»СЏС‚СЊ)"
+        lock_row.append(InlineKeyboardButton(lbl, callback_data="profile_toggle_lactate_lock"))
+    if lock_row:
+        rows.append(lock_row)
+    rows.append(_settings_nav())
+    return InlineKeyboardMarkup(rows)
 
 
 def _build_specialization_keyboard(current_spec: str | None = None) -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(
-            f"{'✅ ' if key == current_spec else ''}{label}",
+            f"{'вњ… ' if key == current_spec else ''}{label}",
             callback_data=f"spec_set_{key}")]
         for key, label in SPECIALIZATIONS.items()
     ]
-    rows.append([InlineKeyboardButton("← Назад", callback_data="my_profile")])
+    rows.append([InlineKeyboardButton("в†ђ РќР°Р·Р°Рґ", callback_data="my_profile")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -779,33 +797,33 @@ async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     profile = get_user_profile(db_user_id)
     await update.message.reply_text(
         _build_profile_text(profile),
-        reply_markup=_build_profile_keyboard()
+        reply_markup=_build_profile_keyboard(profile)
     )
 
 
-# Режим формирования РЕКОМЕНДАЦИИ (Шаг 2). Анализ анонса (Шаг 1) всегда deep (админ).
+# Р РµР¶РёРј С„РѕСЂРјРёСЂРѕРІР°РЅРёСЏ Р Р•РљРћРњР•РќР”РђР¦РР (РЁР°Рі 2). РђРЅР°Р»РёР· Р°РЅРѕРЅСЃР° (РЁР°Рі 1) РІСЃРµРіРґР° deep (Р°РґРјРёРЅ).
 _MODE_INFO = {
-    "deep":  ("🧠", "Глубокий (ИИ)", "~2 мин",     "ИИ формулирует рекомендацию, макс. качество"),
-    "smart": ("⚡", "Быстрый (ИИ)",  "~30-60 сек", "баланс качества и скорости"),
-    "fast":  ("🪶", "Лёгкий (ИИ)",   "~10 сек",    "короткое ИИ-объяснение"),
-    "calc":  ("📊", "Расчётный",      "формулы",    "группа и % по формулам, текст коротко от ИИ"),
+    "deep":  ("рџ§ ", "Р“Р»СѓР±РѕРєРёР№ (РР)", "~2 РјРёРЅ",     "РР С„РѕСЂРјСѓР»РёСЂСѓРµС‚ СЂРµРєРѕРјРµРЅРґР°С†РёСЋ, РјР°РєСЃ. РєР°С‡РµСЃС‚РІРѕ"),
+    "smart": ("вљЎ", "Р‘С‹СЃС‚СЂС‹Р№ (РР)",  "~30-60 СЃРµРє", "Р±Р°Р»Р°РЅСЃ РєР°С‡РµСЃС‚РІР° Рё СЃРєРѕСЂРѕСЃС‚Рё"),
+    "fast":  ("рџЄ¶", "Р›С‘РіРєРёР№ (РР)",   "~10 СЃРµРє",    "РєРѕСЂРѕС‚РєРѕРµ РР-РѕР±СЉСЏСЃРЅРµРЅРёРµ"),
+    "calc":  ("рџ“Љ", "Р Р°СЃС‡С‘С‚РЅС‹Р№",      "С„РѕСЂРјСѓР»С‹",    "РіСЂСѓРїРїР° Рё % РїРѕ С„РѕСЂРјСѓР»Р°Рј, С‚РµРєСЃС‚ РєРѕСЂРѕС‚РєРѕ РѕС‚ РР"),
 }
 
 
 def _build_mode_text(current_mode: str) -> str:
-    lines = ["🧠 Режим рекомендации (как бот формулирует совет по группе):\n"]
+    lines = ["рџ§  Р РµР¶РёРј СЂРµРєРѕРјРµРЅРґР°С†РёРё (РєР°Рє Р±РѕС‚ С„РѕСЂРјСѓР»РёСЂСѓРµС‚ СЃРѕРІРµС‚ РїРѕ РіСЂСѓРїРїРµ):\n"]
     for key, (emoji, label, timing, desc) in _MODE_INFO.items():
-        mark = "✅ " if key == current_mode else "   "
-        lines.append(f"{mark}{emoji} {label} ({timing}) — {desc}")
-    lines.append("\nЧисла (группа, %, зоны) всегда считаются формулами; режим влияет на то,\n"
-                 "насколько глубоко ИИ объясняет и формулирует текст. Выбери режим:")
+        mark = "вњ… " if key == current_mode else "   "
+        lines.append(f"{mark}{emoji} {label} ({timing}) вЂ” {desc}")
+    lines.append("\nР§РёСЃР»Р° (РіСЂСѓРїРїР°, %, Р·РѕРЅС‹) РІСЃРµРіРґР° СЃС‡РёС‚Р°СЋС‚СЃСЏ С„РѕСЂРјСѓР»Р°РјРё; СЂРµР¶РёРј РІР»РёСЏРµС‚ РЅР° С‚Рѕ,\n"
+                 "РЅР°СЃРєРѕР»СЊРєРѕ РіР»СѓР±РѕРєРѕ РР РѕР±СЉСЏСЃРЅСЏРµС‚ Рё С„РѕСЂРјСѓР»РёСЂСѓРµС‚ С‚РµРєСЃС‚. Р’С‹Р±РµСЂРё СЂРµР¶РёРј:")
     return "\n".join(lines)
 
 
 def _build_mode_keyboard(current_mode: str) -> InlineKeyboardMarkup:
     def btn(key):
         emoji, label, _timing, _ = _MODE_INFO[key]
-        mark = "✅ " if key == current_mode else ""
+        mark = "вњ… " if key == current_mode else ""
         return InlineKeyboardButton(f"{mark}{emoji} {label}", callback_data=f"mode_set_{key}")
     return InlineKeyboardMarkup([
         [btn("deep")],
@@ -827,12 +845,12 @@ async def cmd_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def _build_notifications_text(prefs: dict) -> str:
-    def mark(key): return "✅" if (prefs or {}).get(key, True) else "❌"
+    def mark(key): return "вњ…" if (prefs or {}).get(key, True) else "вќЊ"
     return (
-        "🔔 Настройки уведомлений:\n\n"
-        f"{mark('notify_interval')} Тренировки вт/пт\n"
-        f"{mark('notify_interval_extra')} Новые группы\n"
-        f"{mark('notify_long')} Воскресный Long Run"
+        "рџ”” РќР°СЃС‚СЂРѕР№РєРё СѓРІРµРґРѕРјР»РµРЅРёР№:\n\n"
+        f"{mark('notify_interval')} РўСЂРµРЅРёСЂРѕРІРєРё РІС‚/РїС‚\n"
+        f"{mark('notify_interval_extra')} РќРѕРІС‹Рµ РіСЂСѓРїРїС‹\n"
+        f"{mark('notify_long')} Р’РѕСЃРєСЂРµСЃРЅС‹Р№ Long Run"
     )
 
 
@@ -840,11 +858,11 @@ def _build_notifications_keyboard(prefs: dict) -> InlineKeyboardMarkup:
     def lbl(key, title):
         on = (prefs or {}).get(key, True)
         action = f"notif_off_{key}" if on else f"notif_on_{key}"
-        return InlineKeyboardButton(f"{'✅' if on else '❌'} {title} — {'[Выкл]' if on else '[Вкл]'}", callback_data=action)
+        return InlineKeyboardButton(f"{'вњ…' if on else 'вќЊ'} {title} вЂ” {'[Р’С‹РєР»]' if on else '[Р’РєР»]'}", callback_data=action)
     return InlineKeyboardMarkup([
-        [lbl("notify_interval", "Тренировки вт/пт")],
-        [lbl("notify_interval_extra", "Новые группы")],
-        [lbl("notify_long", "Воскресный Long Run")],
+        [lbl("notify_interval", "РўСЂРµРЅРёСЂРѕРІРєРё РІС‚/РїС‚")],
+        [lbl("notify_interval_extra", "РќРѕРІС‹Рµ РіСЂСѓРїРїС‹")],
+        [lbl("notify_long", "Р’РѕСЃРєСЂРµСЃРЅС‹Р№ Long Run")],
         _settings_nav(),
     ])
 
@@ -862,43 +880,43 @@ async def cmd_notifications(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def _build_help_text(is_admin: bool) -> str:
     text = (
         f"Dusty Dumbbells Running Bot  v{VERSION}\n\n"
-        "Команды:\n"
-        "/start — главное меню\n"
-        "/workout — рекомендация группы для вт/пт тренировки\n"
-        "/long — рекомендация для воскресного Long Run\n"
-        "/morning — утренняя проверка восстановления\n"
-        "/status — статус подключённых сервисов\n"
-        "/refresh — обновить данные из Strava\n"
-        "/profile — профиль (VO2max, лактатный порог)\n"
-        "/mode — режим ИИ (быстрый / глубокий)\n"
-        "/notifications — настройки уведомлений\n"
-        "/connect_strava — подключить Strava\n"
-        "/connect_garmin — подключить Garmin Connect\n"
-        "/connect_whoop — подключить Whoop\n"
-        "/connect_coros — подключить COROS\n"
-        "/connect_polar — подключить Polar\n"
-        "/feedback — обратная связь (проблема / идея)\n"
-        "/help — эта справка\n\n"
-        "Автоматические уведомления:\n"
-        "• Накануне тренировки (пн, чт, сб) в 20:00 МСК\n"
-        "• Утром в день тренировки в 07:00 МСК"
+        "РљРѕРјР°РЅРґС‹:\n"
+        "/start вЂ” РіР»Р°РІРЅРѕРµ РјРµРЅСЋ\n"
+        "/workout вЂ” СЂРµРєРѕРјРµРЅРґР°С†РёСЏ РіСЂСѓРїРїС‹ РґР»СЏ РІС‚/РїС‚ С‚СЂРµРЅРёСЂРѕРІРєРё\n"
+        "/long вЂ” СЂРµРєРѕРјРµРЅРґР°С†РёСЏ РґР»СЏ РІРѕСЃРєСЂРµСЃРЅРѕРіРѕ Long Run\n"
+        "/morning вЂ” СѓС‚СЂРµРЅРЅСЏСЏ РїСЂРѕРІРµСЂРєР° РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРёСЏ\n"
+        "/status вЂ” СЃС‚Р°С‚СѓСЃ РїРѕРґРєР»СЋС‡С‘РЅРЅС‹С… СЃРµСЂРІРёСЃРѕРІ\n"
+        "/refresh вЂ” РѕР±РЅРѕРІРёС‚СЊ РґР°РЅРЅС‹Рµ РёР· Strava\n"
+        "/profile вЂ” РїСЂРѕС„РёР»СЊ (VO2max, Р»Р°РєС‚Р°С‚РЅС‹Р№ РїРѕСЂРѕРі)\n"
+        "/mode вЂ” СЂРµР¶РёРј РР (Р±С‹СЃС‚СЂС‹Р№ / РіР»СѓР±РѕРєРёР№)\n"
+        "/notifications вЂ” РЅР°СЃС‚СЂРѕР№РєРё СѓРІРµРґРѕРјР»РµРЅРёР№\n"
+        "/connect_strava вЂ” РїРѕРґРєР»СЋС‡РёС‚СЊ Strava\n"
+        "/connect_garmin вЂ” РїРѕРґРєР»СЋС‡РёС‚СЊ Garmin Connect\n"
+        "/connect_whoop вЂ” РїРѕРґРєР»СЋС‡РёС‚СЊ Whoop\n"
+        "/connect_coros вЂ” РїРѕРґРєР»СЋС‡РёС‚СЊ COROS\n"
+        "/connect_polar вЂ” РїРѕРґРєР»СЋС‡РёС‚СЊ Polar\n"
+        "/feedback вЂ” РѕР±СЂР°С‚РЅР°СЏ СЃРІСЏР·СЊ (РїСЂРѕР±Р»РµРјР° / РёРґРµСЏ)\n"
+        "/help вЂ” СЌС‚Р° СЃРїСЂР°РІРєР°\n\n"
+        "РђРІС‚РѕРјР°С‚РёС‡РµСЃРєРёРµ СѓРІРµРґРѕРјР»РµРЅРёСЏ:\n"
+        "вЂў РќР°РєР°РЅСѓРЅРµ С‚СЂРµРЅРёСЂРѕРІРєРё (РїРЅ, С‡С‚, СЃР±) РІ 20:00 РњРЎРљ\n"
+        "вЂў РЈС‚СЂРѕРј РІ РґРµРЅСЊ С‚СЂРµРЅРёСЂРѕРІРєРё РІ 07:00 РњРЎРљ"
     )
     if is_admin:
         text += (
-            "\n\n— Администратор —\n"
-            "/stats — статистика пользователей и активности\n"
-            "/users — список всех пользователей\n"
-            "/services — пользователи по подключённым сервисам\n"
-            "/prompt — последний промпт к модели\n"
-            "/debug — разбор последней тренировки\n"
-            "/debug_long — разбор последнего Long Run\n"
-            "/ratings — последние оценки рекомендаций\n"
-            "/feedbacks — последние сообщения обратной связи\n"
-            "/analyze — анализ последней тренировки через DeepSeek\n"
-            "/preprocess_mode — режим анализа тренировок (deep/smart)\n"
-            "/test_workout — тест Шага 2 (рекомендация группы) на твоих данных\n"
-            "/test_long — тест Шага 2 для длительной на твоих данных\n"
-            "/reanalyze — форс переанализа свежих анонсов (обновить кэш)"
+            "\n\nвЂ” РђРґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂ вЂ”\n"
+            "/stats вЂ” СЃС‚Р°С‚РёСЃС‚РёРєР° РїРѕР»СЊР·РѕРІР°С‚РµР»РµР№ Рё Р°РєС‚РёРІРЅРѕСЃС‚Рё\n"
+            "/users вЂ” СЃРїРёСЃРѕРє РІСЃРµС… РїРѕР»СЊР·РѕРІР°С‚РµР»РµР№\n"
+            "/services вЂ” РїРѕР»СЊР·РѕРІР°С‚РµР»Рё РїРѕ РїРѕРґРєР»СЋС‡С‘РЅРЅС‹Рј СЃРµСЂРІРёСЃР°Рј\n"
+            "/prompt вЂ” РїРѕСЃР»РµРґРЅРёР№ РїСЂРѕРјРїС‚ Рє РјРѕРґРµР»Рё\n"
+            "/debug вЂ” СЂР°Р·Р±РѕСЂ РїРѕСЃР»РµРґРЅРµР№ С‚СЂРµРЅРёСЂРѕРІРєРё\n"
+            "/debug_long вЂ” СЂР°Р·Р±РѕСЂ РїРѕСЃР»РµРґРЅРµРіРѕ Long Run\n"
+            "/ratings вЂ” РїРѕСЃР»РµРґРЅРёРµ РѕС†РµРЅРєРё СЂРµРєРѕРјРµРЅРґР°С†РёР№\n"
+            "/feedbacks вЂ” РїРѕСЃР»РµРґРЅРёРµ СЃРѕРѕР±С‰РµРЅРёСЏ РѕР±СЂР°С‚РЅРѕР№ СЃРІСЏР·Рё\n"
+            "/analyze вЂ” Р°РЅР°Р»РёР· РїРѕСЃР»РµРґРЅРµР№ С‚СЂРµРЅРёСЂРѕРІРєРё С‡РµСЂРµР· DeepSeek\n"
+            "/preprocess_mode вЂ” СЂРµР¶РёРј Р°РЅР°Р»РёР·Р° С‚СЂРµРЅРёСЂРѕРІРѕРє (deep/smart)\n"
+            "/test_workout вЂ” С‚РµСЃС‚ РЁР°РіР° 2 (СЂРµРєРѕРјРµРЅРґР°С†РёСЏ РіСЂСѓРїРїС‹) РЅР° С‚РІРѕРёС… РґР°РЅРЅС‹С…\n"
+            "/test_long вЂ” С‚РµСЃС‚ РЁР°РіР° 2 РґР»СЏ РґР»РёС‚РµР»СЊРЅРѕР№ РЅР° С‚РІРѕРёС… РґР°РЅРЅС‹С…\n"
+            "/reanalyze вЂ” С„РѕСЂСЃ РїРµСЂРµР°РЅР°Р»РёР·Р° СЃРІРµР¶РёС… Р°РЅРѕРЅСЃРѕРІ (РѕР±РЅРѕРІРёС‚СЊ РєСЌС€)"
         )
     return text
 
@@ -912,75 +930,75 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def _build_feedback_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🐛 Проблема",  callback_data="feedback_bug"),
-         InlineKeyboardButton("💡 Идея",      callback_data="feedback_feature")],
-        [InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")],
+        [InlineKeyboardButton("рџђ› РџСЂРѕР±Р»РµРјР°",  callback_data="feedback_bug"),
+         InlineKeyboardButton("рџ’Ў РРґРµСЏ",      callback_data="feedback_feature")],
+        [InlineKeyboardButton("рџЏ  Р“Р»Р°РІРЅРѕРµ РјРµРЅСЋ", callback_data="main_menu")],
     ])
 
 
 async def cmd_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     _mark_user_active_if_needed(user.id, user.full_name, user.username)
-    await update.message.reply_text("Выбери тип:", reply_markup=_build_feedback_keyboard())
+    await update.message.reply_text("Р’С‹Р±РµСЂРё С‚РёРї:", reply_markup=_build_feedback_keyboard())
 
 
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Статистика бота (только для админов)."""
+    """РЎС‚Р°С‚РёСЃС‚РёРєР° Р±РѕС‚Р° (С‚РѕР»СЊРєРѕ РґР»СЏ Р°РґРјРёРЅРѕРІ)."""
     if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
-        await update.message.reply_text("Нет доступа.")
+        await update.message.reply_text("РќРµС‚ РґРѕСЃС‚СѓРїР°.")
         return
     s = get_bot_stats()
     text = (
-        "📊 <b>Статистика бота</b>\n\n"
-        f"👥 Пользователи: {s['total']}\n"
-        f"✅ Активных: {s.get('active_bot', s['total'])}\n"
-        f"💤 Неактивных: {s.get('inactive_bot', 0)}\n"
-        f"Новых за 7 дней: {s['new_7d']}\n"
-        f"Активных за 7 дней: {s['active_7d']}\n\n"
-        "Подключения:\n"
-        f"🟠 Strava: {s['strava']}\n"
-        f"⚪ Whoop: {s['whoop']}\n"
-        f"🔵 Garmin: {s['garmin']}\n"
-        f"🔴 COROS: {s['coros']}\n"
-        f"❄️ Polar: {s.get('polar', 0)}\n"
-        f"👤 Профиль заполнен: {s['profile']}\n\n"
-        "Запросы за 7 дней:\n"
-        f"📋 /workout: {s['workout_7d']}\n"
-        f"🕐 /long: {s['long_7d']}\n"
-        f"☀️ /morning: {s['morning_7d']}\n\n"
-        f"⭐ Средняя оценка: {s.get('avg_rating') or '—'}/10 (за 30 дней)\n"
-        f"📊 Оценок получено: {s.get('ratings_30d', 0)}\n"
-        f"💬 Обратной связи: {s.get('feedback_total', 0)} "
-        f"(баги: {s.get('feedback_bugs', 0)}, идеи: {s.get('feedback_features', 0)})"
+        "рџ“Љ <b>РЎС‚Р°С‚РёСЃС‚РёРєР° Р±РѕС‚Р°</b>\n\n"
+        f"рџ‘Ґ РџРѕР»СЊР·РѕРІР°С‚РµР»Рё: {s['total']}\n"
+        f"вњ… РђРєС‚РёРІРЅС‹С…: {s.get('active_bot', s['total'])}\n"
+        f"рџ’¤ РќРµР°РєС‚РёРІРЅС‹С…: {s.get('inactive_bot', 0)}\n"
+        f"РќРѕРІС‹С… Р·Р° 7 РґРЅРµР№: {s['new_7d']}\n"
+        f"РђРєС‚РёРІРЅС‹С… Р·Р° 7 РґРЅРµР№: {s['active_7d']}\n\n"
+        "РџРѕРґРєР»СЋС‡РµРЅРёСЏ:\n"
+        f"рџџ  Strava: {s['strava']}\n"
+        f"вљЄ Whoop: {s['whoop']}\n"
+        f"рџ”µ Garmin: {s['garmin']}\n"
+        f"рџ”ґ COROS: {s['coros']}\n"
+        f"вќ„пёЏ Polar: {s.get('polar', 0)}\n"
+        f"рџ‘¤ РџСЂРѕС„РёР»СЊ Р·Р°РїРѕР»РЅРµРЅ: {s['profile']}\n\n"
+        "Р—Р°РїСЂРѕСЃС‹ Р·Р° 7 РґРЅРµР№:\n"
+        f"рџ“‹ /workout: {s['workout_7d']}\n"
+        f"рџ•ђ /long: {s['long_7d']}\n"
+        f"вЂпёЏ /morning: {s['morning_7d']}\n\n"
+        f"в­ђ РЎСЂРµРґРЅСЏСЏ РѕС†РµРЅРєР°: {s.get('avg_rating') or 'вЂ”'}/10 (Р·Р° 30 РґРЅРµР№)\n"
+        f"рџ“Љ РћС†РµРЅРѕРє РїРѕР»СѓС‡РµРЅРѕ: {s.get('ratings_30d', 0)}\n"
+        f"рџ’¬ РћР±СЂР°С‚РЅРѕР№ СЃРІСЏР·Рё: {s.get('feedback_total', 0)} "
+        f"(Р±Р°РіРё: {s.get('feedback_bugs', 0)}, РёРґРµРё: {s.get('feedback_features', 0)})"
     )
     await update.message.reply_text(text, parse_mode="HTML")
 
 
 def _fmt_user_ref(name: str | None, username: str | None) -> str:
-    """@username если есть, иначе имя."""
+    """@username РµСЃР»Рё РµСЃС‚СЊ, РёРЅР°С‡Рµ РёРјСЏ."""
     if username:
         return f"@{username}"
-    return name or "—"
+    return name or "вЂ”"
 
 
 async def cmd_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Список всех пользователей (только для админов)."""
+    """РЎРїРёСЃРѕРє РІСЃРµС… РїРѕР»СЊР·РѕРІР°С‚РµР»РµР№ (С‚РѕР»СЊРєРѕ РґР»СЏ Р°РґРјРёРЅРѕРІ)."""
     if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
-        await update.message.reply_text("Нет доступа.")
+        await update.message.reply_text("РќРµС‚ РґРѕСЃС‚СѓРїР°.")
         return
 
     from datetime import datetime as _dt
     users = get_all_users_with_details()
 
-    lines = [f"👥 Все пользователи ({len(users)}):"]
+    lines = [f"рџ‘Ґ Р’СЃРµ РїРѕР»СЊР·РѕРІР°С‚РµР»Рё ({len(users)}):"]
     for i, (_, tid, name, uname, created_at) in enumerate(users, 1):
         try:
             date_fmt = _dt.fromisoformat(created_at).strftime("%d.%m")
         except Exception:
-            date_fmt = "—"
-        name_str = name or "—"
+            date_fmt = "вЂ”"
+        name_str = name or "вЂ”"
         uname_str = f" (@{uname})" if uname else ""
-        lines.append(f"{i}. {name_str}{uname_str} — {date_fmt}")
+        lines.append(f"{i}. {name_str}{uname_str} вЂ” {date_fmt}")
 
     text = "\n".join(lines)
     for i in range(0, len(text), 4096):
@@ -988,20 +1006,20 @@ async def cmd_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Список пользователей по подключённым сервисам (только для админов)."""
+    """РЎРїРёСЃРѕРє РїРѕР»СЊР·РѕРІР°С‚РµР»РµР№ РїРѕ РїРѕРґРєР»СЋС‡С‘РЅРЅС‹Рј СЃРµСЂРІРёСЃР°Рј (С‚РѕР»СЊРєРѕ РґР»СЏ Р°РґРјРёРЅРѕРІ)."""
     if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
-        await update.message.reply_text("Нет доступа.")
+        await update.message.reply_text("РќРµС‚ РґРѕСЃС‚СѓРїР°.")
         return
 
     all_users = get_all_users_with_details()
     all_tids_ordered = [(tid, name, uname) for _, tid, name, uname, _ in all_users]
 
     service_defs = [
-        ("strava", "🟠 Strava"),
-        ("whoop",  "⚪ Whoop"),
-        ("garmin", "🔵 Garmin"),
-        ("coros",  "🔴 COROS"),
-        ("polar",  "❄️ Polar"),
+        ("strava", "рџџ  Strava"),
+        ("whoop",  "вљЄ Whoop"),
+        ("garmin", "рџ”µ Garmin"),
+        ("coros",  "рџ”ґ COROS"),
+        ("polar",  "вќ„пёЏ Polar"),
     ]
 
     service_users: dict[str, list] = {}
@@ -1019,22 +1037,22 @@ async def cmd_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     nothing      = [(tid, n, u) for tid, n, u in all_tids_ordered
                     if tid not in profile_tids and tid not in any_service_tids]
 
-    lines = ["📊 Пользователи по сервисам:\n"]
+    lines = ["рџ“Љ РџРѕР»СЊР·РѕРІР°С‚РµР»Рё РїРѕ СЃРµСЂРІРёСЃР°Рј:\n"]
     for svc, label in service_defs:
         rows = service_users[svc]
         refs = ", ".join(_fmt_user_ref(n, u) for _, n, u in rows)
-        lines.append(f"{label} ({len(rows)}): {refs or '—'}")
+        lines.append(f"{label} ({len(rows)}): {refs or 'вЂ”'}")
 
     refs = ", ".join(_fmt_user_ref(n, u) for _, n, u in only_profile)
-    lines.append(f"\n👤 Только профиль ({len(only_profile)}): {refs or '—'}")
+    lines.append(f"\nрџ‘¤ РўРѕР»СЊРєРѕ РїСЂРѕС„РёР»СЊ ({len(only_profile)}): {refs or 'вЂ”'}")
 
     refs = ", ".join(_fmt_user_ref(n, u) for _, n, u in nothing)
-    lines.append(f"❌ Ничего не подключено ({len(nothing)}): {refs or '—'}")
+    lines.append(f"вќЊ РќРёС‡РµРіРѕ РЅРµ РїРѕРґРєР»СЋС‡РµРЅРѕ ({len(nothing)}): {refs or 'вЂ”'}")
 
     inactive = get_inactive_users()
     if inactive:
         refs = ", ".join(_fmt_user_ref(n, u) for _, n, u in inactive)
-        lines.append(f"\n💤 Неактивных (заблокировали бота) ({len(inactive)}): {refs}")
+        lines.append(f"\nрџ’¤ РќРµР°РєС‚РёРІРЅС‹С… (Р·Р°Р±Р»РѕРєРёСЂРѕРІР°Р»Рё Р±РѕС‚Р°) ({len(inactive)}): {refs}")
 
     text = "\n".join(lines)
     for i in range(0, len(text), 4096):
@@ -1042,33 +1060,33 @@ async def cmd_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показывает распарсенные данные последней тренировки (только для админов)."""
+    """РџРѕРєР°Р·С‹РІР°РµС‚ СЂР°СЃРїР°СЂСЃРµРЅРЅС‹Рµ РґР°РЅРЅС‹Рµ РїРѕСЃР»РµРґРЅРµР№ С‚СЂРµРЅРёСЂРѕРІРєРё (С‚РѕР»СЊРєРѕ РґР»СЏ Р°РґРјРёРЅРѕРІ)."""
     if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
-        await update.message.reply_text("Нет доступа.")
+        await update.message.reply_text("РќРµС‚ РґРѕСЃС‚СѓРїР°.")
         return
     if not last_workout:
-        await update.message.reply_text("Тренировка ещё не загружалась. Сначала /workout.")
+        await update.message.reply_text("РўСЂРµРЅРёСЂРѕРІРєР° РµС‰С‘ РЅРµ Р·Р°РіСЂСѓР¶Р°Р»Р°СЃСЊ. РЎРЅР°С‡Р°Р»Р° /workout.")
         return
 
     w = last_workout
     lines = [
-        f"📅 {w.get('weekday', '').capitalize()} {w.get('workout_date', '')}",
-        f"Тип: {w.get('workout_type', '—')}",
-        f"📍 {w.get('location', '—')}",
-        f"⏰ {w.get('schedule', '—')}",
-        f"📏 Объём: {w.get('total_volume_km', '—')}",
+        f"рџ“… {w.get('weekday', '').capitalize()} {w.get('workout_date', '')}",
+        f"РўРёРї: {w.get('workout_type', 'вЂ”')}",
+        f"рџ“Ќ {w.get('location', 'вЂ”')}",
+        f"вЏ° {w.get('schedule', 'вЂ”')}",
+        f"рџ“Џ РћР±СЉС‘Рј: {w.get('total_volume_km', 'вЂ”')}",
         f"is_past: {w.get('is_past', False)}",
         "",
-        "РАБОТА:",
-        w.get('work_text', '—') or '—',
+        "Р РђР‘РћРўРђ:",
+        w.get('work_text', 'вЂ”') or 'вЂ”',
         "",
-        "ГРУППЫ:",
-        w.get('groups_raw', '—') or '—',
+        "Р“Р РЈРџРџР«:",
+        w.get('groups_raw', 'вЂ”') or 'вЂ”',
     ]
     extra = w.get('extra_groups', [])
     if extra:
         nums = ', '.join(g['number'] for g in extra)
-        lines += ["", f"Доп. группы из комментариев: {nums}"]
+        lines += ["", f"Р”РѕРї. РіСЂСѓРїРїС‹ РёР· РєРѕРјРјРµРЅС‚Р°СЂРёРµРІ: {nums}"]
         for raw in w.get('extra_groups_raw', []):
             lines.append(f"---\n{raw[:300]}")
 
@@ -1078,34 +1096,34 @@ async def cmd_debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_debug_long(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показывает распарсенные данные последнего Long Run (только для админов)."""
+    """РџРѕРєР°Р·С‹РІР°РµС‚ СЂР°СЃРїР°СЂСЃРµРЅРЅС‹Рµ РґР°РЅРЅС‹Рµ РїРѕСЃР»РµРґРЅРµРіРѕ Long Run (С‚РѕР»СЊРєРѕ РґР»СЏ Р°РґРјРёРЅРѕРІ)."""
     if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
-        await update.message.reply_text("Нет доступа.")
+        await update.message.reply_text("РќРµС‚ РґРѕСЃС‚СѓРїР°.")
         return
     if not last_long_run:
-        await update.message.reply_text("Long Run ещё не загружался. Сначала /long.")
+        await update.message.reply_text("Long Run РµС‰С‘ РЅРµ Р·Р°РіСЂСѓР¶Р°Р»СЃСЏ. РЎРЅР°С‡Р°Р»Р° /long.")
         return
 
     w = last_long_run
     lines = [
-        f"📅 {w.get('weekday', '').capitalize()} {w.get('workout_date', '')}",
-        f"Тип: {w.get('workout_type', '—')}",
-        f"📍 {w.get('location', '—')}",
-        f"⏰ {w.get('schedule', '—')}",
-        f"📏 Объём: {w.get('total_volume_km', '—')}",
+        f"рџ“… {w.get('weekday', '').capitalize()} {w.get('workout_date', '')}",
+        f"РўРёРї: {w.get('workout_type', 'вЂ”')}",
+        f"рџ“Ќ {w.get('location', 'вЂ”')}",
+        f"вЏ° {w.get('schedule', 'вЂ”')}",
+        f"рџ“Џ РћР±СЉС‘Рј: {w.get('total_volume_km', 'вЂ”')}",
         f"even_pace_available: {w.get('even_pace_available', False)}",
         f"is_past: {w.get('is_past', False)}",
         "",
-        "ГРУППЫ (распарсенные):",
+        "Р“Р РЈРџРџР« (СЂР°СЃРїР°СЂСЃРµРЅРЅС‹Рµ):",
     ]
     for g in (w.get("groups") or []):
-        label = g.get("label") or f"Группа {g.get('number', '?')}"
-        pace_start = g.get("pace_start", "—")
-        pace_end = g.get("pace_end", "—")
-        prog = "прогрессия" if g.get("progression") else "ровный"
-        lines.append(f"  {label}: {pace_start} → {pace_end} ({prog})")
+        label = g.get("label") or f"Р“СЂСѓРїРїР° {g.get('number', '?')}"
+        pace_start = g.get("pace_start", "вЂ”")
+        pace_end = g.get("pace_end", "вЂ”")
+        prog = "РїСЂРѕРіСЂРµСЃСЃРёСЏ" if g.get("progression") else "СЂРѕРІРЅС‹Р№"
+        lines.append(f"  {label}: {pace_start} в†’ {pace_end} ({prog})")
 
-    lines += ["", "RAW ТЕКСТ (первые 2000 симв.):", (w.get("groups_raw") or "")[:2000]]
+    lines += ["", "RAW РўР•РљРЎРў (РїРµСЂРІС‹Рµ 2000 СЃРёРјРІ.):", (w.get("groups_raw") or "")[:2000]]
 
     text = '\n'.join(lines)
     for i in range(0, len(text), 4096):
@@ -1113,182 +1131,182 @@ async def cmd_debug_long(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_ratings(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Последние 20 оценок рекомендаций (только для админов)."""
+    """РџРѕСЃР»РµРґРЅРёРµ 20 РѕС†РµРЅРѕРє СЂРµРєРѕРјРµРЅРґР°С†РёР№ (С‚РѕР»СЊРєРѕ РґР»СЏ Р°РґРјРёРЅРѕРІ)."""
     if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
-        await update.message.reply_text("Нет доступа.")
+        await update.message.reply_text("РќРµС‚ РґРѕСЃС‚СѓРїР°.")
         return
     rows = get_recent_ratings(20)
     if not rows:
-        await update.message.reply_text("Оценок пока нет.")
+        await update.message.reply_text("РћС†РµРЅРѕРє РїРѕРєР° РЅРµС‚.")
         return
-    lines = ["⭐ Последние оценок (до 20):\n"]
+    lines = ["в­ђ РџРѕСЃР»РµРґРЅРёРµ РѕС†РµРЅРѕРє (РґРѕ 20):\n"]
     for r in rows:
         rating, ai_mode_, comment, created_at, workout_date, name, username = (
             r[1], r[2], r[3], r[4], r[5], r[6], r[7]
         )
         date_fmt = (created_at or "")[:10]
         uname = f" (@{username})" if username else ""
-        stars = rating * "⭐" if rating >= 8 else (rating * "🟡" if rating >= 5 else rating * "🔴")
-        comment_str = f"\n   💬 {comment}" if comment else ""
-        lines.append(f"{rating}/10 — {name}{uname} [{workout_date}] {date_fmt} [{ai_mode_}]{comment_str}")
+        stars = rating * "в­ђ" if rating >= 8 else (rating * "рџџЎ" if rating >= 5 else rating * "рџ”ґ")
+        comment_str = f"\n   рџ’¬ {comment}" if comment else ""
+        lines.append(f"{rating}/10 вЂ” {name}{uname} [{workout_date}] {date_fmt} [{ai_mode_}]{comment_str}")
     text = "\n".join(lines)
     for i in range(0, len(text), 4096):
         await update.message.reply_text(text[i:i + 4096])
 
 
 async def cmd_feedbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Последние 20 сообщений обратной связи (только для админов)."""
+    """РџРѕСЃР»РµРґРЅРёРµ 20 СЃРѕРѕР±С‰РµРЅРёР№ РѕР±СЂР°С‚РЅРѕР№ СЃРІСЏР·Рё (С‚РѕР»СЊРєРѕ РґР»СЏ Р°РґРјРёРЅРѕРІ)."""
     if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
-        await update.message.reply_text("Нет доступа.")
+        await update.message.reply_text("РќРµС‚ РґРѕСЃС‚СѓРїР°.")
         return
     rows = get_recent_feedbacks(20)
     if not rows:
-        await update.message.reply_text("Обратной связи пока нет.")
+        await update.message.reply_text("РћР±СЂР°С‚РЅРѕР№ СЃРІСЏР·Рё РїРѕРєР° РЅРµС‚.")
         return
-    lines = ["💬 Последние сообщения (до 20):\n"]
+    lines = ["рџ’¬ РџРѕСЃР»РµРґРЅРёРµ СЃРѕРѕР±С‰РµРЅРёСЏ (РґРѕ 20):\n"]
     for r in rows:
         fb_type, fb_text, created_at, name, username = r[1], r[2], r[3], r[4], r[5]
         date_fmt = (created_at or "")[:10]
         uname = f" (@{username})" if username else ""
-        type_emoji = "🐛" if fb_type == "bug" else "💡"
+        type_emoji = "рџђ›" if fb_type == "bug" else "рџ’Ў"
         lines.append(f"{type_emoji} {name}{uname} [{date_fmt}]\n{fb_text[:300]}")
     text = "\n\n".join(lines)
     for i in range(0, len(text), 4096):
         await update.message.reply_text(text[i:i + 4096])
 
 
-# ── ДВУХШАГОВАЯ ОБРАБОТКА (анализ тренировок) ────────────────
+# в”Ђв”Ђ Р”Р’РЈРҐРЁРђР“РћР’РђРЇ РћР‘Р РђР‘РћРўРљРђ (Р°РЅР°Р»РёР· С‚СЂРµРЅРёСЂРѕРІРѕРє) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 def _format_analysis_result(result: dict, mode: str) -> str:
-    """Красиво форматирует результат analyze_workout для админа."""
+    """РљСЂР°СЃРёРІРѕ С„РѕСЂРјР°С‚РёСЂСѓРµС‚ СЂРµР·СѓР»СЊС‚Р°С‚ analyze_workout РґР»СЏ Р°РґРјРёРЅР°."""
     stats = result.get("_stats", {})
     time_sec = stats.get("time_sec", "?")
-    lines = [f"🔬 Анализ тренировки (режим {mode}, {time_sec}с)\n"]
+    lines = [f"рџ”¬ РђРЅР°Р»РёР· С‚СЂРµРЅРёСЂРѕРІРєРё (СЂРµР¶РёРј {mode}, {time_sec}СЃ)\n"]
 
     if result.get("is_valid"):
-        lines.append("✅ Валидный анонс")
+        lines.append("вњ… Р’Р°Р»РёРґРЅС‹Р№ Р°РЅРѕРЅСЃ")
     else:
-        lines.append(f"❌ Не анонс: {result.get('reject_reason') or '—'}")
+        lines.append(f"вќЊ РќРµ Р°РЅРѕРЅСЃ: {result.get('reject_reason') or 'вЂ”'}")
 
-    wtype = result.get("workout_type", "—")
-    lines.append(f"Тип: {wtype} | Дата: {result.get('workout_date', '—')}")
-    lines.append(f"\n📋 Суть: {result.get('summary', '—')}")
+    wtype = result.get("workout_type", "вЂ”")
+    lines.append(f"РўРёРї: {wtype} | Р”Р°С‚Р°: {result.get('workout_date', 'вЂ”')}")
+    lines.append(f"\nрџ“‹ РЎСѓС‚СЊ: {result.get('summary', 'вЂ”')}")
 
     structure = result.get("structure") or []
     groups = result.get("groups") or []
 
     if wtype == "interval" and structure:
-        # Новая схема: структура один раз + группы как темпы по блокам
-        lines.append("\n🏗 Структура:")
+        # РќРѕРІР°СЏ СЃС…РµРјР°: СЃС‚СЂСѓРєС‚СѓСЂР° РѕРґРёРЅ СЂР°Р· + РіСЂСѓРїРїС‹ РєР°Рє С‚РµРјРїС‹ РїРѕ Р±Р»РѕРєР°Рј
+        lines.append("\nрџЏ— РЎС‚СЂСѓРєС‚СѓСЂР°:")
         for b in structure:
             blk = b.get("block", "?")
             if b.get("type") == "easy":
-                desc = b.get("description") or "лёгкий бег"
-                lines.append(f"  Блок {blk}: {b.get('distance_m', '?')}м — {desc}")
+                desc = b.get("description") or "Р»С‘РіРєРёР№ Р±РµРі"
+                lines.append(f"  Р‘Р»РѕРє {blk}: {b.get('distance_m', '?')}Рј вЂ” {desc}")
             else:
-                purpose = f" — {b['purpose']}" if b.get("purpose") else ""
+                purpose = f" вЂ” {b['purpose']}" if b.get("purpose") else ""
                 lines.append(
-                    f"  Блок {blk}: {b.get('reps', '?')}×{b.get('work_distance_m', '?')}м"
-                    f" / {b.get('recovery_distance_m', '?')}м восст{purpose}"
+                    f"  Р‘Р»РѕРє {blk}: {b.get('reps', '?')}Г—{b.get('work_distance_m', '?')}Рј"
+                    f" / {b.get('recovery_distance_m', '?')}Рј РІРѕСЃСЃС‚{purpose}"
                 )
         if result.get("overall_purpose"):
-            lines.append(f"🎯 Цель тренировки: {result['overall_purpose']}")
+            lines.append(f"рџЋЇ Р¦РµР»СЊ С‚СЂРµРЅРёСЂРѕРІРєРё: {result['overall_purpose']}")
         if result.get("block_contrast"):
-            lines.append(f"🔀 Контраст блоков: {result['block_contrast']}")
+            lines.append(f"рџ”Ђ РљРѕРЅС‚СЂР°СЃС‚ Р±Р»РѕРєРѕРІ: {result['block_contrast']}")
         if result.get("target_athlete"):
-            lines.append(f"🏃 Для кого: {result['target_athlete']}")
+            lines.append(f"рџЏѓ Р”Р»СЏ РєРѕРіРѕ: {result['target_athlete']}")
         if result.get("intensity_level"):
-            lines.append(f"🔥 Тяжесть: {result['intensity_level']}")
+            lines.append(f"рџ”Ґ РўСЏР¶РµСЃС‚СЊ: {result['intensity_level']}")
         if result.get("what_to_watch"):
-            lines.append(f"👀 На что обратить внимание: {result['what_to_watch']}")
+            lines.append(f"рџ‘Ђ РќР° С‡С‚Рѕ РѕР±СЂР°С‚РёС‚СЊ РІРЅРёРјР°РЅРёРµ: {result['what_to_watch']}")
         if result.get("total_volume_km") is not None:
-            lines.append(f"📏 Объём: {result['total_volume_km']} км")
+            lines.append(f"рџ“Џ РћР±СЉС‘Рј: {result['total_volume_km']} РєРј")
         if result.get("is_borderline"):
             note = result.get("borderline_note")
-            lines.append(f"⚖️ Пограничная: да{f' — {note}' if note else ''}")
+            lines.append(f"вљ–пёЏ РџРѕРіСЂР°РЅРёС‡РЅР°СЏ: РґР°{f' вЂ” {note}' if note else ''}")
 
-        lines.append(f"\nГруппы ({len(groups)}):")
+        lines.append(f"\nР“СЂСѓРїРїС‹ ({len(groups)}):")
         for g in groups:
             num = g.get("number", "?")
             tags = []
             if g.get("from_comment"):
-                tags.append("💬из комм.")
+                tags.append("рџ’¬РёР· РєРѕРјРј.")
             if g.get("reps_override"):
-                tags.append(f"повторов: {g['reps_override']}")
+                tags.append(f"РїРѕРІС‚РѕСЂРѕРІ: {g['reps_override']}")
             if g.get("track_note"):
                 tags.append(str(g["track_note"]))
             tag_str = f" ({'; '.join(tags)})" if tags else ""
 
             if g.get("health_group"):
-                lines.append(f"  {num}{tag_str}: бег/ходьба чередование (для начинающих)")
+                lines.append(f"  {num}{tag_str}: Р±РµРі/С…РѕРґСЊР±Р° С‡РµСЂРµРґРѕРІР°РЅРёРµ (РґР»СЏ РЅР°С‡РёРЅР°СЋС‰РёС…)")
                 continue
 
             block_strs = []
             for bl in (g.get("blocks") or []):
-                ar = "🟢" if bl.get("active_recovery") else "⚪"
-                rp = bl.get("recovery_pace") or "—"
+                ar = "рџџў" if bl.get("active_recovery") else "вљЄ"
+                rp = bl.get("recovery_pace") or "вЂ”"
                 block_strs.append(
-                    f"бл{bl.get('block', '?')} {bl.get('work_pace', '—')}/км (восст {rp} {ar})"
+                    f"Р±Р»{bl.get('block', '?')} {bl.get('work_pace', 'вЂ”')}/РєРј (РІРѕСЃСЃС‚ {rp} {ar})"
                 )
-            body = "; ".join(block_strs) if block_strs else "—"
+            body = "; ".join(block_strs) if block_strs else "вЂ”"
             lines.append(f"  {num}{tag_str}: {body}")
     else:
-        # Long или старый формат: группы с текстовым work
-        lines.append(f"\nГруппы ({len(groups)}):")
+        # Long РёР»Рё СЃС‚Р°СЂС‹Р№ С„РѕСЂРјР°С‚: РіСЂСѓРїРїС‹ СЃ С‚РµРєСЃС‚РѕРІС‹Рј work
+        lines.append(f"\nР“СЂСѓРїРїС‹ ({len(groups)}):")
         for g in groups:
             recovery = g.get("recovery")
-            line = f"  {g.get('number', '?')}. {g.get('work', '—')}"
+            line = f"  {g.get('number', '?')}. {g.get('work', 'вЂ”')}"
             if recovery and str(recovery).lower() != "none":
-                ar = " 🟢актив.восст." if g.get("active_recovery") else ""
-                rec_pace = g.get("recovery_pace") or "—"
-                line += f"\n     ↻ восст: {recovery} ({rec_pace}){ar}"
+                ar = " рџџўР°РєС‚РёРІ.РІРѕСЃСЃС‚." if g.get("active_recovery") else ""
+                rec_pace = g.get("recovery_pace") or "вЂ”"
+                line += f"\n     в†» РІРѕСЃСЃС‚: {recovery} ({rec_pace}){ar}"
             lines.append(line)
 
     extra = result.get("extra_groups") or []
     if extra:
-        lines.append(f"\nДоп. группы ({len(extra)}):")
+        lines.append(f"\nР”РѕРї. РіСЂСѓРїРїС‹ ({len(extra)}):")
         for e in extra:
-            lines.append(f"  {e.get('number', '?')}: {e.get('description', '—')} [{e.get('source', '—')}]")
+            lines.append(f"  {e.get('number', '?')}: {e.get('description', 'вЂ”')} [{e.get('source', 'вЂ”')}]")
     else:
-        lines.append("\nДоп. группы: нет")
+        lines.append("\nР”РѕРї. РіСЂСѓРїРїС‹: РЅРµС‚")
 
     if wtype == "long":
-        prog = "да" if result.get("has_progression") else "нет"
-        even = "да" if result.get("even_pace_available") else "нет"
-        lines.append(f"\nПрогрессия: {prog} | Ровный темп: {even}")
+        prog = "РґР°" if result.get("has_progression") else "РЅРµС‚"
+        even = "РґР°" if result.get("even_pace_available") else "РЅРµС‚"
+        lines.append(f"\nРџСЂРѕРіСЂРµСЃСЃРёСЏ: {prog} | Р РѕРІРЅС‹Р№ С‚РµРјРї: {even}")
 
-    lines.append(f"\n📝 Заметки тренера: {result.get('coach_notes') or '—'}")
-    lines.append(f"🗑 Проигнорировано: {result.get('ignored') or '—'}")
+    lines.append(f"\nрџ“ќ Р—Р°РјРµС‚РєРё С‚СЂРµРЅРµСЂР°: {result.get('coach_notes') or 'вЂ”'}")
+    lines.append(f"рџ—‘ РџСЂРѕРёРіРЅРѕСЂРёСЂРѕРІР°РЅРѕ: {result.get('ignored') or 'вЂ”'}")
     return "\n".join(lines)
 
 
 async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Выбор типа тренировки для анализа через DeepSeek (только для админов)."""
+    """Р’С‹Р±РѕСЂ С‚РёРїР° С‚СЂРµРЅРёСЂРѕРІРєРё РґР»СЏ Р°РЅР°Р»РёР·Р° С‡РµСЂРµР· DeepSeek (С‚РѕР»СЊРєРѕ РґР»СЏ Р°РґРјРёРЅРѕРІ)."""
     if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
-        await update.message.reply_text("Нет доступа.")
+        await update.message.reply_text("РќРµС‚ РґРѕСЃС‚СѓРїР°.")
         return
     await update.message.reply_text(
-        "Какую тренировку проанализировать?",
+        "РљР°РєСѓСЋ С‚СЂРµРЅРёСЂРѕРІРєСѓ РїСЂРѕР°РЅР°Р»РёР·РёСЂРѕРІР°С‚СЊ?",
         reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("⚡ Интервальная (вт/пт)", callback_data="analyze_interval"),
-            InlineKeyboardButton("🕐 Long Run (вс)",        callback_data="analyze_long"),
+            InlineKeyboardButton("вљЎ РРЅС‚РµСЂРІР°Р»СЊРЅР°СЏ (РІС‚/РїС‚)", callback_data="analyze_interval"),
+            InlineKeyboardButton("рџ•ђ Long Run (РІСЃ)",        callback_data="analyze_long"),
         ]])
     )
 
 
 async def _run_analyze_and_show(workout: dict, query, context: ContextTypes.DEFAULT_TYPE):
-    """Анализирует найденный пост тренировки и показывает результат админу."""
+    """РђРЅР°Р»РёР·РёСЂСѓРµС‚ РЅР°Р№РґРµРЅРЅС‹Р№ РїРѕСЃС‚ С‚СЂРµРЅРёСЂРѕРІРєРё Рё РїРѕРєР°Р·С‹РІР°РµС‚ СЂРµР·СѓР»СЊС‚Р°С‚ Р°РґРјРёРЅСѓ."""
     raw_text = workout.get("raw_text", "")
     comments_text = workout.get("comments_text", "")
     post_id = workout.get("post_id")
 
     if not raw_text:
-        await query.edit_message_text("❌ Не удалось получить текст поста для анализа.")
+        await query.edit_message_text("вќЊ РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕР»СѓС‡РёС‚СЊ С‚РµРєСЃС‚ РїРѕСЃС‚Р° РґР»СЏ Р°РЅР°Р»РёР·Р°.")
         return
 
     mode = get_preprocess_mode()
     await query.edit_message_text(
-        f"⏳ Анализирую через DeepSeek (режим {mode})...\nМожет занять 1-2 минуты."
+        f"вЏі РђРЅР°Р»РёР·РёСЂСѓСЋ С‡РµСЂРµР· DeepSeek (СЂРµР¶РёРј {mode})...\nРњРѕР¶РµС‚ Р·Р°РЅСЏС‚СЊ 1-2 РјРёРЅСѓС‚С‹."
     )
 
     import functools
@@ -1297,10 +1315,10 @@ async def _run_analyze_and_show(workout: dict, query, context: ContextTypes.DEFA
     )
 
     if not result:
-        await query.edit_message_text("❌ Анализ не удался (пустой ответ модели). Попробуй ещё раз.")
+        await query.edit_message_text("вќЊ РђРЅР°Р»РёР· РЅРµ СѓРґР°Р»СЃСЏ (РїСѓСЃС‚РѕР№ РѕС‚РІРµС‚ РјРѕРґРµР»Рё). РџРѕРїСЂРѕР±СѓР№ РµС‰С‘ СЂР°Р·.")
         return
 
-    # Сохраняем результат в БД
+    # РЎРѕС…СЂР°РЅСЏРµРј СЂРµР·СѓР»СЊС‚Р°С‚ РІ Р‘Р”
     try:
         import json as _json
         save_workout_analysis(
@@ -1327,29 +1345,29 @@ async def _run_analyze_and_show(workout: dict, query, context: ContextTypes.DEFA
 
 
 def _build_preprocess_text(current: str) -> str:
-    label = "🧠 deep (deepseek-v4-pro)" if current == "deep" else "⚡ smart (deepseek-v4-flash)"
+    label = "рџ§  deep (deepseek-v4-pro)" if current == "deep" else "вљЎ smart (deepseek-v4-flash)"
     return (
-        "🔬 Режим анализа тренировок (preprocess)\n\n"
-        f"Текущий: {label}\n\n"
-        "🧠 deep — медленнее, максимальное качество\n"
-        "⚡ smart — быстрее, чуть проще\n\n"
-        "Выбери режим:"
+        "рџ”¬ Р РµР¶РёРј Р°РЅР°Р»РёР·Р° С‚СЂРµРЅРёСЂРѕРІРѕРє (preprocess)\n\n"
+        f"РўРµРєСѓС‰РёР№: {label}\n\n"
+        "рџ§  deep вЂ” РјРµРґР»РµРЅРЅРµРµ, РјР°РєСЃРёРјР°Р»СЊРЅРѕРµ РєР°С‡РµСЃС‚РІРѕ\n"
+        "вљЎ smart вЂ” Р±С‹СЃС‚СЂРµРµ, С‡СѓС‚СЊ РїСЂРѕС‰Рµ\n\n"
+        "Р’С‹Р±РµСЂРё СЂРµР¶РёРј:"
     )
 
 
 def _build_preprocess_keyboard(current: str) -> InlineKeyboardMarkup:
     def btn(key, label):
-        mark = "✓ " if key == current else ""
+        mark = "вњ“ " if key == current else ""
         return InlineKeyboardButton(f"{mark}{label}", callback_data=f"preprocess_set_{key}")
     return InlineKeyboardMarkup([
-        [btn("deep", "🧠 deep"), btn("smart", "⚡ smart")],
+        [btn("deep", "рџ§  deep"), btn("smart", "вљЎ smart")],
     ])
 
 
 async def cmd_preprocess_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Переключатель режима анализа тренировок deep/smart (только для админов)."""
+    """РџРµСЂРµРєР»СЋС‡Р°С‚РµР»СЊ СЂРµР¶РёРјР° Р°РЅР°Р»РёР·Р° С‚СЂРµРЅРёСЂРѕРІРѕРє deep/smart (С‚РѕР»СЊРєРѕ РґР»СЏ Р°РґРјРёРЅРѕРІ)."""
     if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
-        await update.message.reply_text("Нет доступа.")
+        await update.message.reply_text("РќРµС‚ РґРѕСЃС‚СѓРїР°.")
         return
     current = get_preprocess_mode()
     await update.message.reply_text(
@@ -1358,17 +1376,17 @@ async def cmd_preprocess_mode(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
 
 
-# ── ТЕСТ ШАГА 2 (рекомендация на готовом анализе) ────────────
+# в”Ђв”Ђ РўР•РЎРў РЁРђР“Рђ 2 (СЂРµРєРѕРјРµРЅРґР°С†РёСЏ РЅР° РіРѕС‚РѕРІРѕРј Р°РЅР°Р»РёР·Рµ) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 async def _collect_admin_user_data(db_user_id: int) -> tuple[dict, list[str]]:
-    """Собирает user_data текущего админа для recommend_*. Возвращает (user_data, missing)."""
+    """РЎРѕР±РёСЂР°РµС‚ user_data С‚РµРєСѓС‰РµРіРѕ Р°РґРјРёРЅР° РґР»СЏ recommend_*. Р’РѕР·РІСЂР°С‰Р°РµС‚ (user_data, missing)."""
     missing = []
     profile = get_user_profile(db_user_id)
     spec = (profile or {}).get("specialization")
 
     zinfo = zones.get_pace_zones(db_user_id)
     if not zinfo or not zinfo.get("zones"):
-        missing.append("персональные зоны (нет VO2max/ЛП в профиле)")
+        missing.append("РїРµСЂСЃРѕРЅР°Р»СЊРЅС‹Рµ Р·РѕРЅС‹ (РЅРµС‚ VO2max/Р›Рџ РІ РїСЂРѕС„РёР»Рµ)")
 
     recovery = None
     try:
@@ -1376,37 +1394,37 @@ async def _collect_admin_user_data(db_user_id: int) -> tuple[dict, list[str]]:
     except Exception as e:
         logger.warning(f"test: recovery error for {db_user_id}: {e}")
     if not recovery:
-        missing.append("восстановление (Whoop/Garmin/COROS/Polar) — взято нейтральное 70")
+        missing.append("РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРёРµ (Whoop/Garmin/COROS/Polar) вЂ” РІР·СЏС‚Рѕ РЅРµР№С‚СЂР°Р»СЊРЅРѕРµ 70")
 
     user_data = {"db_user_id": db_user_id, "specialization": spec, "recovery": recovery}
     return user_data, missing
 
 
 async def _run_test_step2(update, context, *, long: bool):
-    """Общая логика /test_workout и /test_long."""
+    """РћР±С‰Р°СЏ Р»РѕРіРёРєР° /test_workout Рё /test_long."""
     if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
-        await update.message.reply_text("Нет доступа.")
+        await update.message.reply_text("РќРµС‚ РґРѕСЃС‚СѓРїР°.")
         return
 
     user = update.effective_user
     db_user_id = get_or_create_user(user.id, user.full_name, user.username)
-    label = "Long Run" if long else "интервальную"
-    msg = await update.message.reply_text(f"🧪 Ищу {label} тренировку в канале...")
+    label = "Long Run" if long else "РёРЅС‚РµСЂРІР°Р»СЊРЅСѓСЋ"
+    msg = await update.message.reply_text(f"рџ§Є РС‰Сѓ {label} С‚СЂРµРЅРёСЂРѕРІРєСѓ РІ РєР°РЅР°Р»Рµ...")
 
     workout = await (find_next_long_run() if long else find_next_workout(only_interval=True))
     if not workout:
-        await msg.edit_text("😔 Не нашёл подходящую тренировку в канале.")
+        await msg.edit_text("рџ” РќРµ РЅР°С€С‘Р» РїРѕРґС…РѕРґСЏС‰СѓСЋ С‚СЂРµРЅРёСЂРѕРІРєСѓ РІ РєР°РЅР°Р»Рµ.")
         return
 
     mode = get_preprocess_mode()
-    await msg.edit_text(f"🧪 Анализирую через DeepSeek (режим {mode})...\nМожет занять 1-2 минуты.")
+    await msg.edit_text(f"рџ§Є РђРЅР°Р»РёР·РёСЂСѓСЋ С‡РµСЂРµР· DeepSeek (СЂРµР¶РёРј {mode})...\nРњРѕР¶РµС‚ Р·Р°РЅСЏС‚СЊ 1-2 РјРёРЅСѓС‚С‹.")
 
     import functools
     analysis = await asyncio.get_event_loop().run_in_executor(
         None, functools.partial(analyze_workout, workout["raw_text"], workout["comments_text"], mode)
     )
     if not analysis:
-        await msg.edit_text("❌ Анализ не удался (пустой ответ модели).")
+        await msg.edit_text("вќЊ РђРЅР°Р»РёР· РЅРµ СѓРґР°Р»СЃСЏ (РїСѓСЃС‚РѕР№ РѕС‚РІРµС‚ РјРѕРґРµР»Рё).")
         return
 
     user_data, missing = await _collect_admin_user_data(db_user_id)
@@ -1416,50 +1434,50 @@ async def _run_test_step2(update, context, *, long: bool):
     else:
         rec = claude_advisor.recommend_group(analysis, user_data)
 
-    # ── Заголовок теста с пометкой чего не хватило ────────────
+    # в”Ђв”Ђ Р—Р°РіРѕР»РѕРІРѕРє С‚РµСЃС‚Р° СЃ РїРѕРјРµС‚РєРѕР№ С‡РµРіРѕ РЅРµ С…РІР°С‚РёР»Рѕ в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
     header = [
-        f"🧪 <b>Тест Шага 2 — {'Long Run' if long else 'Интервальная'}</b>",
-        f"Анализ: {analysis.get('workout_date', '—')} · "
-        f"valid={analysis.get('is_valid')} · режим {mode}",
+        f"рџ§Є <b>РўРµСЃС‚ РЁР°РіР° 2 вЂ” {'Long Run' if long else 'РРЅС‚РµСЂРІР°Р»СЊРЅР°СЏ'}</b>",
+        f"РђРЅР°Р»РёР·: {analysis.get('workout_date', 'вЂ”')} В· "
+        f"valid={analysis.get('is_valid')} В· СЂРµР¶РёРј {mode}",
     ]
     if not long:
         header.append(f"is_borderline: {analysis.get('is_borderline')}")
     if missing:
-        header.append("⚠️ Не хватило данных: " + "; ".join(missing))
+        header.append("вљ пёЏ РќРµ С…РІР°С‚РёР»Рѕ РґР°РЅРЅС‹С…: " + "; ".join(missing))
     else:
         src = (rec or {}).get("zones_source")
-        header.append(f"✅ Данные полные (зоны: {src})")
+        header.append(f"вњ… Р”Р°РЅРЅС‹Рµ РїРѕР»РЅС‹Рµ (Р·РѕРЅС‹: {src})")
 
     await msg.edit_text("\n".join(header), parse_mode="HTML")
 
-    # ── Сам вывод рекомендации (как увидит пользователь) ──────
+    # в”Ђв”Ђ РЎР°Рј РІС‹РІРѕРґ СЂРµРєРѕРјРµРЅРґР°С†РёРё (РєР°Рє СѓРІРёРґРёС‚ РїРѕР»СЊР·РѕРІР°С‚РµР»СЊ) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
     if not rec or not rec.get("ok"):
-        note = (rec or {}).get("note", "рекомендация недоступна")
-        await context.bot.send_message(user.id, f"❌ {note}")
+        note = (rec or {}).get("note", "СЂРµРєРѕРјРµРЅРґР°С†РёСЏ РЅРµРґРѕСЃС‚СѓРїРЅР°")
+        await context.bot.send_message(user.id, f"вќЊ {note}")
         return
 
-    rec_text = rec.get("text", "(пустой вывод)")
+    rec_text = rec.get("text", "(РїСѓСЃС‚РѕР№ РІС‹РІРѕРґ)")
     for i in range(0, len(rec_text), 4096):
         await context.bot.send_message(user.id, rec_text[i:i + 4096])
 
 
 async def cmd_test_workout(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Тест Шага 2 для интервальной: анализ + recommend_group на данных админа (админ)."""
+    """РўРµСЃС‚ РЁР°РіР° 2 РґР»СЏ РёРЅС‚РµСЂРІР°Р»СЊРЅРѕР№: Р°РЅР°Р»РёР· + recommend_group РЅР° РґР°РЅРЅС‹С… Р°РґРјРёРЅР° (Р°РґРјРёРЅ)."""
     await _run_test_step2(update, context, long=False)
 
 
 async def cmd_test_long(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Тест Шага 2 для длительной: анализ + recommend_long на данных админа (админ)."""
+    """РўРµСЃС‚ РЁР°РіР° 2 РґР»СЏ РґР»РёС‚РµР»СЊРЅРѕР№: Р°РЅР°Р»РёР· + recommend_long РЅР° РґР°РЅРЅС‹С… Р°РґРјРёРЅР° (Р°РґРјРёРЅ)."""
     await _run_test_step2(update, context, long=True)
 
 
 async def _reanalyze_one(workout: dict, mode: str) -> str:
-    """Принудительный переанализ одного анонса (игнор idempotency) → запись в workout_analysis.
-    Возвращает строку статуса для админа.
+    """РџСЂРёРЅСѓРґРёС‚РµР»СЊРЅС‹Р№ РїРµСЂРµР°РЅР°Р»РёР· РѕРґРЅРѕРіРѕ Р°РЅРѕРЅСЃР° (РёРіРЅРѕСЂ idempotency) в†’ Р·Р°РїРёСЃСЊ РІ workout_analysis.
+    Р’РѕР·РІСЂР°С‰Р°РµС‚ СЃС‚СЂРѕРєСѓ СЃС‚Р°С‚СѓСЃР° РґР»СЏ Р°РґРјРёРЅР°.
     """
     import json as _json, functools
-    label = "🕐 Long Run" if workout.get("workout_type") == "long" else "⚡ Интервальная"
-    date_fmt = workout.get("workout_date", "—")
+    label = "рџ•ђ Long Run" if workout.get("workout_type") == "long" else "вљЎ РРЅС‚РµСЂРІР°Р»СЊРЅР°СЏ"
+    date_fmt = workout.get("workout_date", "вЂ”")
     raw_text = workout.get("raw_text") or ""
     comments_text = workout.get("comments_text") or ""
     edit_date = workout.get("edit_date")
@@ -1469,7 +1487,7 @@ async def _reanalyze_one(workout: dict, mode: str) -> str:
         None, functools.partial(analyze_workout, raw_text, comments_text, mode)
     )
     if not result:
-        return f"{label} — {date_fmt}: ❌ анализ не удался (пустой ответ модели)"
+        return f"{label} вЂ” {date_fmt}: вќЊ Р°РЅР°Р»РёР· РЅРµ СѓРґР°Р»СЃСЏ (РїСѓСЃС‚РѕР№ РѕС‚РІРµС‚ РјРѕРґРµР»Рё)"
 
     save_workout_analysis(
         post_id=workout.get("post_id"),
@@ -1484,44 +1502,44 @@ async def _reanalyze_one(workout: dict, mode: str) -> str:
     )
     n_groups = len(result.get("groups") or [])
     n_extra = len(result.get("extra_groups") or [])
-    logger.info(f"reanalyze: post_id={workout.get('post_id')} обновлён вручную "
+    logger.info(f"reanalyze: post_id={workout.get('post_id')} РѕР±РЅРѕРІР»С‘РЅ РІСЂСѓС‡РЅСѓСЋ "
                 f"(type={result.get('workout_type')}, valid={result.get('is_valid')})")
     return (
-        f"{label} — {result.get('workout_date', date_fmt)} | режим {mode} | "
+        f"{label} вЂ” {result.get('workout_date', date_fmt)} | СЂРµР¶РёРј {mode} | "
         f"valid={result.get('is_valid')}\n"
-        f"   групп: {n_groups}, доп. групп: {n_extra} — обновлено"
+        f"   РіСЂСѓРїРї: {n_groups}, РґРѕРї. РіСЂСѓРїРї: {n_extra} вЂ” РѕР±РЅРѕРІР»РµРЅРѕ"
     )
 
 
 async def cmd_reanalyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Ручной форс переанализа свежих анонсов (interval + long) → кэш workout_analysis (админ)."""
+    """Р СѓС‡РЅРѕР№ С„РѕСЂСЃ РїРµСЂРµР°РЅР°Р»РёР·Р° СЃРІРµР¶РёС… Р°РЅРѕРЅСЃРѕРІ (interval + long) в†’ РєСЌС€ workout_analysis (Р°РґРјРёРЅ)."""
     if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
-        await update.message.reply_text("Нет доступа.")
+        await update.message.reply_text("РќРµС‚ РґРѕСЃС‚СѓРїР°.")
         return
 
     mode = get_preprocess_mode()
     msg = await update.message.reply_text(
-        f"🔁 Принудительный переанализ свежих анонсов (режим {mode})...\nМожет занять 1-2 минуты на каждый."
+        f"рџ”Ѓ РџСЂРёРЅСѓРґРёС‚РµР»СЊРЅС‹Р№ РїРµСЂРµР°РЅР°Р»РёР· СЃРІРµР¶РёС… Р°РЅРѕРЅСЃРѕРІ (СЂРµР¶РёРј {mode})...\nРњРѕР¶РµС‚ Р·Р°РЅСЏС‚СЊ 1-2 РјРёРЅСѓС‚С‹ РЅР° РєР°Р¶РґС‹Р№."
     )
 
-    lines = [f"🔁 <b>Переанализ выполнен (режим {mode})</b>\n"]
+    lines = [f"рџ”Ѓ <b>РџРµСЂРµР°РЅР°Р»РёР· РІС‹РїРѕР»РЅРµРЅ (СЂРµР¶РёРј {mode})</b>\n"]
 
     workout = await find_next_workout(only_interval=True)
     if workout and workout.get("post_id"):
         lines.append(await _reanalyze_one(workout, mode))
     else:
-        lines.append("⚡ Интервальная — анонс не найден")
+        lines.append("вљЎ РРЅС‚РµСЂРІР°Р»СЊРЅР°СЏ вЂ” Р°РЅРѕРЅСЃ РЅРµ РЅР°Р№РґРµРЅ")
 
     workout_lr = await find_next_long_run()
     if workout_lr and workout_lr.get("post_id"):
         lines.append(await _reanalyze_one(workout_lr, mode))
     else:
-        lines.append("🕐 Long Run — анонс не найден")
+        lines.append("рџ•ђ Long Run вЂ” Р°РЅРѕРЅСЃ РЅРµ РЅР°Р№РґРµРЅ")
 
     await msg.edit_text("\n".join(lines), parse_mode="HTML")
 
 
-# ── КНОПКИ ───────────────────────────────────────────────────
+# в”Ђв”Ђ РљРќРћРџРљР в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1537,25 +1555,25 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _show_main_menu(query, user, db_user_id)
 
     elif query.data == "main_menu_new":
-        # Приходит из кнопок на рекомендации — отправляем НОВЫМ сообщением,
-        # чтобы не перезаписывать текст рекомендации.
+        # РџСЂРёС…РѕРґРёС‚ РёР· РєРЅРѕРїРѕРє РЅР° СЂРµРєРѕРјРµРЅРґР°С†РёРё вЂ” РѕС‚РїСЂР°РІР»СЏРµРј РќРћР’Р«Рњ СЃРѕРѕР±С‰РµРЅРёРµРј,
+        # С‡С‚РѕР±С‹ РЅРµ РїРµСЂРµР·Р°РїРёСЃС‹РІР°С‚СЊ С‚РµРєСЃС‚ СЂРµРєРѕРјРµРЅРґР°С†РёРё.
         db_user_id = get_or_create_user(user.id, user.full_name, user.username)
         text, keyboard = _build_main_menu_content(user, db_user_id)
         await context.bot.send_message(user.id, text, reply_markup=keyboard)
 
     elif query.data == "show_settings":
-        # Только кнопки меняем, текст оставляем
+        # РўРѕР»СЊРєРѕ РєРЅРѕРїРєРё РјРµРЅСЏРµРј, С‚РµРєСЃС‚ РѕСЃС‚Р°РІР»СЏРµРј
         await query.edit_message_reply_markup(reply_markup=_build_screen2_keyboard())
 
     elif query.data == "settings_menu":
-        # Возврат в Экран 2 из вложенных разделов (профиль / уведомления / сервисы)
+        # Р’РѕР·РІСЂР°С‚ РІ Р­РєСЂР°РЅ 2 РёР· РІР»РѕР¶РµРЅРЅС‹С… СЂР°Р·РґРµР»РѕРІ (РїСЂРѕС„РёР»СЊ / СѓРІРµРґРѕРјР»РµРЅРёСЏ / СЃРµСЂРІРёСЃС‹)
         db_user_id = get_or_create_user(user.id, user.full_name, user.username)
         text, _ = _build_main_menu_content(user, db_user_id)
         await query.edit_message_text(text, reply_markup=_build_screen2_keyboard())
 
     elif query.data == "show_services":
         db_user_id = get_or_create_user(user.id, user.full_name, user.username)
-        # Только кнопки меняем, текст оставляем
+        # РўРѕР»СЊРєРѕ РєРЅРѕРїРєРё РјРµРЅСЏРµРј, С‚РµРєСЃС‚ РѕСЃС‚Р°РІР»СЏРµРј
         await query.edit_message_reply_markup(
             reply_markup=_build_screen3_keyboard(db_user_id)
         )
@@ -1563,14 +1581,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "connect_strava":
         auth_url = get_auth_url(user.id)
         keyboard = [
-            [InlineKeyboardButton("🔗 Войти в Strava", url=auth_url)],
-            [InlineKeyboardButton("← Назад", callback_data="show_services")],
+            [InlineKeyboardButton("рџ”— Р’РѕР№С‚Рё РІ Strava", url=auth_url)],
+            [InlineKeyboardButton("в†ђ РќР°Р·Р°Рґ", callback_data="show_services")],
         ]
         await query.edit_message_text(
-            "⚠️ Strava временно ограничена — подключение новых пользователей на проверке у Strava.\n"
-            "Используй Garmin или COROS (/connect_garmin, /connect_coros) для полноценной работы.\n\n"
-            "Нажми кнопку и авторизуйся в Strava.\n\n"
-            "После авторизации ты автоматически получишь сообщение в Telegram — ничего копировать не нужно.",
+            "вљ пёЏ Strava РІСЂРµРјРµРЅРЅРѕ РѕРіСЂР°РЅРёС‡РµРЅР° вЂ” РїРѕРґРєР»СЋС‡РµРЅРёРµ РЅРѕРІС‹С… РїРѕР»СЊР·РѕРІР°С‚РµР»РµР№ РЅР° РїСЂРѕРІРµСЂРєРµ Сѓ Strava.\n"
+            "РСЃРїРѕР»СЊР·СѓР№ Garmin РёР»Рё COROS (/connect_garmin, /connect_coros) РґР»СЏ РїРѕР»РЅРѕС†РµРЅРЅРѕР№ СЂР°Р±РѕС‚С‹.\n\n"
+            "РќР°Р¶РјРё РєРЅРѕРїРєСѓ Рё Р°РІС‚РѕСЂРёР·СѓР№СЃСЏ РІ Strava.\n\n"
+            "РџРѕСЃР»Рµ Р°РІС‚РѕСЂРёР·Р°С†РёРё С‚С‹ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё РїРѕР»СѓС‡РёС€СЊ СЃРѕРѕР±С‰РµРЅРёРµ РІ Telegram вЂ” РЅРёС‡РµРіРѕ РєРѕРїРёСЂРѕРІР°С‚СЊ РЅРµ РЅСѓР¶РЅРѕ.",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
@@ -1578,31 +1596,31 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         from whoop import get_auth_url as whoop_auth_url
         auth_url = whoop_auth_url(user.id)
         keyboard = [
-            [InlineKeyboardButton("🔗 Войти в Whoop", url=auth_url)],
-            [InlineKeyboardButton("← Назад", callback_data="show_services")],
+            [InlineKeyboardButton("рџ”— Р’РѕР№С‚Рё РІ Whoop", url=auth_url)],
+            [InlineKeyboardButton("в†ђ РќР°Р·Р°Рґ", callback_data="show_services")],
         ]
         context.user_data["awaiting_whoop_code"] = True
         await query.edit_message_text(
-            "Нажми кнопку и авторизуйся в Whoop.\n\n"
-            "После авторизации браузер откроет страницу с JSON — "
-            "скопируй весь URL из адресной строки и отправь мне сюда.",
+            "РќР°Р¶РјРё РєРЅРѕРїРєСѓ Рё Р°РІС‚РѕСЂРёР·СѓР№СЃСЏ РІ Whoop.\n\n"
+            "РџРѕСЃР»Рµ Р°РІС‚РѕСЂРёР·Р°С†РёРё Р±СЂР°СѓР·РµСЂ РѕС‚РєСЂРѕРµС‚ СЃС‚СЂР°РЅРёС†Сѓ СЃ JSON вЂ” "
+            "СЃРєРѕРїРёСЂСѓР№ РІРµСЃСЊ URL РёР· Р°РґСЂРµСЃРЅРѕР№ СЃС‚СЂРѕРєРё Рё РѕС‚РїСЂР°РІСЊ РјРЅРµ СЃСЋРґР°.",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
     elif query.data == "connect_garmin_btn":
         context.user_data["awaiting_garmin"] = "email"
         await query.edit_message_text(
-            "Подключение Garmin Connect\n\n"
-            "Email и пароль хранятся в зашифрованном виде (AES-256).\n\n"
-            "Введи email от Garmin Connect:"
+            "РџРѕРґРєР»СЋС‡РµРЅРёРµ Garmin Connect\n\n"
+            "Email Рё РїР°СЂРѕР»СЊ С…СЂР°РЅСЏС‚СЃСЏ РІ Р·Р°С€РёС„СЂРѕРІР°РЅРЅРѕРј РІРёРґРµ (AES-256).\n\n"
+            "Р’РІРµРґРё email РѕС‚ Garmin Connect:"
         )
 
     elif query.data == "connect_coros_btn":
         context.user_data["awaiting_coros"] = "email"
         await query.edit_message_text(
-            "Подключение COROS\n\n"
-            "Email и пароль хранятся в зашифрованном виде (AES-256).\n\n"
-            "Введи email от аккаунта COROS:"
+            "РџРѕРґРєР»СЋС‡РµРЅРёРµ COROS\n\n"
+            "Email Рё РїР°СЂРѕР»СЊ С…СЂР°РЅСЏС‚СЃСЏ РІ Р·Р°С€РёС„СЂРѕРІР°РЅРЅРѕРј РІРёРґРµ (AES-256).\n\n"
+            "Р’РІРµРґРё email РѕС‚ Р°РєРєР°СѓРЅС‚Р° COROS:"
         )
 
     elif query.data == "connect_polar_btn":
@@ -1610,28 +1628,28 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         auth_url = polar_auth_url(user.id)
         if not auth_url:
             await query.edit_message_text(
-                "❌ Polar не настроен. Обратитесь к администратору.",
+                "вќЊ Polar РЅРµ РЅР°СЃС‚СЂРѕРµРЅ. РћР±СЂР°С‚РёС‚РµСЃСЊ Рє Р°РґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂСѓ.",
                 reply_markup=_build_screen3_keyboard(get_or_create_user(user.id, user.full_name, user.username))
             )
             return
         keyboard = [
-            [InlineKeyboardButton("🔗 Войти в Polar", url=auth_url)],
-            [InlineKeyboardButton("← Назад", callback_data="show_services")],
+            [InlineKeyboardButton("рџ”— Р’РѕР№С‚Рё РІ Polar", url=auth_url)],
+            [InlineKeyboardButton("в†ђ РќР°Р·Р°Рґ", callback_data="show_services")],
         ]
         await query.edit_message_text(
-            "Подключение Polar\n\n"
-            "Нажми кнопку и авторизуйся в Polar Flow.\n\n"
-            "После авторизации ты автоматически получишь сообщение в Telegram — ничего копировать не нужно.",
+            "РџРѕРґРєР»СЋС‡РµРЅРёРµ Polar\n\n"
+            "РќР°Р¶РјРё РєРЅРѕРїРєСѓ Рё Р°РІС‚РѕСЂРёР·СѓР№СЃСЏ РІ Polar Flow.\n\n"
+            "РџРѕСЃР»Рµ Р°РІС‚РѕСЂРёР·Р°С†РёРё С‚С‹ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё РїРѕР»СѓС‡РёС€СЊ СЃРѕРѕР±С‰РµРЅРёРµ РІ Telegram вЂ” РЅРёС‡РµРіРѕ РєРѕРїРёСЂРѕРІР°С‚СЊ РЅРµ РЅСѓР¶РЅРѕ.",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
     elif query.data == "svc_noop":
-        pass  # нажатие на лейбл подключённого сервиса — ничего не делаем
+        pass  # РЅР°Р¶Р°С‚РёРµ РЅР° Р»РµР№Р±Р» РїРѕРґРєР»СЋС‡С‘РЅРЅРѕРіРѕ СЃРµСЂРІРёСЃР° вЂ” РЅРёС‡РµРіРѕ РЅРµ РґРµР»Р°РµРј
 
     elif query.data == "svc_cancel":
         db_user_id = get_or_create_user(user.id, user.full_name, user.username)
         await query.edit_message_text(
-            "🔗 Подключённые сервисы",
+            "рџ”— РџРѕРґРєР»СЋС‡С‘РЅРЅС‹Рµ СЃРµСЂРІРёСЃС‹",
             reply_markup=_build_screen3_keyboard(db_user_id)
         )
 
@@ -1639,10 +1657,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         svc = query.data[len("disc_ask_"):]
         name = _svc_name(svc)
         await query.edit_message_text(
-            f"Отключить {name}?\n\nДанные будут удалены из бота.",
+            f"РћС‚РєР»СЋС‡РёС‚СЊ {name}?\n\nР”Р°РЅРЅС‹Рµ Р±СѓРґСѓС‚ СѓРґР°Р»РµРЅС‹ РёР· Р±РѕС‚Р°.",
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("✅ Да, отключить", callback_data=f"disc_yes_{svc}"),
-                InlineKeyboardButton("❌ Отмена",        callback_data="svc_cancel"),
+                InlineKeyboardButton("вњ… Р”Р°, РѕС‚РєР»СЋС‡РёС‚СЊ", callback_data=f"disc_yes_{svc}"),
+                InlineKeyboardButton("вќЊ РћС‚РјРµРЅР°",        callback_data="svc_cancel"),
             ]])
         )
 
@@ -1651,29 +1669,29 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db_user_id = get_or_create_user(user.id, user.full_name, user.username)
         delete_token(db_user_id, svc)
         done_msg = _svc_done_msg(svc)
-        logger.info(f"Сервис {svc} отключён для user {db_user_id}")
+        logger.info(f"РЎРµСЂРІРёСЃ {svc} РѕС‚РєР»СЋС‡С‘РЅ РґР»СЏ user {db_user_id}")
         await query.edit_message_text(
-            f"✅ {done_msg}.",
+            f"вњ… {done_msg}.",
             reply_markup=_build_screen3_keyboard(db_user_id)
         )
 
     elif query.data == "get_morning":
-        msg = await context.bot.send_message(user.id, "☀️ Проверяю твоё восстановление...")
+        msg = await context.bot.send_message(user.id, "вЂпёЏ РџСЂРѕРІРµСЂСЏСЋ С‚РІРѕС‘ РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРёРµ...")
         await _send_morning_check(user.id, context, msg)
 
     elif query.data == "get_workout":
-        msg = await context.bot.send_message(user.id, "🔍 Подбираю тренировку...")
+        msg = await context.bot.send_message(user.id, "рџ”Ќ РџРѕРґР±РёСЂР°СЋ С‚СЂРµРЅРёСЂРѕРІРєСѓ...")
         await _send_recommendation(user.id, user.full_name, context, long=False, msg=msg)
 
     elif query.data == "get_long_run":
-        msg = await context.bot.send_message(user.id, "🔍 Подбираю Long Run...")
+        msg = await context.bot.send_message(user.id, "рџ”Ќ РџРѕРґР±РёСЂР°СЋ Long Run...")
         await _send_recommendation(user.id, user.full_name, context, long=True, msg=msg)
 
     elif query.data == "refresh_cache":
         db_user_id = get_or_create_user(user.id, user.full_name, user.username)
-        await query.edit_message_text("⏳ Обновляю данные из всех подключённых сервисов...")
+        await query.edit_message_text("вЏі РћР±РЅРѕРІР»СЏСЋ РґР°РЅРЅС‹Рµ РёР· РІСЃРµС… РїРѕРґРєР»СЋС‡С‘РЅРЅС‹С… СЃРµСЂРІРёСЃРѕРІ...")
 
-        result_lines = ["✅ Данные обновлены!\n"]
+        result_lines = ["вњ… Р”Р°РЅРЅС‹Рµ РѕР±РЅРѕРІР»РµРЅС‹!\n"]
 
         # Strava
         try:
@@ -1683,12 +1701,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if athlete_data:
                     load = athlete_data["training_load"]
                     result_lines.append(
-                        f"🟠 Strava: CTL {load.get('ctl', '—')}, "
-                        f"ATL {load.get('atl', '—')}, TSB {load.get('tsb', '—')}"
+                        f"рџџ  Strava: CTL {load.get('ctl', 'вЂ”')}, "
+                        f"ATL {load.get('atl', 'вЂ”')}, TSB {load.get('tsb', 'вЂ”')}"
                     )
         except Exception as e:
             logger.error(f"Strava refresh error (button) for {user.id}: {e}")
-            result_lines.append("🟠 Strava: ❌ ошибка")
+            result_lines.append("рџџ  Strava: вќЊ РѕС€РёР±РєР°")
 
         # Garmin
         if get_token(db_user_id, "garmin"):
@@ -1703,22 +1721,22 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 profile = get_user_profile(db_user_id)
                 garmin_parts = []
                 if not isinstance(vo2max_val, Exception) and vo2max_val is not None:
-                    if (profile or {}).get("vo2max_source") != "manual":
-                        save_user_profile(db_user_id, vo2max=float(vo2max_val), vo2max_source="garmin")
+                    if not (profile or {}).get("vo2max_locked"):
+                        save_user_profile(db_user_id, vo2max=float(vo2max_val), vo2max_source="auto")
                     garmin_parts.append(f"VO2max {float(vo2max_val):.0f}")
                 if not isinstance(lt, Exception) and lt:
-                    if (profile or {}).get("lactate_source") != "manual":
+                    if not (profile or {}).get("lactate_locked"):
                         save_user_profile(db_user_id,
                             lactate_threshold_pace=lt["pace"],
                             lactate_threshold_hr=lt.get("hr"),
                             lactate_source="auto")
-                    garmin_parts.append(f"ЛП {lt['pace']}")
+                    garmin_parts.append(f"Р›Рџ {lt['pace']}")
                 if not isinstance(readiness, Exception) and readiness and readiness.get("score") is not None:
                     garmin_parts.append(f"TR {readiness['score']}")
-                result_lines.append(f"🔵 Garmin: {', '.join(garmin_parts) if garmin_parts else 'обновлено'}")
+                result_lines.append(f"рџ”µ Garmin: {', '.join(garmin_parts) if garmin_parts else 'РѕР±РЅРѕРІР»РµРЅРѕ'}")
             except Exception as e:
                 logger.error(f"Garmin refresh error (button) for {user.id}: {e}")
-                result_lines.append("🔵 Garmin: ❌ ошибка")
+                result_lines.append("рџ”µ Garmin: вќЊ РѕС€РёР±РєР°")
 
         # COROS
         if get_token(db_user_id, "coros"):
@@ -1733,13 +1751,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 coros_vo2max = (coros_data or {}).get("fitness", {}).get("vo2max")
                 if coros_vo2max is not None:
                     profile = get_user_profile(db_user_id)
-                    if (profile or {}).get("vo2max_source") != "manual":
-                        save_user_profile(db_user_id, vo2max=float(coros_vo2max), vo2max_source="coros")
+                    if not (profile or {}).get("vo2max_locked"):
+                        save_user_profile(db_user_id, vo2max=float(coros_vo2max), vo2max_source="auto")
                     coros_parts.append(f"VO2max {float(coros_vo2max):.0f}")
-                result_lines.append(f"🔴 COROS: {', '.join(coros_parts)}" if coros_parts else "🔴 COROS: обновлено")
+                result_lines.append(f"рџ”ґ COROS: {', '.join(coros_parts)}" if coros_parts else "рџ”ґ COROS: РѕР±РЅРѕРІР»РµРЅРѕ")
             except Exception as e:
                 logger.error(f"COROS refresh error (button) for {user.id}: {e}")
-                result_lines.append("🔴 COROS: ❌ ошибка")
+                result_lines.append("рџ”ґ COROS: вќЊ РѕС€РёР±РєР°")
 
         # Polar
         if get_token(db_user_id, "polar"):
@@ -1750,16 +1768,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 polar_parts = []
                 if polar_vo2max is not None:
                     profile = get_user_profile(db_user_id)
-                    if (profile or {}).get("vo2max_source") != "manual":
-                        save_user_profile(db_user_id, vo2max=float(polar_vo2max), vo2max_source="polar")
+                    if not (profile or {}).get("vo2max_locked"):
+                        save_user_profile(db_user_id, vo2max=float(polar_vo2max), vo2max_source="auto")
                     polar_parts.append(f"VO2max {float(polar_vo2max):.0f}")
-                result_lines.append(f"❄️ Polar: {', '.join(polar_parts)}" if polar_parts else "❄️ Polar: обновлено")
+                result_lines.append(f"вќ„пёЏ Polar: {', '.join(polar_parts)}" if polar_parts else "вќ„пёЏ Polar: РѕР±РЅРѕРІР»РµРЅРѕ")
             except Exception as e:
                 logger.error(f"Polar refresh error (button) for {user.id}: {e}")
-                result_lines.append("❄️ Polar: ❌ ошибка")
+                result_lines.append("вќ„пёЏ Polar: вќЊ РѕС€РёР±РєР°")
 
         if len(result_lines) == 1:
-            result_lines.append("Нет подключённых сервисов.\nПодключи трекер в Настройках → Сервисы.")
+            result_lines.append("РќРµС‚ РїРѕРґРєР»СЋС‡С‘РЅРЅС‹С… СЃРµСЂРІРёСЃРѕРІ.\nРџРѕРґРєР»СЋС‡Рё С‚СЂРµРєРµСЂ РІ РќР°СЃС‚СЂРѕР№РєР°С… в†’ РЎРµСЂРІРёСЃС‹.")
 
         await query.edit_message_text("\n".join(result_lines), reply_markup=get_main_keyboard())
 
@@ -1768,46 +1786,46 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         profile = get_user_profile(db_user_id)
         await query.edit_message_text(
             _build_profile_text(profile),
-            reply_markup=_build_profile_keyboard()
+            reply_markup=_build_profile_keyboard(profile)
         )
 
     elif query.data == "profile_set_vo2max":
         context.user_data["awaiting_profile"] = "set_vo2max"
         await query.edit_message_text(
-            "Введи значение VO2max (мл/кг/мин).\n\nНапример: 53"
+            "Р’РІРµРґРё Р·РЅР°С‡РµРЅРёРµ VO2max (РјР»/РєРі/РјРёРЅ).\n\nРќР°РїСЂРёРјРµСЂ: 53"
         )
 
     elif query.data == "profile_set_lactate":
         context.user_data["awaiting_profile"] = "set_lactate_pace"
         await query.edit_message_text(
-            "Введи темп лактатного порога (мин:сек на км).\n\nНапример: 4:17"
+            "Р’РІРµРґРё С‚РµРјРї Р»Р°РєС‚Р°С‚РЅРѕРіРѕ РїРѕСЂРѕРіР° (РјРёРЅ:СЃРµРє РЅР° РєРј).\n\nРќР°РїСЂРёРјРµСЂ: 4:17"
         )
 
     elif query.data == "profile_set_gender":
         await query.edit_message_text(
-            "Выбери пол:",
+            "Р’С‹Р±РµСЂРё РїРѕР»:",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("👨 Мужской", callback_data="profile_gender_male"),
-                 InlineKeyboardButton("👩 Женский", callback_data="profile_gender_female")],
+                [InlineKeyboardButton("рџ‘Ё РњСѓР¶СЃРєРѕР№", callback_data="profile_gender_male"),
+                 InlineKeyboardButton("рџ‘© Р–РµРЅСЃРєРёР№", callback_data="profile_gender_female")],
             ])
         )
 
     elif query.data in ("profile_gender_male", "profile_gender_female"):
         db_user_id = get_or_create_user(user.id, user.full_name, user.username)
         gender = "male" if query.data == "profile_gender_male" else "female"
-        gender_label = "Мужской" if gender == "male" else "Женский"
+        gender_label = "РњСѓР¶СЃРєРѕР№" if gender == "male" else "Р–РµРЅСЃРєРёР№"
         save_user_profile(db_user_id, gender=gender)
         profile = get_user_profile(db_user_id)
         await query.edit_message_text(
-            f"✅ Пол сохранён: {gender_label}\n\n{_build_profile_text(profile)}",
-            reply_markup=_build_profile_keyboard()
+            f"вњ… РџРѕР» СЃРѕС…СЂР°РЅС‘РЅ: {gender_label}\n\n{_build_profile_text(profile)}",
+            reply_markup=_build_profile_keyboard(profile)
         )
 
     elif query.data == "profile_set_specialization":
         db_user_id = get_or_create_user(user.id, user.full_name, user.username)
         current_spec = (get_user_profile(db_user_id) or {}).get("specialization")
         await query.edit_message_text(
-            "Выбери специализацию (на что нацелены тренировки):",
+            "Р’С‹Р±РµСЂРё СЃРїРµС†РёР°Р»РёР·Р°С†РёСЋ (РЅР° С‡С‚Рѕ РЅР°С†РµР»РµРЅС‹ С‚СЂРµРЅРёСЂРѕРІРєРё):",
             reply_markup=_build_specialization_keyboard(current_spec)
         )
 
@@ -1819,15 +1837,32 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         save_user_profile(db_user_id, specialization=spec)
         profile = get_user_profile(db_user_id)
         await query.edit_message_text(
-            f"✅ Специализация сохранена: {SPECIALIZATIONS[spec]}\n\n{_build_profile_text(profile)}",
-            reply_markup=_build_profile_keyboard()
+            f"вњ… РЎРїРµС†РёР°Р»РёР·Р°С†РёСЏ СЃРѕС…СЂР°РЅРµРЅР°: {SPECIALIZATIONS[spec]}\n\n{_build_profile_text(profile)}",
+            reply_markup=_build_profile_keyboard(profile)
+        )
+
+    elif query.data in ("profile_toggle_vo2max_lock", "profile_toggle_lactate_lock"):
+        db_user_id = get_or_create_user(user.id, user.full_name, user.username)
+        profile = get_user_profile(db_user_id)
+        if query.data == "profile_toggle_vo2max_lock":
+            new_val = 0 if (profile or {}).get("vo2max_locked") else 1
+            save_user_profile(db_user_id, vo2max_locked=new_val)
+            msg_extra = "🔒 VO2max защищён от автообновления." if new_val else "🔓 VO2max будет обновляться из сервисов."
+        else:
+            new_val = 0 if (profile or {}).get("lactate_locked") else 1
+            save_user_profile(db_user_id, lactate_locked=new_val)
+            msg_extra = "🔒 Лактатный порог защищён от автообновления." if new_val else "🔓 Лактатный порог будет обновляться из сервисов."
+        profile = get_user_profile(db_user_id)
+        await query.edit_message_text(
+            f"{msg_extra}\n\n{_build_profile_text(profile)}",
+            reply_markup=_build_profile_keyboard(profile)
         )
 
     elif query.data == "ai_mode":
         db_user_id = get_or_create_user(user.id, user.full_name, user.username)
         prefs = get_preferences(db_user_id)
         current_mode = prefs.get("ai_mode", "smart") if prefs else "smart"
-        back_btn = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")]])
+        back_btn = InlineKeyboardMarkup([[InlineKeyboardButton("рџЏ  Р“Р»Р°РІРЅРѕРµ РјРµРЅСЋ", callback_data="main_menu")]])
         await query.edit_message_text(
             _build_mode_text(current_mode),
             reply_markup=_merge_keyboards(_build_mode_keyboard(current_mode), back_btn)
@@ -1838,9 +1873,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         new_mode = query.data.replace("mode_set_", "")
         set_preference(db_user_id, "ai_mode", new_mode)
         emoji, label, timing, _ = _MODE_INFO[new_mode]
-        back_btn = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")]])
+        back_btn = InlineKeyboardMarkup([[InlineKeyboardButton("рџЏ  Р“Р»Р°РІРЅРѕРµ РјРµРЅСЋ", callback_data="main_menu")]])
         await query.edit_message_text(
-            f"✅ Режим сохранён: {emoji} {label} ({timing})\n\n{_build_mode_text(new_mode)}",
+            f"вњ… Р РµР¶РёРј СЃРѕС…СЂР°РЅС‘РЅ: {emoji} {label} ({timing})\n\n{_build_mode_text(new_mode)}",
             reply_markup=_merge_keyboards(_build_mode_keyboard(new_mode), back_btn)
         )
 
@@ -1852,16 +1887,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if use:
             if whoop_connected:
                 answer = (
-                    "✅ Garmin включён как резервный источник.\n\n"
-                    "Whoop подключён и будет в приоритете — "
-                    "Garmin (Body Battery, HRV) используется только если данных Whoop нет."
+                    "вњ… Garmin РІРєР»СЋС‡С‘РЅ РєР°Рє СЂРµР·РµСЂРІРЅС‹Р№ РёСЃС‚РѕС‡РЅРёРє.\n\n"
+                    "Whoop РїРѕРґРєР»СЋС‡С‘РЅ Рё Р±СѓРґРµС‚ РІ РїСЂРёРѕСЂРёС‚РµС‚Рµ вЂ” "
+                    "Garmin (Body Battery, HRV) РёСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ С‚РѕР»СЊРєРѕ РµСЃР»Рё РґР°РЅРЅС‹С… Whoop РЅРµС‚."
                 )
             else:
-                answer = "✅ Буду использовать данные Body Battery и HRV из Garmin утром."
+                answer = "вњ… Р‘СѓРґСѓ РёСЃРїРѕР»СЊР·РѕРІР°С‚СЊ РґР°РЅРЅС‹Рµ Body Battery Рё HRV РёР· Garmin СѓС‚СЂРѕРј."
         else:
             answer = (
-                "Понял, данные восстановления из Garmin использоваться не будут.\n"
-                "Изменить можно через /status."
+                "РџРѕРЅСЏР», РґР°РЅРЅС‹Рµ РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРёСЏ РёР· Garmin РёСЃРїРѕР»СЊР·РѕРІР°С‚СЊСЃСЏ РЅРµ Р±СѓРґСѓС‚.\n"
+                "РР·РјРµРЅРёС‚СЊ РјРѕР¶РЅРѕ С‡РµСЂРµР· /status."
             )
         db_user_id = get_or_create_user(user.id, user.full_name, user.username)
         await query.edit_message_text(
@@ -1900,7 +1935,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "fit_dl":
         data = _fit_data.get(user.id)
         if not data:
-            await context.bot.send_message(user.id, "⏱ Данные устарели. Запроси рекомендацию заново (/workout или /long)")
+            await context.bot.send_message(user.id, "вЏ± Р”Р°РЅРЅС‹Рµ СѓСЃС‚Р°СЂРµР»Рё. Р—Р°РїСЂРѕСЃРё СЂРµРєРѕРјРµРЅРґР°С†РёСЋ Р·Р°РЅРѕРІРѕ (/workout РёР»Рё /long)")
             return
         try:
             from fit_generator import (
@@ -1908,7 +1943,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 workout_filename,
             )
             import json, io
-            # Используем JSON от DeepSeek если есть, иначе парсер
+            # РСЃРїРѕР»СЊР·СѓРµРј JSON РѕС‚ DeepSeek РµСЃР»Рё РµСЃС‚СЊ, РёРЅР°С‡Рµ РїР°СЂСЃРµСЂ
             wkt = data.get('garmin_json')
             if not wkt:
                 if data['type'] == 'interval':
@@ -1924,27 +1959,27 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 user.id,
                 document=io.BytesIO(json_bytes),
                 filename=fname,
-                caption=f"🏃 <b>{fname}</b>\n\nИмпортируй в Garmin Connect: Тренировки → ➕ → Из файла.",
+                caption=f"рџЏѓ <b>{fname}</b>\n\nРРјРїРѕСЂС‚РёСЂСѓР№ РІ Garmin Connect: РўСЂРµРЅРёСЂРѕРІРєРё в†’ вћ• в†’ РР· С„Р°Р№Р»Р°.",
                 parse_mode="HTML",
             )
         except Exception as e:
             logger.error(f"JSON generation error for {user.id}: {e}")
-            await context.bot.send_message(user.id, f"❌ Ошибка генерации JSON: {type(e).__name__}: {e}")
+            await context.bot.send_message(user.id, f"вќЊ РћС€РёР±РєР° РіРµРЅРµСЂР°С†РёРё JSON: {type(e).__name__}: {e}")
 
     elif query.data == "fit_up":
         db_user_id = get_or_create_user(user.id, user.full_name, user.username)
         if not get_token(db_user_id, "garmin"):
             await context.bot.send_message(user.id,
-                "❌ Garmin не подключён.\n\nИспользуй /connect_garmin чтобы подключить аккаунт.")
+                "вќЊ Garmin РЅРµ РїРѕРґРєР»СЋС‡С‘РЅ.\n\nРСЃРїРѕР»СЊР·СѓР№ /connect_garmin С‡С‚РѕР±С‹ РїРѕРґРєР»СЋС‡РёС‚СЊ Р°РєРєР°СѓРЅС‚.")
             return
         data = _fit_data.get(user.id)
         if not data:
-            await context.bot.send_message(user.id, "⏱ Данные устарели. Запроси рекомендацию заново (/workout или /long)")
+            await context.bot.send_message(user.id, "вЏ± Р”Р°РЅРЅС‹Рµ СѓСЃС‚Р°СЂРµР»Рё. Р—Р°РїСЂРѕСЃРё СЂРµРєРѕРјРµРЅРґР°С†РёСЋ Р·Р°РЅРѕРІРѕ (/workout РёР»Рё /long)")
             return
         try:
             from fit_generator import build_garmin_interval_workout, build_garmin_long_run_workout
             from garmin import upload_workout as garmin_upload_workout
-            # Используем JSON от DeepSeek если есть, иначе парсер
+            # РСЃРїРѕР»СЊР·СѓРµРј JSON РѕС‚ DeepSeek РµСЃР»Рё РµСЃС‚СЊ, РёРЅР°С‡Рµ РїР°СЂСЃРµСЂ
             wkt_json = data.get('garmin_json')
             if not wkt_json:
                 if data['type'] == 'interval':
@@ -1958,21 +1993,21 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if ok:
                 name = wkt_json.get('workoutName', '')
                 await context.bot.send_message(user.id,
-                    f"✅ <b>Тренировка загружена в Garmin Connect!</b>\n\n"
-                    f"📋 {name}\n\n"
-                    f"Открой приложение Garmin Connect → Тренировки и планы → Тренировки.",
+                    f"вњ… <b>РўСЂРµРЅРёСЂРѕРІРєР° Р·Р°РіСЂСѓР¶РµРЅР° РІ Garmin Connect!</b>\n\n"
+                    f"рџ“‹ {name}\n\n"
+                    f"РћС‚РєСЂРѕР№ РїСЂРёР»РѕР¶РµРЅРёРµ Garmin Connect в†’ РўСЂРµРЅРёСЂРѕРІРєРё Рё РїР»Р°РЅС‹ в†’ РўСЂРµРЅРёСЂРѕРІРєРё.",
                     parse_mode="HTML")
             else:
                 await context.bot.send_message(user.id,
-                    "❌ Не удалось загрузить в Garmin Connect.\n\n"
-                    "Попробуй скачать JSON кнопкой 📥 и импортировать вручную.")
+                    "вќЊ РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РіСЂСѓР·РёС‚СЊ РІ Garmin Connect.\n\n"
+                    "РџРѕРїСЂРѕР±СѓР№ СЃРєР°С‡Р°С‚СЊ JSON РєРЅРѕРїРєРѕР№ рџ“Ґ Рё РёРјРїРѕСЂС‚РёСЂРѕРІР°С‚СЊ РІСЂСѓС‡РЅСѓСЋ.")
         except Exception as e:
             logger.error(f"Garmin upload error for {user.id}: {e}")
             await context.bot.send_message(user.id,
-                f"❌ Ошибка загрузки в Garmin: {type(e).__name__}")
+                f"вќЊ РћС€РёР±РєР° Р·Р°РіСЂСѓР·РєРё РІ Garmin: {type(e).__name__}")
 
     elif query.data == "help":
-        back_btn = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")]])
+        back_btn = InlineKeyboardMarkup([[InlineKeyboardButton("рџЏ  Р“Р»Р°РІРЅРѕРµ РјРµРЅСЋ", callback_data="main_menu")]])
         await query.edit_message_text(_build_help_text(user.id in ADMIN_TELEGRAM_IDS), reply_markup=back_btn)
 
     elif query.data.startswith("preprocess_set_"):
@@ -1990,42 +2025,42 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         is_long = query.data == "analyze_long"
         await query.edit_message_text(
-            f"🔬 Ищу {'Long Run' if is_long else 'интервальную'} тренировку в канале..."
+            f"рџ”¬ РС‰Сѓ {'Long Run' if is_long else 'РёРЅС‚РµСЂРІР°Р»СЊРЅСѓСЋ'} С‚СЂРµРЅРёСЂРѕРІРєСѓ РІ РєР°РЅР°Р»Рµ..."
         )
         workout = await (find_next_long_run() if is_long else find_next_workout(only_interval=True))
         if not workout:
-            await query.edit_message_text("😔 Не нашёл подходящую тренировку в канале.")
+            await query.edit_message_text("рџ” РќРµ РЅР°С€С‘Р» РїРѕРґС…РѕРґСЏС‰СѓСЋ С‚СЂРµРЅРёСЂРѕРІРєСѓ РІ РєР°РЅР°Р»Рµ.")
             return
         await _run_analyze_and_show(workout, query, context)
 
-    # ── ОБРАТНАЯ СВЯЗЬ ────────────────────────────────────────
+    # в”Ђв”Ђ РћР‘Р РђРўРќРђРЇ РЎР’РЇР—Р¬ в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
     elif query.data == "feedback_show":
-        await query.edit_message_text("Выбери тип:", reply_markup=_build_feedback_keyboard())
+        await query.edit_message_text("Р’С‹Р±РµСЂРё С‚РёРї:", reply_markup=_build_feedback_keyboard())
 
     elif query.data in ("feedback_bug", "feedback_feature"):
         fb_type = "bug" if query.data == "feedback_bug" else "feature"
-        type_label = "проблему" if fb_type == "bug" else "идею"
+        type_label = "РїСЂРѕР±Р»РµРјСѓ" if fb_type == "bug" else "РёРґРµСЋ"
         context.user_data["awaiting_feedback"] = fb_type
-        await query.edit_message_text(f"Опиши {type_label}:")
+        await query.edit_message_text(f"РћРїРёС€Рё {type_label}:")
 
-    # ── ОЦЕНКА РЕКОМЕНДАЦИИ ───────────────────────────────────
+    # в”Ђв”Ђ РћР¦Р•РќРљРђ Р Р•РљРћРњР•РќР”РђР¦РР в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
     elif query.data == "rate_show":
         data = _rating_data.get(user.id)
         if not data:
             await context.bot.send_message(
-                user.id, "⏱ Данные устарели. Запроси рекомендацию заново (/workout или /long)."
+                user.id, "вЏ± Р”Р°РЅРЅС‹Рµ СѓСЃС‚Р°СЂРµР»Рё. Р—Р°РїСЂРѕСЃРё СЂРµРєРѕРјРµРЅРґР°С†РёСЋ Р·Р°РЅРѕРІРѕ (/workout РёР»Рё /long)."
             )
             return
         context.user_data["rating_pending"] = dict(data)
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton(str(i), callback_data=f"rate_{i}") for i in range(1, 6)],
             [InlineKeyboardButton(str(i), callback_data=f"rate_{i}") for i in range(6, 11)],
-            [InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu_new")],
+            [InlineKeyboardButton("рџЏ  Р“Р»Р°РІРЅРѕРµ РјРµРЅСЋ", callback_data="main_menu_new")],
         ])
         await query.edit_message_text(
-            "Оцени рекомендацию:\n1 — плохо, 10 — отлично",
+            "РћС†РµРЅРё СЂРµРєРѕРјРµРЅРґР°С†РёСЋ:\n1 вЂ” РїР»РѕС…Рѕ, 10 вЂ” РѕС‚Р»РёС‡РЅРѕ",
             reply_markup=keyboard
         )
 
@@ -2035,18 +2070,18 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ctx["rating"] = rating
         context.user_data["rating_pending"] = ctx
         keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✏️ Написать комментарий", callback_data="rate_comment"),
-             InlineKeyboardButton("Пропустить", callback_data="rate_skip")],
-            [InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu_new")],
+            [InlineKeyboardButton("вњЏпёЏ РќР°РїРёСЃР°С‚СЊ РєРѕРјРјРµРЅС‚Р°СЂРёР№", callback_data="rate_comment"),
+             InlineKeyboardButton("РџСЂРѕРїСѓСЃС‚РёС‚СЊ", callback_data="rate_skip")],
+            [InlineKeyboardButton("рџЏ  Р“Р»Р°РІРЅРѕРµ РјРµРЅСЋ", callback_data="main_menu_new")],
         ])
         await query.edit_message_text(
-            f"Оценка {rating}/10 ✅\n\nХочешь добавить комментарий? (необязательно)",
+            f"РћС†РµРЅРєР° {rating}/10 вњ…\n\nРҐРѕС‡РµС€СЊ РґРѕР±Р°РІРёС‚СЊ РєРѕРјРјРµРЅС‚Р°СЂРёР№? (РЅРµРѕР±СЏР·Р°С‚РµР»СЊРЅРѕ)",
             reply_markup=keyboard
         )
 
     elif query.data == "rate_comment":
         context.user_data["awaiting_rating_comment"] = True
-        await query.edit_message_text("Напиши комментарий:")
+        await query.edit_message_text("РќР°РїРёС€Рё РєРѕРјРјРµРЅС‚Р°СЂРёР№:")
 
     elif query.data == "rate_skip":
         ctx = context.user_data.pop("rating_pending", {})
@@ -2058,37 +2093,37 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 uname = f" (@{user.username})" if user.username else ""
                 await _notify_admin(
                     context.bot,
-                    f"⭐ Низкая оценка: {rating}/10\n"
-                    f"От: {user.full_name}{uname}\n"
-                    f"Тренировка: {ctx.get('workout_date', '—')}\n"
-                    f"Режим: {ctx.get('ai_mode', '—')}\n"
-                    f"Комментарий: нет"
+                    f"в­ђ РќРёР·РєР°СЏ РѕС†РµРЅРєР°: {rating}/10\n"
+                    f"РћС‚: {user.full_name}{uname}\n"
+                    f"РўСЂРµРЅРёСЂРѕРІРєР°: {ctx.get('workout_date', 'вЂ”')}\n"
+                    f"Р РµР¶РёРј: {ctx.get('ai_mode', 'вЂ”')}\n"
+                    f"РљРѕРјРјРµРЅС‚Р°СЂРёР№: РЅРµС‚"
                 )
         keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu_new")
+            InlineKeyboardButton("рџЏ  Р“Р»Р°РІРЅРѕРµ РјРµРЅСЋ", callback_data="main_menu_new")
         ]])
-        await query.edit_message_text("✅ Спасибо за оценку!", reply_markup=keyboard)
+        await query.edit_message_text("вњ… РЎРїР°СЃРёР±Рѕ Р·Р° РѕС†РµРЅРєСѓ!", reply_markup=keyboard)
 
 
-# ── ОБРАБОТКА ТЕКСТА ─────────────────────────────────────────
+# в”Ђв”Ђ РћР‘Р РђР‘РћРўРљРђ РўР•РљРЎРўРђ в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     text = update.message.text.strip()
     _mark_user_active_if_needed(user.id, user.full_name, user.username)
 
-    # Код Whoop — пользователь вставляет URL с httpbin.org
+    # РљРѕРґ Whoop вЂ” РїРѕР»СЊР·РѕРІР°С‚РµР»СЊ РІСЃС‚Р°РІР»СЏРµС‚ URL СЃ httpbin.org
     if context.user_data.get("awaiting_whoop_code"):
         import re
         from whoop import exchange_code as whoop_exchange
         code_match = re.search(r'[?&]code=([^&]+)', text)
         code = code_match.group(1) if code_match else text.strip()
-        msg = await update.message.reply_text("⏳ Подключаю Whoop...")
+        msg = await update.message.reply_text("вЏі РџРѕРґРєР»СЋС‡Р°СЋ Whoop...")
         try:
             import time as _t
             token_data = await whoop_exchange(code)
             if "access_token" not in token_data:
-                await msg.edit_text("❌ Не удалось подключить Whoop. Попробуй /connect_whoop")
+                await msg.edit_text("вќЊ РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕРґРєР»СЋС‡РёС‚СЊ Whoop. РџРѕРїСЂРѕР±СѓР№ /connect_whoop")
                 return
             db_user_id = get_or_create_user(user.id, user.full_name, user.username)
             save_token(db_user_id, "whoop",
@@ -2099,19 +2134,19 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data["awaiting_whoop_code"] = False
             db_user_id2 = get_or_create_user(user.id, user.full_name, user.username)
             await msg.edit_text(
-                "✅ Whoop подключён! Утренние рекомендации теперь точнее.",
+                "вњ… Whoop РїРѕРґРєР»СЋС‡С‘РЅ! РЈС‚СЂРµРЅРЅРёРµ СЂРµРєРѕРјРµРЅРґР°С†РёРё С‚РµРїРµСЂСЊ С‚РѕС‡РЅРµРµ.",
                 reply_markup=_build_screen3_keyboard(db_user_id2)
             )
         except Exception as e:
             logger.error(f"Whoop auth error: {e}")
-            await msg.edit_text("❌ Ошибка. Попробуй /connect_whoop")
+            await msg.edit_text("вќЊ РћС€РёР±РєР°. РџРѕРїСЂРѕР±СѓР№ /connect_whoop")
         return
 
-    # Ввод данных профиля
+    # Р’РІРѕРґ РґР°РЅРЅС‹С… РїСЂРѕС„РёР»СЏ
     elif context.user_data.get("awaiting_profile") == "set_vo2max":
         import re
         if not re.match(r'^\d+(?:[.,]\d+)?$', text):
-            await update.message.reply_text("Введи число, например: 53")
+            await update.message.reply_text("Р’РІРµРґРё С‡РёСЃР»Рѕ, РЅР°РїСЂРёРјРµСЂ: 53")
             return
         vo2max = float(text.replace(',', '.'))
         db_user_id = get_or_create_user(user.id, user.full_name, user.username)
@@ -2123,15 +2158,15 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop("awaiting_profile")
         profile = get_user_profile(db_user_id)
         await update.message.reply_text(
-            f"✅ VO2max сохранён: {vo2max} мл/кг/мин\n\n{_build_profile_text(profile)}",
-            reply_markup=_build_profile_keyboard()
+            f"вњ… VO2max СЃРѕС…СЂР°РЅС‘РЅ: {vo2max} РјР»/РєРі/РјРёРЅ\n\n{_build_profile_text(profile)}",
+            reply_markup=_build_profile_keyboard(profile)
         )
 
     elif context.user_data.get("awaiting_profile") == "set_lactate_pace":
         import re
         pace_match = re.match(r'^(\d+:\d{2})$', text.strip())
         if not pace_match:
-            await update.message.reply_text("Не распознал темп. Формат: 4:17")
+            await update.message.reply_text("РќРµ СЂР°СЃРїРѕР·РЅР°Р» С‚РµРјРї. Р¤РѕСЂРјР°С‚: 4:17")
             return
         pace = pace_match.group(1)
         db_user_id = get_or_create_user(user.id, user.full_name, user.username)
@@ -2143,13 +2178,13 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["awaiting_profile"] = "set_lactate_hr"
         context.user_data["lactate_pace"] = pace
         await update.message.reply_text(
-            f"Темп {pace} сохранён.\n\nТеперь введи пульс на лактатном пороге.\n\nНапример: 174"
+            f"РўРµРјРї {pace} СЃРѕС…СЂР°РЅС‘РЅ.\n\nРўРµРїРµСЂСЊ РІРІРµРґРё РїСѓР»СЊСЃ РЅР° Р»Р°РєС‚Р°С‚РЅРѕРј РїРѕСЂРѕРіРµ.\n\nРќР°РїСЂРёРјРµСЂ: 174"
         )
 
     elif context.user_data.get("awaiting_profile") == "set_lactate_hr":
         import re
         if not re.match(r'^\d{2,3}$', text.strip()):
-            await update.message.reply_text("Введи пульс числом, например: 174")
+            await update.message.reply_text("Р’РІРµРґРё РїСѓР»СЊСЃ С‡РёСЃР»РѕРј, РЅР°РїСЂРёРјРµСЂ: 174")
             return
         hr = int(text.strip())
         db_user_id = get_or_create_user(user.id, user.full_name, user.username)
@@ -2158,34 +2193,34 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop("awaiting_profile")
         profile = get_user_profile(db_user_id)
         await update.message.reply_text(
-            f"✅ Лактатный порог сохранён: {pace} мин/км при ЧСС {hr} уд/мин\n\n{_build_profile_text(profile)}",
-            reply_markup=_build_profile_keyboard()
+            f"вњ… Р›Р°РєС‚Р°С‚РЅС‹Р№ РїРѕСЂРѕРі СЃРѕС…СЂР°РЅС‘РЅ: {pace} РјРёРЅ/РєРј РїСЂРё Р§РЎРЎ {hr} СѓРґ/РјРёРЅ\n\n{_build_profile_text(profile)}",
+            reply_markup=_build_profile_keyboard(profile)
         )
 
-    # Email для Garmin
+    # Email РґР»СЏ Garmin
     elif context.user_data.get("awaiting_garmin") == "email":
         context.user_data["garmin_email"] = text.strip()
         context.user_data["awaiting_garmin"] = "password"
         await update.message.reply_text(
-            "Введи пароль от Garmin Connect:\n\n"
-            "Сообщение с паролем будет удалено сразу после отправки."
+            "Р’РІРµРґРё РїР°СЂРѕР»СЊ РѕС‚ Garmin Connect:\n\n"
+            "РЎРѕРѕР±С‰РµРЅРёРµ СЃ РїР°СЂРѕР»РµРј Р±СѓРґРµС‚ СѓРґР°Р»РµРЅРѕ СЃСЂР°Р·Сѓ РїРѕСЃР»Рµ РѕС‚РїСЂР°РІРєРё."
         )
 
-    # Пароль для Garmin
+    # РџР°СЂРѕР»СЊ РґР»СЏ Garmin
     elif context.user_data.get("awaiting_garmin") == "password":
         from garmin import connect as garmin_connect, get_vo2max, get_training_readiness
         email = context.user_data.pop("garmin_email", "")
         password = text.strip()
         context.user_data.pop("awaiting_garmin", None)
 
-        # Удаляем сообщение с паролем
+        # РЈРґР°Р»СЏРµРј СЃРѕРѕР±С‰РµРЅРёРµ СЃ РїР°СЂРѕР»РµРј
         try:
             await update.message.delete()
         except Exception:
             pass
 
         db_user_id = get_or_create_user(user.id, user.full_name, user.username)
-        msg = await update.effective_chat.send_message("⏳ Подключаюсь к Garmin Connect...")
+        msg = await update.effective_chat.send_message("вЏі РџРѕРґРєР»СЋС‡Р°СЋСЃСЊ Рє Garmin Connect...")
         try:
             await garmin_connect(db_user_id, email, password)
             save_user_profile(db_user_id, garmin_email=email, garmin_password=password)
@@ -2216,40 +2251,40 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception as e:
                     logger.warning(f"Zones recalc error (garmin connect) for {user.id}: {e}")
 
-            lines = ["✅ Garmin подключён!\n"]
+            lines = ["вњ… Garmin РїРѕРґРєР»СЋС‡С‘РЅ!\n"]
 
             if garmin_vo2max_found or garmin_lt_found or (not isinstance(body_battery, Exception) and body_battery is not None):
-                lines.append("Загружено из Garmin:")
+                lines.append("Р—Р°РіСЂСѓР¶РµРЅРѕ РёР· Garmin:")
                 if garmin_vo2max_found:
-                    lines.append(f"📊 VO2max: {vo2max:.1f} мл/кг/мин")
+                    lines.append(f"рџ“Љ VO2max: {vo2max:.1f} РјР»/РєРі/РјРёРЅ")
                 else:
-                    lines.append("📊 VO2max: не найден — укажи вручную в /profile")
+                    lines.append("рџ“Љ VO2max: РЅРµ РЅР°Р№РґРµРЅ вЂ” СѓРєР°Р¶Рё РІСЂСѓС‡РЅСѓСЋ РІ /profile")
                 if garmin_lt_found:
-                    lines.append(f"⚡ Лактатный порог: {lt['pace']} мин/км при ЧСС {lt['hr']}")
+                    lines.append(f"вљЎ Р›Р°РєС‚Р°С‚РЅС‹Р№ РїРѕСЂРѕРі: {lt['pace']} РјРёРЅ/РєРј РїСЂРё Р§РЎРЎ {lt['hr']}")
                 if not isinstance(body_battery, Exception) and body_battery is not None:
-                    lines.append(f"🔋 Body Battery: {body_battery}/100")
+                    lines.append(f"рџ”‹ Body Battery: {body_battery}/100")
                 if not isinstance(hrv, Exception) and hrv:
-                    lines.append(f"💗 HRV: {hrv.get('hrv_last_night', '—')} мс (среднеенедельное: {hrv.get('hrv_weekly_avg', '—')})")
+                    lines.append(f"рџ’— HRV: {hrv.get('hrv_last_night', 'вЂ”')} РјСЃ (СЃСЂРµРґРЅРµРµРЅРµРґРµР»СЊРЅРѕРµ: {hrv.get('hrv_weekly_avg', 'вЂ”')})")
                 if not isinstance(readiness, Exception) and readiness and readiness.get("score") is not None:
-                    lines.append(f"🎯 Training Readiness: {readiness['score']}/100 ({readiness.get('level', '')})")
+                    lines.append(f"рџЋЇ Training Readiness: {readiness['score']}/100 ({readiness.get('level', '')})")
             else:
-                lines.append("📊 VO2max не найден в данных.")
-                lines.append("Укажи его вручную в профиле → /profile")
+                lines.append("рџ“Љ VO2max РЅРµ РЅР°Р№РґРµРЅ РІ РґР°РЅРЅС‹С….")
+                lines.append("РЈРєР°Р¶Рё РµРіРѕ РІСЂСѓС‡РЅСѓСЋ РІ РїСЂРѕС„РёР»Рµ в†’ /profile")
 
             if garmin_vo2max_found:
-                lines.append("\nХочешь уточнить лактатный порог? → /profile")
-                lines.append("Или сразу попробуй /workout")
+                lines.append("\nРҐРѕС‡РµС€СЊ СѓС‚РѕС‡РЅРёС‚СЊ Р»Р°РєС‚Р°С‚РЅС‹Р№ РїРѕСЂРѕРі? в†’ /profile")
+                lines.append("РР»Рё СЃСЂР°Р·Сѓ РїРѕРїСЂРѕР±СѓР№ /workout")
 
             lines.append(
-                "\nТы носишь Garmin постоянно (включая сон)?\n"
-                "Это влияет на то, используем ли Body Battery и HRV утром."
+                "\nРўС‹ РЅРѕСЃРёС€СЊ Garmin РїРѕСЃС‚РѕСЏРЅРЅРѕ (РІРєР»СЋС‡Р°СЏ СЃРѕРЅ)?\n"
+                "Р­С‚Рѕ РІР»РёСЏРµС‚ РЅР° С‚Рѕ, РёСЃРїРѕР»СЊР·СѓРµРј Р»Рё Body Battery Рё HRV СѓС‚СЂРѕРј."
             )
             keyboard = _merge_keyboards(
                 InlineKeyboardMarkup([[
-                    InlineKeyboardButton("✅ Да, постоянно", callback_data="garmin_recovery_yes"),
-                    InlineKeyboardButton("🏃 Только на тренировках", callback_data="garmin_recovery_no"),
+                    InlineKeyboardButton("вњ… Р”Р°, РїРѕСЃС‚РѕСЏРЅРЅРѕ", callback_data="garmin_recovery_yes"),
+                    InlineKeyboardButton("рџЏѓ РўРѕР»СЊРєРѕ РЅР° С‚СЂРµРЅРёСЂРѕРІРєР°С…", callback_data="garmin_recovery_no"),
                 ]]),
-                InlineKeyboardMarkup([[InlineKeyboardButton("← Сервисы", callback_data="show_services")]])
+                InlineKeyboardMarkup([[InlineKeyboardButton("в†ђ РЎРµСЂРІРёСЃС‹", callback_data="show_services")]])
             )
             await msg.edit_text("\n".join(lines), reply_markup=keyboard)
 
@@ -2257,41 +2292,41 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             uname = f" (@{user.username})" if user.username else ""
             await _notify_admin(
                 context.bot,
-                f"🔵 {user.full_name}{uname} подключил Garmin\n"
-                f"Всего с Garmin: {n}"
+                f"рџ”µ {user.full_name}{uname} РїРѕРґРєР»СЋС‡РёР» Garmin\n"
+                f"Р’СЃРµРіРѕ СЃ Garmin: {n}"
             )
         except Exception as e:
             logger.error(f"Garmin auth error: {e}")
             await msg.edit_text(
-                f"❌ Не удалось подключить Garmin Connect.\n"
-                f"Проверь правильность email и пароля, затем попробуй /connect_garmin снова.\n\n"
-                f"Ошибка: {type(e).__name__}: {e}"
+                f"вќЊ РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕРґРєР»СЋС‡РёС‚СЊ Garmin Connect.\n"
+                f"РџСЂРѕРІРµСЂСЊ РїСЂР°РІРёР»СЊРЅРѕСЃС‚СЊ email Рё РїР°СЂРѕР»СЏ, Р·Р°С‚РµРј РїРѕРїСЂРѕР±СѓР№ /connect_garmin СЃРЅРѕРІР°.\n\n"
+                f"РћС€РёР±РєР°: {type(e).__name__}: {e}"
             )
 
-    # Email для COROS
+    # Email РґР»СЏ COROS
     elif context.user_data.get("awaiting_coros") == "email":
         context.user_data["coros_email"] = text.strip()
         context.user_data["awaiting_coros"] = "password"
         await update.message.reply_text(
-            "Введи пароль от COROS:\n\n"
-            "Сообщение с паролем будет удалено сразу после отправки."
+            "Р’РІРµРґРё РїР°СЂРѕР»СЊ РѕС‚ COROS:\n\n"
+            "РЎРѕРѕР±С‰РµРЅРёРµ СЃ РїР°СЂРѕР»РµРј Р±СѓРґРµС‚ СѓРґР°Р»РµРЅРѕ СЃСЂР°Р·Сѓ РїРѕСЃР»Рµ РѕС‚РїСЂР°РІРєРё."
         )
 
-    # Пароль для COROS
+    # РџР°СЂРѕР»СЊ РґР»СЏ COROS
     elif context.user_data.get("awaiting_coros") == "password":
         import coros as _coros
         email = context.user_data.pop("coros_email", "")
         password = text.strip()
         context.user_data.pop("awaiting_coros", None)
 
-        # Удаляем сообщение с паролем
+        # РЈРґР°Р»СЏРµРј СЃРѕРѕР±С‰РµРЅРёРµ СЃ РїР°СЂРѕР»РµРј
         try:
             await update.message.delete()
         except Exception:
             pass
 
         db_user_id = get_or_create_user(user.id, user.full_name, user.username)
-        msg = await update.effective_chat.send_message("⏳ Подключаюсь к COROS...")
+        msg = await update.effective_chat.send_message("вЏі РџРѕРґРєР»СЋС‡Р°СЋСЃСЊ Рє COROS...")
         try:
             await _coros.connect(db_user_id, email, password)
             save_user_profile(db_user_id, coros_email=email, coros_password=password)
@@ -2312,33 +2347,33 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception as e:
                     logger.warning(f"Zones recalc error (coros connect) for {user.id}: {e}")
 
-            lines = ["✅ COROS подключён!\n"]
-            lines.append("Загружено из COROS:")
+            lines = ["вњ… COROS РїРѕРґРєР»СЋС‡С‘РЅ!\n"]
+            lines.append("Р—Р°РіСЂСѓР¶РµРЅРѕ РёР· COROS:")
 
             if coros_vo2max_found:
-                lines.append(f"📊 VO2max: {vo2max} мл/кг/мин")
+                lines.append(f"рџ“Љ VO2max: {vo2max} РјР»/РєРі/РјРёРЅ")
             else:
-                lines.append("📊 VO2max: не найден — укажи вручную в /profile")
+                lines.append("рџ“Љ VO2max: РЅРµ РЅР°Р№РґРµРЅ вЂ” СѓРєР°Р¶Рё РІСЂСѓС‡РЅСѓСЋ РІ /profile")
 
             if not isinstance(training_load, Exception) and training_load:
                 ctl = training_load.get("ctl")
                 atl = training_load.get("atl")
                 tsb = training_load.get("tsb")
                 if ctl is not None:
-                    lines.append(f"📈 Training Load: CTL={ctl}, ATL={atl}, TSB={tsb}")
+                    lines.append(f"рџ“€ Training Load: CTL={ctl}, ATL={atl}, TSB={tsb}")
 
             if not isinstance(hrv, Exception) and hrv:
                 hrv_last = hrv.get("hrv_last_night")
                 hrv_avg  = hrv.get("hrv_weekly_avg")
                 if hrv_last:
-                    lines.append(f"💗 HRV: {hrv_last} мс (среднеенедельное: {hrv_avg})")
+                    lines.append(f"рџ’— HRV: {hrv_last} РјСЃ (СЃСЂРµРґРЅРµРµРЅРµРґРµР»СЊРЅРѕРµ: {hrv_avg})")
 
             if coros_vo2max_found:
-                lines.append("\nХочешь уточнить лактатный порог? → /profile")
-                lines.append("Или сразу попробуй /workout")
+                lines.append("\nРҐРѕС‡РµС€СЊ СѓС‚РѕС‡РЅРёС‚СЊ Р»Р°РєС‚Р°С‚РЅС‹Р№ РїРѕСЂРѕРі? в†’ /profile")
+                lines.append("РР»Рё СЃСЂР°Р·Сѓ РїРѕРїСЂРѕР±СѓР№ /workout")
 
             keyboard = InlineKeyboardMarkup([[
-                InlineKeyboardButton("← Сервисы", callback_data="show_services")
+                InlineKeyboardButton("в†ђ РЎРµСЂРІРёСЃС‹", callback_data="show_services")
             ]])
             await msg.edit_text("\n".join(lines), reply_markup=keyboard)
 
@@ -2346,36 +2381,36 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             uname = f" (@{user.username})" if user.username else ""
             await _notify_admin(
                 context.bot,
-                f"🔴 {user.full_name}{uname} подключил COROS\n"
-                f"Всего с COROS: {n}"
+                f"рџ”ґ {user.full_name}{uname} РїРѕРґРєР»СЋС‡РёР» COROS\n"
+                f"Р’СЃРµРіРѕ СЃ COROS: {n}"
             )
         except Exception as e:
             logger.error(f"COROS auth error: {e}")
             await msg.edit_text(
-                f"❌ Не удалось подключить COROS.\n"
-                f"Проверь правильность email и пароля, затем попробуй /connect_coros снова.\n\n"
-                f"Ошибка: {type(e).__name__}: {e}"
+                f"вќЊ РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕРґРєР»СЋС‡РёС‚СЊ COROS.\n"
+                f"РџСЂРѕРІРµСЂСЊ РїСЂР°РІРёР»СЊРЅРѕСЃС‚СЊ email Рё РїР°СЂРѕР»СЏ, Р·Р°С‚РµРј РїРѕРїСЂРѕР±СѓР№ /connect_coros СЃРЅРѕРІР°.\n\n"
+                f"РћС€РёР±РєР°: {type(e).__name__}: {e}"
             )
 
-    # ── ОБРАТНАЯ СВЯЗЬ (текст) ────────────────────────────────
+    # в”Ђв”Ђ РћР‘Р РђРўРќРђРЇ РЎР’РЇР—Р¬ (С‚РµРєСЃС‚) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
     elif context.user_data.get("awaiting_feedback"):
         fb_type = context.user_data.pop("awaiting_feedback")
-        type_label = "Проблема" if fb_type == "bug" else "Идея"
+        type_label = "РџСЂРѕР±Р»РµРјР°" if fb_type == "bug" else "РРґРµСЏ"
         db_user_id = get_or_create_user(user.id, user.full_name, user.username)
         save_feedback(db_user_id, fb_type, text)
         uname = f" (@{user.username})" if user.username else ""
         await _notify_admin(
             context.bot,
-            f"💬 Обратная связь [{type_label}]\nОт: {user.full_name}{uname}\n\n{text}"
+            f"рџ’¬ РћР±СЂР°С‚РЅР°СЏ СЃРІСЏР·СЊ [{type_label}]\nРћС‚: {user.full_name}{uname}\n\n{text}"
         )
         keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu_new")
+            InlineKeyboardButton("рџЏ  Р“Р»Р°РІРЅРѕРµ РјРµРЅСЋ", callback_data="main_menu_new")
         ]])
-        await update.message.reply_text("✅ Спасибо! Сообщение отправлено.", reply_markup=keyboard)
+        await update.message.reply_text("вњ… РЎРїР°СЃРёР±Рѕ! РЎРѕРѕР±С‰РµРЅРёРµ РѕС‚РїСЂР°РІР»РµРЅРѕ.", reply_markup=keyboard)
         return
 
-    # ── КОММЕНТАРИЙ К ОЦЕНКЕ ─────────────────────────────────
+    # в”Ђв”Ђ РљРћРњРњР•РќРўРђР РР™ Рљ РћР¦Р•РќРљР• в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
     elif context.user_data.get("awaiting_rating_comment"):
         context.user_data.pop("awaiting_rating_comment")
@@ -2388,23 +2423,23 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 uname = f" (@{user.username})" if user.username else ""
                 await _notify_admin(
                     context.bot,
-                    f"⭐ Низкая оценка: {rating}/10\n"
-                    f"От: {user.full_name}{uname}\n"
-                    f"Тренировка: {ctx.get('workout_date', '—')}\n"
-                    f"Режим: {ctx.get('ai_mode', '—')}\n"
-                    f"Комментарий: {text}"
+                    f"в­ђ РќРёР·РєР°СЏ РѕС†РµРЅРєР°: {rating}/10\n"
+                    f"РћС‚: {user.full_name}{uname}\n"
+                    f"РўСЂРµРЅРёСЂРѕРІРєР°: {ctx.get('workout_date', 'вЂ”')}\n"
+                    f"Р РµР¶РёРј: {ctx.get('ai_mode', 'вЂ”')}\n"
+                    f"РљРѕРјРјРµРЅС‚Р°СЂРёР№: {text}"
                 )
         keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu_new")
+            InlineKeyboardButton("рџЏ  Р“Р»Р°РІРЅРѕРµ РјРµРЅСЋ", callback_data="main_menu_new")
         ]])
-        await update.message.reply_text("✅ Спасибо за оценку!", reply_markup=keyboard)
+        await update.message.reply_text("вњ… РЎРїР°СЃРёР±Рѕ Р·Р° РѕС†РµРЅРєСѓ!", reply_markup=keyboard)
         return
 
 
-# ── ЛОГИКА РЕКОМЕНДАЦИЙ ──────────────────────────────────────
+# в”Ђв”Ђ Р›РћР“РРљРђ Р Р•РљРћРњР•РќР”РђР¦РР™ в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 def _user_has_data(db_user_id: int) -> bool:
-    """has_data: есть VO2max в профиле ИЛИ хотя бы один токен трекера."""
+    """has_data: РµСЃС‚СЊ VO2max РІ РїСЂРѕС„РёР»Рµ РР›Р С…РѕС‚СЏ Р±С‹ РѕРґРёРЅ С‚РѕРєРµРЅ С‚СЂРµРєРµСЂР°."""
     profile = get_user_profile(db_user_id)
     if profile and profile.get("vo2max"):
         return True
@@ -2418,10 +2453,10 @@ async def _send_recommendation(
     msg=None,
     live: dict | None = None,
 ):
-    """И3: рекомендация из кэша workout_analysis + recommend_group/recommend_long.
-    find_next_* используется ТОЛЬКО для детекта свежести анонса (post_id/edit_date) и
-    как источник упрощённого текста для has_data=False — НЕ для парсинга рекомендации.
-    live можно передать заранее (рассылка фетчит один раз на всех).
+    """Р3: СЂРµРєРѕРјРµРЅРґР°С†РёСЏ РёР· РєСЌС€Р° workout_analysis + recommend_group/recommend_long.
+    find_next_* РёСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ РўРћР›Р¬РљРћ РґР»СЏ РґРµС‚РµРєС‚Р° СЃРІРµР¶РµСЃС‚Рё Р°РЅРѕРЅСЃР° (post_id/edit_date) Рё
+    РєР°Рє РёСЃС‚РѕС‡РЅРёРє СѓРїСЂРѕС‰С‘РЅРЅРѕРіРѕ С‚РµРєСЃС‚Р° РґР»СЏ has_data=False вЂ” РќР• РґР»СЏ РїР°СЂСЃРёРЅРіР° СЂРµРєРѕРјРµРЅРґР°С†РёРё.
+    live РјРѕР¶РЅРѕ РїРµСЂРµРґР°С‚СЊ Р·Р°СЂР°РЅРµРµ (СЂР°СЃСЃС‹Р»РєР° С„РµС‚С‡РёС‚ РѕРґРёРЅ СЂР°Р· РЅР° РІСЃРµС…).
     """
     import json as _json
     db_user_id = get_or_create_user(telegram_id, name)
@@ -2442,31 +2477,31 @@ async def _send_recommendation(
             await context.bot.send_message(telegram_id, text, reply_markup=markup, parse_mode=parse_mode)
 
     if status == "empty" or row is None:
-        what = "ближайшего Long Run" if long else "ближайшей тренировки"
-        await _out(f"😔 Не нашёл анонс {what} в канале. Попробуй позже.")
+        what = "Р±Р»РёР¶Р°Р№С€РµРіРѕ Long Run" if long else "Р±Р»РёР¶Р°Р№С€РµР№ С‚СЂРµРЅРёСЂРѕРІРєРё"
+        await _out(f"рџ” РќРµ РЅР°С€С‘Р» Р°РЅРѕРЅСЃ {what} РІ РєР°РЅР°Р»Рµ. РџРѕРїСЂРѕР±СѓР№ РїРѕР·Р¶Рµ.")
         return
 
-    # Плашку past НЕ дублируем для interval — её рисует сам форматтер (is_past).
+    # РџР»Р°С€РєСѓ past РќР• РґСѓР±Р»РёСЂСѓРµРј РґР»СЏ interval вЂ” РµС‘ СЂРёСЃСѓРµС‚ СЃР°Рј С„РѕСЂРјР°С‚С‚РµСЂ (is_past).
     banner = ""
     if status == "analyzing":
-        banner = ("🔄 Новый анонс появился, сейчас в проработке — обновится через пару минут.\n"
-                  "Пока показываю предыдущую тренировку.\n\n")
+        banner = ("рџ”„ РќРѕРІС‹Р№ Р°РЅРѕРЅСЃ РїРѕСЏРІРёР»СЃСЏ, СЃРµР№С‡Р°СЃ РІ РїСЂРѕСЂР°Р±РѕС‚РєРµ вЂ” РѕР±РЅРѕРІРёС‚СЃСЏ С‡РµСЂРµР· РїР°СЂСѓ РјРёРЅСѓС‚.\n"
+                  "РџРѕРєР° РїРѕРєР°Р·С‹РІР°СЋ РїСЂРµРґС‹РґСѓС‰СѓСЋ С‚СЂРµРЅРёСЂРѕРІРєСѓ.\n\n")
     elif status == "past" and long:
-        banner = ("📅 Будущих тренировок пока нет. Показываю последнюю прошедшую "
-                  "(для ознакомления, не на сегодня).\n\n")
+        banner = ("рџ“… Р‘СѓРґСѓС‰РёС… С‚СЂРµРЅРёСЂРѕРІРѕРє РїРѕРєР° РЅРµС‚. РџРѕРєР°Р·С‹РІР°СЋ РїРѕСЃР»РµРґРЅСЋСЋ РїСЂРѕС€РµРґС€СѓСЋ "
+                  "(РґР»СЏ РѕР·РЅР°РєРѕРјР»РµРЅРёСЏ, РЅРµ РЅР° СЃРµРіРѕРґРЅСЏ).\n\n")
 
-    # has_data=False → упрощённое уведомление
+    # has_data=False в†’ СѓРїСЂРѕС‰С‘РЅРЅРѕРµ СѓРІРµРґРѕРјР»РµРЅРёРµ
     if not _user_has_data(db_user_id):
         if live:
             simple = _build_simple_workout_text(live)
         else:
-            simple = (f"📢 Тренировка {row.get('workout_date', '')}\n\n"
-                      "Заполни профиль и подключи трекер, чтобы получить рекомендацию группы. "
-                      "Новичкам подойдёт группа здоровья (бег/ходьба).")
+            simple = (f"рџ“ў РўСЂРµРЅРёСЂРѕРІРєР° {row.get('workout_date', '')}\n\n"
+                      "Р—Р°РїРѕР»РЅРё РїСЂРѕС„РёР»СЊ Рё РїРѕРґРєР»СЋС‡Рё С‚СЂРµРєРµСЂ, С‡С‚РѕР±С‹ РїРѕР»СѓС‡РёС‚СЊ СЂРµРєРѕРјРµРЅРґР°С†РёСЋ РіСЂСѓРїРїС‹. "
+                      "РќРѕРІРёС‡РєР°Рј РїРѕРґРѕР№РґС‘С‚ РіСЂСѓРїРїР° Р·РґРѕСЂРѕРІСЊСЏ (Р±РµРі/С…РѕРґСЊР±Р°).")
         await _out(banner + simple)
         return
 
-    # has_data=True → персональная рекомендация из кэша
+    # has_data=True в†’ РїРµСЂСЃРѕРЅР°Р»СЊРЅР°СЏ СЂРµРєРѕРјРµРЅРґР°С†РёСЏ РёР· РєСЌС€Р°
     try:
         analysis = _json.loads(row.get("analyzed_json") or "{}")
     except Exception:
@@ -2479,7 +2514,7 @@ async def _send_recommendation(
     rec = (claude_advisor.recommend_long(analysis, user_data) if long
            else claude_advisor.recommend_group(analysis, user_data))
     if not rec or not rec.get("ok"):
-        note = (rec or {}).get("note", "Не удалось собрать рекомендацию. Попробуй позже.")
+        note = (rec or {}).get("note", "РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕР±СЂР°С‚СЊ СЂРµРєРѕРјРµРЅРґР°С†РёСЋ. РџРѕРїСЂРѕР±СѓР№ РїРѕР·Р¶Рµ.")
         await _out(banner + note)
         return
 
@@ -2488,11 +2523,11 @@ async def _send_recommendation(
         "ai_mode": row.get("analysis_mode", ""),
     }
     rating_markup = InlineKeyboardMarkup([[
-        InlineKeyboardButton("⭐ Оценить рекомендацию", callback_data="rate_show"),
+        InlineKeyboardButton("в­ђ РћС†РµРЅРёС‚СЊ СЂРµРєРѕРјРµРЅРґР°С†РёСЋ", callback_data="rate_show"),
     ]])
     final_markup = _merge_keyboards(rating_markup, get_main_keyboard(from_recommendation=True))
 
-    # Шапка/погода из live (для current/past совпадает с кэшем)
+    # РЁР°РїРєР°/РїРѕРіРѕРґР° РёР· live (РґР»СЏ current/past СЃРѕРІРїР°РґР°РµС‚ СЃ РєСЌС€РµРј)
     workout_dict = dict(live) if live else {"workout_date": analysis.get("workout_date", "")}
     workout_dict["workout_type"] = "long" if long else "interval"
     workout_dict["is_past"] = (status == "past")
@@ -2504,13 +2539,13 @@ async def _send_recommendation(
     weather_line = format_weather_for_message(weather) if weather else ""
     has_tracker = any(get_token(db_user_id, s) for s in ("garmin", "coros", "polar", "strava"))
 
-    # Числа/структура — формулами (детерминированно)
+    # Р§РёСЃР»Р°/СЃС‚СЂСѓРєС‚СѓСЂР° вЂ” С„РѕСЂРјСѓР»Р°РјРё (РґРµС‚РµСЂРјРёРЅРёСЂРѕРІР°РЅРЅРѕ)
     if long:
         advice = claude_advisor.recommendation_to_long_advice(rec, analysis, user_data["recovery"])
     else:
         advice = claude_advisor.recommendation_to_advice(rec, analysis, user_data["recovery"])
 
-    # Режим рекомендации (Шаг 2) из настроек пользователя; анализ (Шаг 1) всегда deep
+    # Р РµР¶РёРј СЂРµРєРѕРјРµРЅРґР°С†РёРё (РЁР°Рі 2) РёР· РЅР°СЃС‚СЂРѕРµРє РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ; Р°РЅР°Р»РёР· (РЁР°Рі 1) РІСЃРµРіРґР° deep
     rec_mode = (get_preferences(db_user_id) or {}).get("ai_mode", "smart")
     main = rec.get("main_group") or {}
     facts = {
@@ -2531,13 +2566,13 @@ async def _send_recommendation(
     import functools
     prose, stats2 = await asyncio.get_event_loop().run_in_executor(
         None, functools.partial(claude_advisor.generate_step2_prose, facts, rec_mode, long))
-    # ИИ-проза поверх посчитанного (фолбэк на шаблон, если модель не ответила)
+    # РР-РїСЂРѕР·Р° РїРѕРІРµСЂС… РїРѕСЃС‡РёС‚Р°РЅРЅРѕРіРѕ (С„РѕР»Р±СЌРє РЅР° С€Р°Р±Р»РѕРЅ, РµСЃР»Рё РјРѕРґРµР»СЊ РЅРµ РѕС‚РІРµС‚РёР»Р°)
     if prose.get("reason"):
         advice["reason"] = prose["reason"]
     if long and prose.get("strategy_reason"):
         advice["strategy_reason"] = prose["strategy_reason"]
 
-    # Футер отражает СВОЙ экран — режим/стоимость рекомендации (Шаг 2), не анализа
+    # Р¤СѓС‚РµСЂ РѕС‚СЂР°Р¶Р°РµС‚ РЎР’РћР™ СЌРєСЂР°РЅ вЂ” СЂРµР¶РёРј/СЃС‚РѕРёРјРѕСЃС‚СЊ СЂРµРєРѕРјРµРЅРґР°С†РёРё (РЁР°Рі 2), РЅРµ Р°РЅР°Р»РёР·Р°
     if long:
         body = claude_advisor.format_long_run_message(
             advice, workout_dict, stats=stats2, weather_line=weather_line, has_tracker=has_tracker)
@@ -2557,10 +2592,10 @@ async def _send_workout_recommendation(
 
     global last_workout
 
-    # 1. Находим тренировку
+    # 1. РќР°С…РѕРґРёРј С‚СЂРµРЅРёСЂРѕРІРєСѓ
     workout = await find_next_workout()
     if not workout:
-        text = "😔 Не нашёл анонс ближайшей тренировки в канале. Попробуй позже."
+        text = "рџ” РќРµ РЅР°С€С‘Р» Р°РЅРѕРЅСЃ Р±Р»РёР¶Р°Р№С€РµР№ С‚СЂРµРЅРёСЂРѕРІРєРё РІ РєР°РЅР°Р»Рµ. РџРѕРїСЂРѕР±СѓР№ РїРѕР·Р¶Рµ."
         if msg:
             await msg.edit_text(text)
         else:
@@ -2577,22 +2612,22 @@ async def _send_workout_recommendation(
     #         await context.bot.send_message(telegram_id, text)
         # return
 
-    # 2. Данные спортсмена: Garmin → COROS → Polar → Strava
+    # 2. Р”Р°РЅРЅС‹Рµ СЃРїРѕСЂС‚СЃРјРµРЅР°: Garmin в†’ COROS в†’ Polar в†’ Strava
     fitness = None
 
     fitness = await get_garmin_fitness_data(db_user_id)
     if fitness:
-        logger.info(f"Источник данных: garmin для user {db_user_id}")
+        logger.info(f"РСЃС‚РѕС‡РЅРёРє РґР°РЅРЅС‹С…: garmin РґР»СЏ user {db_user_id}")
 
     if not fitness:
         fitness = await get_coros_fitness_data(db_user_id)
         if fitness:
-            logger.info(f"Источник данных: coros для user {db_user_id}")
+            logger.info(f"РСЃС‚РѕС‡РЅРёРє РґР°РЅРЅС‹С…: coros РґР»СЏ user {db_user_id}")
 
     if not fitness:
         fitness = await get_polar_fitness_data(db_user_id)
         if fitness:
-            logger.info(f"Источник данных: polar для user {db_user_id}")
+            logger.info(f"РСЃС‚РѕС‡РЅРёРє РґР°РЅРЅС‹С…: polar РґР»СЏ user {db_user_id}")
 
     if not fitness:
         access_token = await ensure_valid_token(db_user_id)
@@ -2600,7 +2635,7 @@ async def _send_workout_recommendation(
             try:
                 fitness = await get_fitness_data(db_user_id, access_token)
                 if fitness:
-                    logger.info(f"Источник данных: strava для user {db_user_id}")
+                    logger.info(f"РСЃС‚РѕС‡РЅРёРє РґР°РЅРЅС‹С…: strava РґР»СЏ user {db_user_id}")
             except Exception as e:
                 logger.error(f"Strava error for {telegram_id}: {e}")
 
@@ -2609,11 +2644,11 @@ async def _send_workout_recommendation(
         if _profile and _profile.get("vo2max") and _profile.get("lactate_threshold_pace"):
             fitness = {
                 "source": "profile", "profile_only": True,
-                "summary": "Данные только из профиля (без трекера)",
+                "summary": "Р”Р°РЅРЅС‹Рµ С‚РѕР»СЊРєРѕ РёР· РїСЂРѕС„РёР»СЏ (Р±РµР· С‚СЂРµРєРµСЂР°)",
                 "total_km": 0, "run_count": 0,
-                "avg_pace": "—", "avg_hr": None, "fatigue_level": "unknown",
+                "avg_pace": "вЂ”", "avg_hr": None, "fatigue_level": "unknown",
                 "vo2max": _profile["vo2max"],
-                "vo2max_source": _profile.get("vo2max_source") or "профиль",
+                "vo2max_source": _profile.get("vo2max_source") or "РїСЂРѕС„РёР»СЊ",
             }
             if _profile.get("lactate_threshold_pace"):
                 fitness["lactate_threshold_pace"] = _profile["lactate_threshold_pace"]
@@ -2621,18 +2656,18 @@ async def _send_workout_recommendation(
                 fitness["lactate_threshold_hr"] = _profile["lactate_threshold_hr"]
             if _profile.get("gender"):
                 fitness["gender"] = _profile["gender"]
-            logger.info(f"Источник данных: profile_only (fast mode) для user {db_user_id}")
+            logger.info(f"РСЃС‚РѕС‡РЅРёРє РґР°РЅРЅС‹С…: profile_only (fast mode) РґР»СЏ user {db_user_id}")
         else:
-            logger.info(f"Источник данных: нет данных для user {db_user_id}")
+            logger.info(f"РСЃС‚РѕС‡РЅРёРє РґР°РЅРЅС‹С…: РЅРµС‚ РґР°РЅРЅС‹С… РґР»СЏ user {db_user_id}")
             text = format_workout_message(workout)
-            text += "\n\nПодключи Garmin (/connect_garmin), COROS (/connect_coros) или Polar (/connect_polar) для рекомендации группы"
+            text += "\n\nРџРѕРґРєР»СЋС‡Рё Garmin (/connect_garmin), COROS (/connect_coros) РёР»Рё Polar (/connect_polar) РґР»СЏ СЂРµРєРѕРјРµРЅРґР°С†РёРё РіСЂСѓРїРїС‹"
             if msg:
                 await msg.edit_text(text)
             else:
                 await context.bot.send_message(telegram_id, text)
             return
 
-    # 3. Профиль спортсмена (VO2max / лактатный порог из ручного ввода)
+    # 3. РџСЂРѕС„РёР»СЊ СЃРїРѕСЂС‚СЃРјРµРЅР° (VO2max / Р»Р°РєС‚Р°С‚РЅС‹Р№ РїРѕСЂРѕРі РёР· СЂСѓС‡РЅРѕРіРѕ РІРІРѕРґР°)
     profile = get_user_profile(db_user_id)
     if profile:
         if profile.get("vo2max") and not fitness.get("vo2max"):
@@ -2647,7 +2682,7 @@ async def _send_workout_recommendation(
                     stale = True
             if not stale:
                 fitness["vo2max"] = profile["vo2max"]
-                fitness["vo2max_source"] = source or "профиль"
+                fitness["vo2max_source"] = source or "РїСЂРѕС„РёР»СЊ"
         if profile.get("lactate_threshold_pace"):
             fitness["lactate_threshold_pace"] = profile["lactate_threshold_pace"]
         if profile.get("lactate_threshold_hr"):
@@ -2655,10 +2690,10 @@ async def _send_workout_recommendation(
         if profile.get("gender"):
             fitness["gender"] = profile["gender"]
 
-    # 4. Данные восстановления (Whoop / Garmin) — всегда свежие для /workout
+    # 4. Р”Р°РЅРЅС‹Рµ РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРёСЏ (Whoop / Garmin) вЂ” РІСЃРµРіРґР° СЃРІРµР¶РёРµ РґР»СЏ /workout
     recovery = await _get_recovery_data(db_user_id, force_fresh=True)
 
-    # 5. Погода
+    # 5. РџРѕРіРѕРґР°
     weather = await get_weather_for_workout(
         workout.get("location", ""),
         workout.get("workout_date", ""),
@@ -2667,22 +2702,22 @@ async def _send_workout_recommendation(
     weather_line = format_weather_for_message(weather) if weather else ""
     weather_prompt = format_weather_for_prompt(weather) if weather else ""
 
-    # 6. Groq рекомендует
+    # 6. Groq СЂРµРєРѕРјРµРЅРґСѓРµС‚
     _profile_only = fitness.get("profile_only", False)
     prefs = get_preferences(db_user_id)
     ai_mode = prefs.get("ai_mode", "smart") if prefs else "smart"
     if _profile_only:
-        ai_mode = "fast"  # profile-only → принудительно fast
-    wait_msg = {"deep": "🧠 Думаю над рекомендацией... (~2-3 минуты)", "smart": "⚡ Анализирую... (~1-2 минуты)", "fast": "🔥 Считаю быстро... (~30 секунд)"}.get(ai_mode, "⚡ Анализирую... (~1-2 минуты)")
+        ai_mode = "fast"  # profile-only в†’ РїСЂРёРЅСѓРґРёС‚РµР»СЊРЅРѕ fast
+    wait_msg = {"deep": "рџ§  Р”СѓРјР°СЋ РЅР°Рґ СЂРµРєРѕРјРµРЅРґР°С†РёРµР№... (~2-3 РјРёРЅСѓС‚С‹)", "smart": "вљЎ РђРЅР°Р»РёР·РёСЂСѓСЋ... (~1-2 РјРёРЅСѓС‚С‹)", "fast": "рџ”Ґ РЎС‡РёС‚Р°СЋ Р±С‹СЃС‚СЂРѕ... (~30 СЃРµРєСѓРЅРґ)"}.get(ai_mode, "вљЎ РђРЅР°Р»РёР·РёСЂСѓСЋ... (~1-2 РјРёРЅСѓС‚С‹)")
     if msg:
         await msg.edit_text(wait_msg)
     prompt = build_evening_prompt(workout, fitness, recovery, weather_prompt=weather_prompt)
-    # Запускаем в executor чтобы не блокировать event loop
+    # Р—Р°РїСѓСЃРєР°РµРј РІ executor С‡С‚РѕР±С‹ РЅРµ Р±Р»РѕРєРёСЂРѕРІР°С‚СЊ event loop
     import functools
     result = await asyncio.get_event_loop().run_in_executor(
         None, functools.partial(ask_groq, prompt, ai_mode))
     if result and result.get("timeout"):
-        timeout_text = "⏱ Модель думает слишком долго. Попробуй ⚡ Умный режим (/mode)"
+        timeout_text = "вЏ± РњРѕРґРµР»СЊ РґСѓРјР°РµС‚ СЃР»РёС€РєРѕРј РґРѕР»РіРѕ. РџРѕРїСЂРѕР±СѓР№ вљЎ РЈРјРЅС‹Р№ СЂРµР¶РёРј (/mode)"
         if msg:
             await msg.edit_text(timeout_text, reply_markup=get_main_keyboard(from_recommendation=True))
         else:
@@ -2703,7 +2738,7 @@ async def _send_workout_recommendation(
         try:
             save_last_recommendation(db_user_id, advice, workout)
         except Exception as e:
-            logger.error(f"Не удалось сохранить рекомендацию: {e}")
+            logger.error(f"РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ СЂРµРєРѕРјРµРЅРґР°С†РёСЋ: {e}")
 
     fit_markup = None
     rating_markup = None
@@ -2722,11 +2757,11 @@ async def _send_workout_recommendation(
             'ai_mode': ai_mode,
         }
         fit_markup = InlineKeyboardMarkup([[
-            InlineKeyboardButton("📥 Скачать JSON", callback_data="fit_dl"),
-            InlineKeyboardButton("⌚ Загрузить в Garmin", callback_data="fit_up"),
+            InlineKeyboardButton("рџ“Ґ РЎРєР°С‡Р°С‚СЊ JSON", callback_data="fit_dl"),
+            InlineKeyboardButton("вЊљ Р—Р°РіСЂСѓР·РёС‚СЊ РІ Garmin", callback_data="fit_up"),
         ]])
         rating_markup = InlineKeyboardMarkup([[
-            InlineKeyboardButton("⭐ Оценить рекомендацию", callback_data="rate_show"),
+            InlineKeyboardButton("в­ђ РћС†РµРЅРёС‚СЊ СЂРµРєРѕРјРµРЅРґР°С†РёСЋ", callback_data="rate_show"),
         ]])
 
     final_markup = _merge_keyboards(fit_markup, rating_markup, get_main_keyboard(from_recommendation=True))
@@ -2744,32 +2779,32 @@ async def _send_morning_check(
 ):
     db_user_id = get_or_create_user(telegram_id, "")
 
-    is_long_run_day = datetime.now().weekday() == 6  # воскресенье
+    is_long_run_day = datetime.now().weekday() == 6  # РІРѕСЃРєСЂРµСЃРµРЅСЊРµ
     workout = await (find_next_long_run() if is_long_run_day else find_next_workout())
     if not workout:
-        text = "😔 Не нашёл тренировку. Отдыхай!"
+        text = "рџ” РќРµ РЅР°С€С‘Р» С‚СЂРµРЅРёСЂРѕРІРєСѓ. РћС‚РґС‹С…Р°Р№!"
         if msg:
             await msg.edit_text(text)
         else:
             await context.bot.send_message(telegram_id, text)
         return
 
-    # Данные спортсмена: Garmin → COROS → Polar → Strava
+    # Р”Р°РЅРЅС‹Рµ СЃРїРѕСЂС‚СЃРјРµРЅР°: Garmin в†’ COROS в†’ Polar в†’ Strava
     fitness = None
 
     fitness = await get_garmin_fitness_data(db_user_id)
     if fitness:
-        logger.info(f"Источник данных: garmin для user {db_user_id}")
+        logger.info(f"РСЃС‚РѕС‡РЅРёРє РґР°РЅРЅС‹С…: garmin РґР»СЏ user {db_user_id}")
 
     if not fitness:
         fitness = await get_coros_fitness_data(db_user_id)
         if fitness:
-            logger.info(f"Источник данных: coros для user {db_user_id}")
+            logger.info(f"РСЃС‚РѕС‡РЅРёРє РґР°РЅРЅС‹С…: coros РґР»СЏ user {db_user_id}")
 
     if not fitness:
         fitness = await get_polar_fitness_data(db_user_id)
         if fitness:
-            logger.info(f"Источник данных: polar для user {db_user_id}")
+            logger.info(f"РСЃС‚РѕС‡РЅРёРє РґР°РЅРЅС‹С…: polar РґР»СЏ user {db_user_id}")
 
     if not fitness:
         access_token = await ensure_valid_token(db_user_id)
@@ -2777,7 +2812,7 @@ async def _send_morning_check(
             try:
                 fitness = await get_fitness_data(db_user_id, access_token)
                 if fitness:
-                    logger.info(f"Источник данных: strava для user {db_user_id}")
+                    logger.info(f"РСЃС‚РѕС‡РЅРёРє РґР°РЅРЅС‹С…: strava РґР»СЏ user {db_user_id}")
             except Exception as e:
                 logger.error(f"Strava morning error: {e}")
 
@@ -2786,11 +2821,11 @@ async def _send_morning_check(
         if _profile and _profile.get("vo2max") and _profile.get("lactate_threshold_pace"):
             fitness = {
                 "source": "profile", "profile_only": True,
-                "summary": "Данные только из профиля (без трекера)",
+                "summary": "Р”Р°РЅРЅС‹Рµ С‚РѕР»СЊРєРѕ РёР· РїСЂРѕС„РёР»СЏ (Р±РµР· С‚СЂРµРєРµСЂР°)",
                 "total_km": 0, "run_count": 0,
-                "avg_pace": "—", "avg_hr": None, "fatigue_level": "unknown",
+                "avg_pace": "вЂ”", "avg_hr": None, "fatigue_level": "unknown",
                 "vo2max": _profile["vo2max"],
-                "vo2max_source": _profile.get("vo2max_source") or "профиль",
+                "vo2max_source": _profile.get("vo2max_source") or "РїСЂРѕС„РёР»СЊ",
             }
             if _profile.get("lactate_threshold_pace"):
                 fitness["lactate_threshold_pace"] = _profile["lactate_threshold_pace"]
@@ -2798,11 +2833,11 @@ async def _send_morning_check(
                 fitness["lactate_threshold_hr"] = _profile["lactate_threshold_hr"]
             if _profile.get("gender"):
                 fitness["gender"] = _profile["gender"]
-            logger.info(f"Источник данных: profile_only для user {db_user_id}")
+            logger.info(f"РСЃС‚РѕС‡РЅРёРє РґР°РЅРЅС‹С…: profile_only РґР»СЏ user {db_user_id}")
         else:
-            logger.info(f"Источник данных: нет данных для user {db_user_id}")
-            fitness = {"summary": "Нет данных", "total_km": 0, "run_count": 0,
-                       "avg_pace": "—", "avg_hr": None, "fatigue_level": "unknown"}
+            logger.info(f"РСЃС‚РѕС‡РЅРёРє РґР°РЅРЅС‹С…: РЅРµС‚ РґР°РЅРЅС‹С… РґР»СЏ user {db_user_id}")
+            fitness = {"summary": "РќРµС‚ РґР°РЅРЅС‹С…", "total_km": 0, "run_count": 0,
+                       "avg_pace": "вЂ”", "avg_hr": None, "fatigue_level": "unknown"}
 
     # Whoop / Garmin / COROS
     recovery = await _get_recovery_data(db_user_id)
@@ -2812,17 +2847,17 @@ async def _send_morning_check(
         prefs = get_preferences(db_user_id)
         garmin_disabled = has_garmin and not (prefs.get("use_garmin_recovery", True) if prefs else True)
         if garmin_disabled:
-            hint = "Garmin подключён, но данные восстановления отключены — включи в /status"
+            hint = "Garmin РїРѕРґРєР»СЋС‡С‘РЅ, РЅРѕ РґР°РЅРЅС‹Рµ РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРёСЏ РѕС‚РєР»СЋС‡РµРЅС‹ вЂ” РІРєР»СЋС‡Рё РІ /status"
         elif has_garmin:
-            hint = "Garmin подключён, но данные за ночь не получены (возможно, часы не синхронизированы)"
+            hint = "Garmin РїРѕРґРєР»СЋС‡С‘РЅ, РЅРѕ РґР°РЅРЅС‹Рµ Р·Р° РЅРѕС‡СЊ РЅРµ РїРѕР»СѓС‡РµРЅС‹ (РІРѕР·РјРѕР¶РЅРѕ, С‡Р°СЃС‹ РЅРµ СЃРёРЅС…СЂРѕРЅРёР·РёСЂРѕРІР°РЅС‹)"
         else:
-            hint = "Подключи Whoop, Garmin (/connect_garmin) или COROS (/connect_coros) для точных рекомендаций"
+            hint = "РџРѕРґРєР»СЋС‡Рё Whoop, Garmin (/connect_garmin) РёР»Рё COROS (/connect_coros) РґР»СЏ С‚РѕС‡РЅС‹С… СЂРµРєРѕРјРµРЅРґР°С†РёР№"
         text = (
-            "☀️ Доброе утро!\n\n"
-            f"Нет данных о восстановлении. {hint}.\n\n"
-            "Прислушайся к своим ощущениям:\n"
-            "• Если чувствуешь себя хорошо — иди по плану\n"
-            "• Если устал — снизь темп на группу ниже"
+            "вЂпёЏ Р”РѕР±СЂРѕРµ СѓС‚СЂРѕ!\n\n"
+            f"РќРµС‚ РґР°РЅРЅС‹С… Рѕ РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРёРё. {hint}.\n\n"
+            "РџСЂРёСЃР»СѓС€Р°Р№СЃСЏ Рє СЃРІРѕРёРј РѕС‰СѓС‰РµРЅРёСЏРј:\n"
+            "вЂў Р•СЃР»Рё С‡СѓРІСЃС‚РІСѓРµС€СЊ СЃРµР±СЏ С…РѕСЂРѕС€Рѕ вЂ” РёРґРё РїРѕ РїР»Р°РЅСѓ\n"
+            "вЂў Р•СЃР»Рё СѓСЃС‚Р°Р» вЂ” СЃРЅРёР·СЊ С‚РµРјРї РЅР° РіСЂСѓРїРїСѓ РЅРёР¶Рµ"
         )
         if msg:
             await msg.edit_text(text)
@@ -2839,7 +2874,7 @@ async def _send_morning_check(
     result = await asyncio.get_event_loop().run_in_executor(
         None, functools.partial(ask_groq, prompt, ai_mode))
     if result and result.get("timeout"):
-        timeout_text = "⏱ Модель думает слишком долго. Попробуй ⚡ Умный режим (/mode)"
+        timeout_text = "вЏ± РњРѕРґРµР»СЊ РґСѓРјР°РµС‚ СЃР»РёС€РєРѕРј РґРѕР»РіРѕ. РџРѕРїСЂРѕР±СѓР№ вљЎ РЈРјРЅС‹Р№ СЂРµР¶РёРј (/mode)"
         if msg:
             await msg.edit_text(timeout_text)
         else:
@@ -2866,7 +2901,7 @@ async def _send_long_run_recommendation(
 
     workout = await find_next_long_run()
     if not workout:
-        text = "😔 Не нашёл анонс Long Run в канале. Попробуй позже."
+        text = "рџ” РќРµ РЅР°С€С‘Р» Р°РЅРѕРЅСЃ Long Run РІ РєР°РЅР°Р»Рµ. РџРѕРїСЂРѕР±СѓР№ РїРѕР·Р¶Рµ."
         if msg:
             await msg.edit_text(text)
         else:
@@ -2879,17 +2914,17 @@ async def _send_long_run_recommendation(
 
     fitness = await get_garmin_fitness_data(db_user_id)
     if fitness:
-        logger.info(f"Источник данных: garmin для user {db_user_id}")
+        logger.info(f"РСЃС‚РѕС‡РЅРёРє РґР°РЅРЅС‹С…: garmin РґР»СЏ user {db_user_id}")
 
     if not fitness:
         fitness = await get_coros_fitness_data(db_user_id)
         if fitness:
-            logger.info(f"Источник данных: coros для user {db_user_id}")
+            logger.info(f"РСЃС‚РѕС‡РЅРёРє РґР°РЅРЅС‹С…: coros РґР»СЏ user {db_user_id}")
 
     if not fitness:
         fitness = await get_polar_fitness_data(db_user_id)
         if fitness:
-            logger.info(f"Источник данных: polar для user {db_user_id}")
+            logger.info(f"РСЃС‚РѕС‡РЅРёРє РґР°РЅРЅС‹С…: polar РґР»СЏ user {db_user_id}")
 
     if not fitness:
         access_token = await ensure_valid_token(db_user_id)
@@ -2897,7 +2932,7 @@ async def _send_long_run_recommendation(
             try:
                 fitness = await get_fitness_data(db_user_id, access_token)
                 if fitness:
-                    logger.info(f"Источник данных: strava для user {db_user_id}")
+                    logger.info(f"РСЃС‚РѕС‡РЅРёРє РґР°РЅРЅС‹С…: strava РґР»СЏ user {db_user_id}")
             except Exception as e:
                 logger.error(f"Strava long run error for {telegram_id}: {e}")
 
@@ -2906,11 +2941,11 @@ async def _send_long_run_recommendation(
         if _profile and _profile.get("vo2max") and _profile.get("lactate_threshold_pace"):
             fitness = {
                 "source": "profile", "profile_only": True,
-                "summary": "Данные только из профиля (без трекера)",
+                "summary": "Р”Р°РЅРЅС‹Рµ С‚РѕР»СЊРєРѕ РёР· РїСЂРѕС„РёР»СЏ (Р±РµР· С‚СЂРµРєРµСЂР°)",
                 "total_km": 0, "run_count": 0,
-                "avg_pace": "—", "avg_hr": None, "fatigue_level": "unknown",
+                "avg_pace": "вЂ”", "avg_hr": None, "fatigue_level": "unknown",
                 "vo2max": _profile["vo2max"],
-                "vo2max_source": _profile.get("vo2max_source") or "профиль",
+                "vo2max_source": _profile.get("vo2max_source") or "РїСЂРѕС„РёР»СЊ",
             }
             if _profile.get("lactate_threshold_pace"):
                 fitness["lactate_threshold_pace"] = _profile["lactate_threshold_pace"]
@@ -2918,10 +2953,10 @@ async def _send_long_run_recommendation(
                 fitness["lactate_threshold_hr"] = _profile["lactate_threshold_hr"]
             if _profile.get("gender"):
                 fitness["gender"] = _profile["gender"]
-            logger.info(f"Источник данных: profile_only (fast mode) для user {db_user_id}")
+            logger.info(f"РСЃС‚РѕС‡РЅРёРє РґР°РЅРЅС‹С…: profile_only (fast mode) РґР»СЏ user {db_user_id}")
         else:
-            logger.info(f"Источник данных: нет данных для user {db_user_id}")
-            text = "🕐 Long Run найден!\n\nПодключи Garmin (/connect_garmin), COROS (/connect_coros) или Polar (/connect_polar) для рекомендации группы."
+            logger.info(f"РСЃС‚РѕС‡РЅРёРє РґР°РЅРЅС‹С…: РЅРµС‚ РґР°РЅРЅС‹С… РґР»СЏ user {db_user_id}")
+            text = "рџ•ђ Long Run РЅР°Р№РґРµРЅ!\n\nРџРѕРґРєР»СЋС‡Рё Garmin (/connect_garmin), COROS (/connect_coros) РёР»Рё Polar (/connect_polar) РґР»СЏ СЂРµРєРѕРјРµРЅРґР°С†РёРё РіСЂСѓРїРїС‹."
             if msg:
                 await msg.edit_text(text)
             else:
@@ -2942,7 +2977,7 @@ async def _send_long_run_recommendation(
                     stale = True
             if not stale:
                 fitness["vo2max"] = profile["vo2max"]
-                fitness["vo2max_source"] = source or "профиль"
+                fitness["vo2max_source"] = source or "РїСЂРѕС„РёР»СЊ"
         if profile.get("lactate_threshold_pace"):
             fitness["lactate_threshold_pace"] = profile["lactate_threshold_pace"]
         if profile.get("lactate_threshold_hr"):
@@ -2950,10 +2985,10 @@ async def _send_long_run_recommendation(
         if profile.get("gender"):
             fitness["gender"] = profile["gender"]
 
-    # Данные восстановления — всегда свежие для /long
+    # Р”Р°РЅРЅС‹Рµ РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРёСЏ вЂ” РІСЃРµРіРґР° СЃРІРµР¶РёРµ РґР»СЏ /long
     recovery = await _get_recovery_data(db_user_id, force_fresh=True)
 
-    # Погода
+    # РџРѕРіРѕРґР°
     weather = await get_weather_for_workout(
         workout.get("location", ""),
         workout.get("workout_date", ""),
@@ -2966,8 +3001,8 @@ async def _send_long_run_recommendation(
     prefs = get_preferences(db_user_id)
     ai_mode = prefs.get("ai_mode", "smart") if prefs else "smart"
     if _profile_only:
-        ai_mode = "fast"  # profile-only → принудительно fast
-    wait_msg = {"deep": "🧠 Думаю над рекомендацией... (~2-3 минуты)", "smart": "⚡ Анализирую... (~1-2 минуты)", "fast": "🔥 Считаю быстро... (~30 секунд)"}.get(ai_mode, "⚡ Анализирую... (~1-2 минуты)")
+        ai_mode = "fast"  # profile-only в†’ РїСЂРёРЅСѓРґРёС‚РµР»СЊРЅРѕ fast
+    wait_msg = {"deep": "рџ§  Р”СѓРјР°СЋ РЅР°Рґ СЂРµРєРѕРјРµРЅРґР°С†РёРµР№... (~2-3 РјРёРЅСѓС‚С‹)", "smart": "вљЎ РђРЅР°Р»РёР·РёСЂСѓСЋ... (~1-2 РјРёРЅСѓС‚С‹)", "fast": "рџ”Ґ РЎС‡РёС‚Р°СЋ Р±С‹СЃС‚СЂРѕ... (~30 СЃРµРєСѓРЅРґ)"}.get(ai_mode, "вљЎ РђРЅР°Р»РёР·РёСЂСѓСЋ... (~1-2 РјРёРЅСѓС‚С‹)")
     if msg:
         await msg.edit_text(wait_msg)
 
@@ -2976,7 +3011,7 @@ async def _send_long_run_recommendation(
     result = await asyncio.get_event_loop().run_in_executor(
         None, functools.partial(ask_groq, prompt, ai_mode))
     if result and result.get("timeout"):
-        timeout_text = "⏱ Модель думает слишком долго. Попробуй ⚡ Умный режим (/mode)"
+        timeout_text = "вЏ± РњРѕРґРµР»СЊ РґСѓРјР°РµС‚ СЃР»РёС€РєРѕРј РґРѕР»РіРѕ. РџРѕРїСЂРѕР±СѓР№ вљЎ РЈРјРЅС‹Р№ СЂРµР¶РёРј (/mode)"
         if msg:
             await msg.edit_text(timeout_text, reply_markup=get_main_keyboard(from_recommendation=True))
         else:
@@ -3013,11 +3048,11 @@ async def _send_long_run_recommendation(
             'ai_mode': ai_mode,
         }
         fit_markup = InlineKeyboardMarkup([[
-            InlineKeyboardButton("📥 Скачать JSON", callback_data="fit_dl"),
-            InlineKeyboardButton("⌚ Загрузить в Garmin", callback_data="fit_up"),
+            InlineKeyboardButton("рџ“Ґ РЎРєР°С‡Р°С‚СЊ JSON", callback_data="fit_dl"),
+            InlineKeyboardButton("вЊљ Р—Р°РіСЂСѓР·РёС‚СЊ РІ Garmin", callback_data="fit_up"),
         ]])
         rating_markup = InlineKeyboardMarkup([[
-            InlineKeyboardButton("⭐ Оценить рекомендацию", callback_data="rate_show"),
+            InlineKeyboardButton("в­ђ РћС†РµРЅРёС‚СЊ СЂРµРєРѕРјРµРЅРґР°С†РёСЋ", callback_data="rate_show"),
         ]])
 
     final_markup = _merge_keyboards(fit_markup, rating_markup, get_main_keyboard(from_recommendation=True))
@@ -3029,7 +3064,7 @@ async def _send_long_run_recommendation(
 
 
 async def _fetch_garmin_recovery(db_user_id: int) -> dict | None:
-    """Запрашивает данные восстановления из Garmin API и сохраняет в кэш."""
+    """Р—Р°РїСЂР°С€РёРІР°РµС‚ РґР°РЅРЅС‹Рµ РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРёСЏ РёР· Garmin API Рё СЃРѕС…СЂР°РЅСЏРµС‚ РІ РєСЌС€."""
     from garmin import get_body_battery, get_hrv_status, get_training_readiness
     try:
         body_battery, hrv_data, readiness = await asyncio.gather(
@@ -3057,15 +3092,15 @@ async def _fetch_garmin_recovery(db_user_id: int) -> dict | None:
 
 
 async def _get_recovery_data(db_user_id: int, force_fresh: bool = False) -> dict | None:
-    """Возвращает данные восстановления (Whoop → Garmin).
-    force_fresh=True — пропускает кэш Garmin, всегда запрашивает API.
-    Используй force_fresh=True для /workout и /long, чтобы TR и Body Battery были актуальными.
+    """Р’РѕР·РІСЂР°С‰Р°РµС‚ РґР°РЅРЅС‹Рµ РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРёСЏ (Whoop в†’ Garmin).
+    force_fresh=True вЂ” РїСЂРѕРїСѓСЃРєР°РµС‚ РєСЌС€ Garmin, РІСЃРµРіРґР° Р·Р°РїСЂР°С€РёРІР°РµС‚ API.
+    РСЃРїРѕР»СЊР·СѓР№ force_fresh=True РґР»СЏ /workout Рё /long, С‡С‚РѕР±С‹ TR Рё Body Battery Р±С‹Р»Рё Р°РєС‚СѓР°Р»СЊРЅС‹РјРё.
     """
     prefs = get_preferences(db_user_id)
     use_garmin = prefs.get("use_garmin_recovery", True) if prefs else True
     has_garmin = bool(get_token(db_user_id, "garmin"))
 
-    # Whoop — приоритет
+    # Whoop вЂ” РїСЂРёРѕСЂРёС‚РµС‚
     whoop_data = None
     from whoop import get_full_recovery_data, ensure_valid_token as whoop_valid_token
     try:
@@ -3076,7 +3111,7 @@ async def _get_recovery_data(db_user_id: int, force_fresh: bool = False) -> dict
         logger.error(f"Whoop error for user {db_user_id}: {e}")
 
     if whoop_data:
-        # Если Garmin носят постоянно — Training Readiness поверх Whoop
+        # Р•СЃР»Рё Garmin РЅРѕСЃСЏС‚ РїРѕСЃС‚РѕСЏРЅРЅРѕ вЂ” Training Readiness РїРѕРІРµСЂС… Whoop
         if use_garmin and has_garmin:
             try:
                 tr = None
@@ -3092,7 +3127,7 @@ async def _get_recovery_data(db_user_id: int, force_fresh: bool = False) -> dict
                 logger.error(f"Garmin TR error for user {db_user_id}: {e}")
         return whoop_data
 
-    # Garmin — кэш (8 ч) или живой запрос
+    # Garmin вЂ” РєСЌС€ (8 С‡) РёР»Рё Р¶РёРІРѕР№ Р·Р°РїСЂРѕСЃ
     if use_garmin and has_garmin:
         if not force_fresh:
             cached = get_garmin_recovery_cache(db_user_id)
@@ -3102,7 +3137,7 @@ async def _get_recovery_data(db_user_id: int, force_fresh: bool = False) -> dict
         if garmin_result:
             return garmin_result
 
-    # COROS — третий приоритет
+    # COROS вЂ” С‚СЂРµС‚РёР№ РїСЂРёРѕСЂРёС‚РµС‚
     if get_token(db_user_id, "coros"):
         try:
             import coros as _coros
@@ -3112,7 +3147,7 @@ async def _get_recovery_data(db_user_id: int, force_fresh: bool = False) -> dict
         except Exception as e:
             logger.error(f"COROS recovery error for user {db_user_id}: {e}")
 
-    # Polar — четвёртый приоритет
+    # Polar вЂ” С‡РµС‚РІС‘СЂС‚С‹Р№ РїСЂРёРѕСЂРёС‚РµС‚
     if get_token(db_user_id, "polar"):
         try:
             import polar as _polar
@@ -3125,10 +3160,10 @@ async def _get_recovery_data(db_user_id: int, force_fresh: bool = False) -> dict
     return None
 
 
-# ── ПРОВЕРКА НОВЫХ АНОНСОВ ───────────────────────────────────
+# в”Ђв”Ђ РџР РћР’Р•Р РљРђ РќРћР’Р«РҐ РђРќРћРќРЎРћР’ в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 async def _notify_all(context, text: str, notify_key: str = "") -> int:
-    """Рассылает текст активным пользователям с включённым уведомлением. Возвращает количество успешных."""
+    """Р Р°СЃСЃС‹Р»Р°РµС‚ С‚РµРєСЃС‚ Р°РєС‚РёРІРЅС‹Рј РїРѕР»СЊР·РѕРІР°С‚РµР»СЏРј СЃ РІРєР»СЋС‡С‘РЅРЅС‹Рј СѓРІРµРґРѕРјР»РµРЅРёРµРј. Р’РѕР·РІСЂР°С‰Р°РµС‚ РєРѕР»РёС‡РµСЃС‚РІРѕ СѓСЃРїРµС€РЅС‹С…."""
     users = get_users_for_notification(notify_key) if notify_key else get_active_users()
     count = 0
     for telegram_id, name, _ in users:
@@ -3138,7 +3173,7 @@ async def _notify_all(context, text: str, notify_key: str = "") -> int:
             await asyncio.sleep(0.3)
         except Forbidden:
             _mark_user_inactive(telegram_id)
-            logger.info(f"Пользователь {telegram_id} заблокировал бота, отмечен как неактивный")
+            logger.info(f"РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ {telegram_id} Р·Р°Р±Р»РѕРєРёСЂРѕРІР°Р» Р±РѕС‚Р°, РѕС‚РјРµС‡РµРЅ РєР°Рє РЅРµР°РєС‚РёРІРЅС‹Р№")
         except Exception as e:
             logger.error(f"Broadcast error for {telegram_id}: {e}")
     return count
@@ -3150,7 +3185,7 @@ async def _broadcast_split(
     text_no_data: str,
     notify_key: str = "",
 ) -> int:
-    """Рассылка с разным текстом: полная версия для пользователей с данными, упрощённая — без."""
+    """Р Р°СЃСЃС‹Р»РєР° СЃ СЂР°Р·РЅС‹Рј С‚РµРєСЃС‚РѕРј: РїРѕР»РЅР°СЏ РІРµСЂСЃРёСЏ РґР»СЏ РїРѕР»СЊР·РѕРІР°С‚РµР»РµР№ СЃ РґР°РЅРЅС‹РјРё, СѓРїСЂРѕС‰С‘РЅРЅР°СЏ вЂ” Р±РµР·."""
     users = get_all_users_with_status(notify_key)
     count = 0
     for telegram_id, name, _, has_data in users:
@@ -3161,14 +3196,14 @@ async def _broadcast_split(
             await asyncio.sleep(0.3)
         except Forbidden:
             _mark_user_inactive(telegram_id)
-            logger.info(f"Пользователь {telegram_id} заблокировал бота, отмечен как неактивный")
+            logger.info(f"РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ {telegram_id} Р·Р°Р±Р»РѕРєРёСЂРѕРІР°Р» Р±РѕС‚Р°, РѕС‚РјРµС‡РµРЅ РєР°Рє РЅРµР°РєС‚РёРІРЅС‹Р№")
         except Exception as e:
             logger.error(f"Broadcast error for {telegram_id}: {e}")
     return count
 
 
 def _edit_newer(a: str | None, b: str | None) -> bool:
-    """True если edit_date a новее b (оба ISO-строки или None)."""
+    """True РµСЃР»Рё edit_date a РЅРѕРІРµРµ b (РѕР±Р° ISO-СЃС‚СЂРѕРєРё РёР»Рё None)."""
     if not a:
         return False
     if not b:
@@ -3181,11 +3216,11 @@ def _edit_newer(a: str | None, b: str | None) -> bool:
 
 
 async def _autoanalyze_post(workout: dict, context=None) -> None:
-    """Фоновый автоанализ анонса (Шаг 1) → запись в workout_analysis.
-    Запускается при: новом анонсе / новой доп. группе / редактировании поста.
-    Прод-режим (get_preprocess_mode). Не блокирует цикл проверки.
-    После успешного анализа уведомляет ТОЛЬКО админа (контроль, что бот поймал анонс).
-    Пользователям ничего не шлёт — их единственное сообщение это вечерняя рассылка 20:00.
+    """Р¤РѕРЅРѕРІС‹Р№ Р°РІС‚РѕР°РЅР°Р»РёР· Р°РЅРѕРЅСЃР° (РЁР°Рі 1) в†’ Р·Р°РїРёСЃСЊ РІ workout_analysis.
+    Р—Р°РїСѓСЃРєР°РµС‚СЃСЏ РїСЂРё: РЅРѕРІРѕРј Р°РЅРѕРЅСЃРµ / РЅРѕРІРѕР№ РґРѕРї. РіСЂСѓРїРїРµ / СЂРµРґР°РєС‚РёСЂРѕРІР°РЅРёРё РїРѕСЃС‚Р°.
+    РџСЂРѕРґ-СЂРµР¶РёРј (get_preprocess_mode). РќРµ Р±Р»РѕРєРёСЂСѓРµС‚ С†РёРєР» РїСЂРѕРІРµСЂРєРё.
+    РџРѕСЃР»Рµ СѓСЃРїРµС€РЅРѕРіРѕ Р°РЅР°Р»РёР·Р° СѓРІРµРґРѕРјР»СЏРµС‚ РўРћР›Р¬РљРћ Р°РґРјРёРЅР° (РєРѕРЅС‚СЂРѕР»СЊ, С‡С‚Рѕ Р±РѕС‚ РїРѕР№РјР°Р» Р°РЅРѕРЅСЃ).
+    РџРѕР»СЊР·РѕРІР°С‚РµР»СЏРј РЅРёС‡РµРіРѕ РЅРµ С€Р»С‘С‚ вЂ” РёС… РµРґРёРЅСЃС‚РІРµРЅРЅРѕРµ СЃРѕРѕР±С‰РµРЅРёРµ СЌС‚Рѕ РІРµС‡РµСЂРЅСЏСЏ СЂР°СЃСЃС‹Р»РєР° 20:00.
     """
     import json as _json, functools
     try:
@@ -3201,25 +3236,25 @@ async def _autoanalyze_post(workout: dict, context=None) -> None:
         existing = get_workout_analysis(post_id)
         reason = None
         if not existing:
-            reason = "новый анонс"
+            reason = "РЅРѕРІС‹Р№ Р°РЅРѕРЅСЃ"
         elif _edit_newer(edit_date, existing.get("edit_date")):
-            reason = "пост отредактирован"
+            reason = "РїРѕСЃС‚ РѕС‚СЂРµРґР°РєС‚РёСЂРѕРІР°РЅ"
         else:
             old_extra = _json.loads(existing.get("extra_groups_json") or "[]")
             old_nums = {str(g.get("number")) for g in old_extra}
             new_nums = {str(g.get("number")) for g in extra}
             if new_nums - old_nums:
-                reason = "новые доп. группы"
+                reason = "РЅРѕРІС‹Рµ РґРѕРї. РіСЂСѓРїРїС‹"
         if not reason:
             return
 
         mode = get_preprocess_mode()
-        logger.info(f"autoanalyze: post_id={post_id} запуск анализа ({reason}, режим {mode})")
+        logger.info(f"autoanalyze: post_id={post_id} Р·Р°РїСѓСЃРє Р°РЅР°Р»РёР·Р° ({reason}, СЂРµР¶РёРј {mode})")
         result = await asyncio.get_event_loop().run_in_executor(
             None, functools.partial(analyze_workout, raw_text, comments_text, mode)
         )
         if not result:
-            logger.warning(f"autoanalyze: post_id={post_id} анализ не удался ({reason})")
+            logger.warning(f"autoanalyze: post_id={post_id} Р°РЅР°Р»РёР· РЅРµ СѓРґР°Р»СЃСЏ ({reason})")
             return
         save_workout_analysis(
             post_id=post_id,
@@ -3235,36 +3270,36 @@ async def _autoanalyze_post(workout: dict, context=None) -> None:
         n_groups = len(result.get("groups") or [])
         n_extra = len(result.get("extra_groups") or [])
         logger.info(
-            f"autoanalyze: post_id={post_id} сохранён ({reason}) — "
+            f"autoanalyze: post_id={post_id} СЃРѕС…СЂР°РЅС‘РЅ ({reason}) вЂ” "
             f"type={result.get('workout_type')}, valid={result.get('is_valid')}, "
             f"groups={n_groups}, extra={n_extra}"
         )
 
-        # Запись для /status («последний анонс»)
+        # Р—Р°РїРёСЃСЊ РґР»СЏ /status (В«РїРѕСЃР»РµРґРЅРёР№ Р°РЅРѕРЅСЃВ»)
         try:
             save_workout_notification(post_id, result.get("workout_type", ""),
                                       result.get("workout_date", ""), [], 0)
         except Exception as e:
             logger.warning(f"autoanalyze: save_workout_notification error: {e}")
 
-        # Уведомление ТОЛЬКО админу — контроль, что анонс пойман и разобран
+        # РЈРІРµРґРѕРјР»РµРЅРёРµ РўРћР›Р¬РљРћ Р°РґРјРёРЅСѓ вЂ” РєРѕРЅС‚СЂРѕР»СЊ, С‡С‚Рѕ Р°РЅРѕРЅСЃ РїРѕР№РјР°РЅ Рё СЂР°Р·РѕР±СЂР°РЅ
         if context is not None:
-            valid_mark = "✅ валидный" if result.get("is_valid") else "❌ невалидный"
+            valid_mark = "вњ… РІР°Р»РёРґРЅС‹Р№" if result.get("is_valid") else "вќЊ РЅРµРІР°Р»РёРґРЅС‹Р№"
             await _notify_admin(
                 context.bot,
-                f"🔬 Анонс пойман и проанализирован ({reason})\n"
-                f"Тип: {result.get('workout_type', '—')} | Дата: {result.get('workout_date', '—')}\n"
-                f"{valid_mark} | групп: {n_groups}, доп.групп: {n_extra} | режим {mode}"
+                f"рџ”¬ РђРЅРѕРЅСЃ РїРѕР№РјР°РЅ Рё РїСЂРѕР°РЅР°Р»РёР·РёСЂРѕРІР°РЅ ({reason})\n"
+                f"РўРёРї: {result.get('workout_type', 'вЂ”')} | Р”Р°С‚Р°: {result.get('workout_date', 'вЂ”')}\n"
+                f"{valid_mark} | РіСЂСѓРїРї: {n_groups}, РґРѕРї.РіСЂСѓРїРї: {n_extra} | СЂРµР¶РёРј {mode}"
             )
     except Exception as e:
         logger.error(f"autoanalyze error for post {workout.get('post_id')}: {e}")
 
 
 async def scheduled_new_workout_check(context: ContextTypes.DEFAULT_TYPE):
-    """Каждые 30 минут ловит новые/изменённые анонсы и запускает фоновый автоанализ (Шаг 1).
-    Пользователям НИЧЕГО не шлёт (никакого промежуточного «вышел анонс») — их единственное
-    сообщение про тренировку это вечерняя рассылка 20:00 с готовой рекомендацией.
-    Уведомление о поимке+анализе уходит ТОЛЬКО админу (из _autoanalyze_post).
+    """РљР°Р¶РґС‹Рµ 30 РјРёРЅСѓС‚ Р»РѕРІРёС‚ РЅРѕРІС‹Рµ/РёР·РјРµРЅС‘РЅРЅС‹Рµ Р°РЅРѕРЅСЃС‹ Рё Р·Р°РїСѓСЃРєР°РµС‚ С„РѕРЅРѕРІС‹Р№ Р°РІС‚РѕР°РЅР°Р»РёР· (РЁР°Рі 1).
+    РџРѕР»СЊР·РѕРІР°С‚РµР»СЏРј РќРР§Р•Р“Рћ РЅРµ С€Р»С‘С‚ (РЅРёРєР°РєРѕРіРѕ РїСЂРѕРјРµР¶СѓС‚РѕС‡РЅРѕРіРѕ В«РІС‹С€РµР» Р°РЅРѕРЅСЃВ») вЂ” РёС… РµРґРёРЅСЃС‚РІРµРЅРЅРѕРµ
+    СЃРѕРѕР±С‰РµРЅРёРµ РїСЂРѕ С‚СЂРµРЅРёСЂРѕРІРєСѓ СЌС‚Рѕ РІРµС‡РµСЂРЅСЏСЏ СЂР°СЃСЃС‹Р»РєР° 20:00 СЃ РіРѕС‚РѕРІРѕР№ СЂРµРєРѕРјРµРЅРґР°С†РёРµР№.
+    РЈРІРµРґРѕРјР»РµРЅРёРµ Рѕ РїРѕРёРјРєРµ+Р°РЅР°Р»РёР·Рµ СѓС…РѕРґРёС‚ РўРћР›Р¬РљРћ Р°РґРјРёРЅСѓ (РёР· _autoanalyze_post).
     """
     workout = await find_next_workout()
     if workout and workout.get("post_id"):
@@ -3275,24 +3310,24 @@ async def scheduled_new_workout_check(context: ContextTypes.DEFAULT_TYPE):
         asyncio.create_task(_autoanalyze_post(workout_lr, context))
 
 
-# ── ПЛАНИРОВЩИК ──────────────────────────────────────────────
+# в”Ђв”Ђ РџР›РђРќРР РћР’Р©РРљ в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 async def scheduled_evening(context: ContextTypes.DEFAULT_TYPE):
     now = datetime.now()
     if now.weekday() not in [0, 3, 5]:
         return
-    is_long = (now.weekday() == 5)  # сб → анонс воскресного Long Run
+    is_long = (now.weekday() == 5)  # СЃР± в†’ Р°РЅРѕРЅСЃ РІРѕСЃРєСЂРµСЃРЅРѕРіРѕ Long Run
     wtype = "long" if is_long else "interval"
-    logger.info(f"Запускаю вечернюю рассылку ({wtype})...")
+    logger.info(f"Р—Р°РїСѓСЃРєР°СЋ РІРµС‡РµСЂРЅСЋСЋ СЂР°СЃСЃС‹Р»РєСѓ ({wtype})...")
 
-    # Один раз детектим свежесть анонса (find_next), кэш — источник рекомендации
+    # РћРґРёРЅ СЂР°Р· РґРµС‚РµРєС‚РёРј СЃРІРµР¶РµСЃС‚СЊ Р°РЅРѕРЅСЃР° (find_next), РєСЌС€ вЂ” РёСЃС‚РѕС‡РЅРёРє СЂРµРєРѕРјРµРЅРґР°С†РёРё
     live = await (find_next_long_run() if is_long else find_next_workout())
     cur_post = live.get("post_id") if live else None
     cur_edit = live.get("edit_date") if live else None
     _, status = get_latest_workout_analysis(
         wtype, cur_post, live.get("workout_date") if live else None, cur_edit)
     if status == "empty":
-        logger.info(f"Вечерняя рассылка: нет анализа в кэше ({wtype}) — пропуск")
+        logger.info(f"Р’РµС‡РµСЂРЅСЏСЏ СЂР°СЃСЃС‹Р»РєР°: РЅРµС‚ Р°РЅР°Р»РёР·Р° РІ РєСЌС€Рµ ({wtype}) вЂ” РїСЂРѕРїСѓСЃРє")
         return
 
     users = get_all_users_with_status()
@@ -3304,15 +3339,15 @@ async def scheduled_evening(context: ContextTypes.DEFAULT_TYPE):
             await asyncio.sleep(0.5)
         except Forbidden:
             _mark_user_inactive(telegram_id)
-            logger.info(f"Пользователь {telegram_id} заблокировал бота (вечерняя рассылка)")
+            logger.info(f"РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ {telegram_id} Р·Р°Р±Р»РѕРєРёСЂРѕРІР°Р» Р±РѕС‚Р° (РІРµС‡РµСЂРЅСЏСЏ СЂР°СЃСЃС‹Р»РєР°)")
         except Exception as e:
             logger.error(f"Evening notification error for {telegram_id}: {e}")
-    logger.info(f"Вечерняя рассылка завершена ({wtype}, status={status}): {count} отправлено (кэш, без парсинга на лету)")
+    logger.info(f"Р’РµС‡РµСЂРЅСЏСЏ СЂР°СЃСЃС‹Р»РєР° Р·Р°РІРµСЂС€РµРЅР° ({wtype}, status={status}): {count} РѕС‚РїСЂР°РІР»РµРЅРѕ (РєСЌС€, Р±РµР· РїР°СЂСЃРёРЅРіР° РЅР° Р»РµС‚Сѓ)")
 
 
 async def _get_vo2max_from_tracker(db_user_id: int) -> tuple:
-    """Получает VO2max из первого доступного трекера (Garmin → COROS → Polar).
-    Возвращает (vo2max: float, tracker_key: str, tracker_name: str) или (None, None, None).
+    """РџРѕР»СѓС‡Р°РµС‚ VO2max РёР· РїРµСЂРІРѕРіРѕ РґРѕСЃС‚СѓРїРЅРѕРіРѕ С‚СЂРµРєРµСЂР° (Garmin в†’ COROS в†’ Polar).
+    Р’РѕР·РІСЂР°С‰Р°РµС‚ (vo2max: float, tracker_key: str, tracker_name: str) РёР»Рё (None, None, None).
     """
     if get_token(db_user_id, "garmin"):
         try:
@@ -3345,18 +3380,18 @@ async def _get_vo2max_from_tracker(db_user_id: int) -> tuple:
 
 
 async def scheduled_cache_refresh(context: ContextTypes.DEFAULT_TYPE):
-    """03:45 UTC (06:45 МСК) — обновляет кэш всех сервисов перед утренней рассылкой.
-    Порядок: до scheduled_morning (04:00 UTC / 07:00 МСК).
-    Обновляет: Strava CTL/ATL/TSB, Garmin recovery+VO2max, COROS, Polar.
+    """03:45 UTC (06:45 РњРЎРљ) вЂ” РѕР±РЅРѕРІР»СЏРµС‚ РєСЌС€ РІСЃРµС… СЃРµСЂРІРёСЃРѕРІ РїРµСЂРµРґ СѓС‚СЂРµРЅРЅРµР№ СЂР°СЃСЃС‹Р»РєРѕР№.
+    РџРѕСЂСЏРґРѕРє: РґРѕ scheduled_morning (04:00 UTC / 07:00 РњРЎРљ).
+    РћР±РЅРѕРІР»СЏРµС‚: Strava CTL/ATL/TSB, Garmin recovery+VO2max, COROS, Polar.
     """
-    logger.info("Запускаю обновление кэша всех сервисов (03:45 UTC)...")
+    logger.info("Р—Р°РїСѓСЃРєР°СЋ РѕР±РЅРѕРІР»РµРЅРёРµ РєСЌС€Р° РІСЃРµС… СЃРµСЂРІРёСЃРѕРІ (03:45 UTC)...")
     users = get_all_users()
     counts = {"strava": 0, "garmin": 0, "coros": 0, "polar": 0, "vo2max": 0}
 
     for telegram_id, name, _ in users:
         db_user_id = get_or_create_user(telegram_id, name)
 
-        # ── Strava CTL/ATL/TSB ────────────────────────────────
+        # в”Ђв”Ђ Strava CTL/ATL/TSB в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
         try:
             access_token = await ensure_valid_token(db_user_id)
             if access_token:
@@ -3365,7 +3400,7 @@ async def scheduled_cache_refresh(context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.warning(f"Strava cache error for {telegram_id}: {e}")
 
-        # ── Garmin: recovery (Body Battery, HRV, TR) ──────────
+        # в”Ђв”Ђ Garmin: recovery (Body Battery, HRV, TR) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
         if get_token(db_user_id, "garmin"):
             try:
                 result = await _fetch_garmin_recovery(db_user_id)
@@ -3374,7 +3409,7 @@ async def scheduled_cache_refresh(context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.warning(f"Garmin recovery error for {telegram_id}: {e}")
 
-        # ── COROS ─────────────────────────────────────────────
+        # в”Ђв”Ђ COROS в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
         if get_token(db_user_id, "coros"):
             try:
                 import coros as _coros
@@ -3383,7 +3418,7 @@ async def scheduled_cache_refresh(context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.warning(f"COROS refresh error for {telegram_id}: {e}")
 
-        # ── Polar ─────────────────────────────────────────────
+        # в”Ђв”Ђ Polar в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
         if get_token(db_user_id, "polar"):
             try:
                 import polar as _polar
@@ -3392,22 +3427,23 @@ async def scheduled_cache_refresh(context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.warning(f"Polar refresh error for {telegram_id}: {e}")
 
-        # ── VO2max из трекера (тихо) ───────────────────────────
+        # в”Ђв”Ђ VO2max РёР· С‚СЂРµРєРµСЂР° (С‚РёС…Рѕ) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
         new_vo2max, tracker_key, tracker_name = await _get_vo2max_from_tracker(db_user_id)
         if new_vo2max is not None:
             profile = get_user_profile(db_user_id)
-            old_vo2max = (profile or {}).get("vo2max")
-            if old_vo2max is None:
-                save_user_profile(db_user_id, vo2max=new_vo2max, vo2max_source=tracker_key)
-            elif abs(new_vo2max - float(old_vo2max)) >= 2:
-                save_user_profile(db_user_id, vo2max=new_vo2max, vo2max_source=tracker_key)
-                counts["vo2max"] += 1
-                logger.info(
-                    f"VO2max обновлён для {telegram_id}: "
-                    f"{float(old_vo2max):.0f} → {new_vo2max:.0f} ({tracker_name})"
-                )
+            if not (profile or {}).get("vo2max_locked"):
+                old_vo2max = (profile or {}).get("vo2max")
+                if old_vo2max is None:
+                    save_user_profile(db_user_id, vo2max=new_vo2max, vo2max_source="auto")
+                elif abs(new_vo2max - float(old_vo2max)) >= 2:
+                    save_user_profile(db_user_id, vo2max=new_vo2max, vo2max_source="auto")
+                    counts["vo2max"] += 1
+                    logger.info(
+                        f"VO2max РѕР±РЅРѕРІР»С‘РЅ РґР»СЏ {telegram_id}: "
+                        f"{float(old_vo2max):.0f} в†’ {new_vo2max:.0f} ({tracker_name})"
+                    )
 
-        # ── Персональные темповые зоны (пересчёт после обновления данных) ──
+        # в”Ђв”Ђ РџРµСЂСЃРѕРЅР°Р»СЊРЅС‹Рµ С‚РµРјРїРѕРІС‹Рµ Р·РѕРЅС‹ (РїРµСЂРµСЃС‡С‘С‚ РїРѕСЃР»Рµ РѕР±РЅРѕРІР»РµРЅРёСЏ РґР°РЅРЅС‹С…) в”Ђв”Ђ
         try:
             zones.recalculate_and_save(db_user_id)
         except Exception as e:
@@ -3416,14 +3452,14 @@ async def scheduled_cache_refresh(context: ContextTypes.DEFAULT_TYPE):
         await asyncio.sleep(1)
 
     logger.info(
-        f"Кэш обновлён: Strava={counts['strava']}, Garmin={counts['garmin']}, "
-        f"COROS={counts['coros']}, Polar={counts['polar']}, VO2max изменён={counts['vo2max']}"
+        f"РљСЌС€ РѕР±РЅРѕРІР»С‘РЅ: Strava={counts['strava']}, Garmin={counts['garmin']}, "
+        f"COROS={counts['coros']}, Polar={counts['polar']}, VO2max РёР·РјРµРЅС‘РЅ={counts['vo2max']}"
     )
 
 
 async def scheduled_data_refresh(context: ContextTypes.DEFAULT_TYPE):
-    """Ежедневно в 03:00 UTC обновляет Strava и Garmin для всех пользователей."""
-    logger.info("Запускаю плановое обновление данных (Strava + Garmin)...")
+    """Р•Р¶РµРґРЅРµРІРЅРѕ РІ 03:00 UTC РѕР±РЅРѕРІР»СЏРµС‚ Strava Рё Garmin РґР»СЏ РІСЃРµС… РїРѕР»СЊР·РѕРІР°С‚РµР»РµР№."""
+    logger.info("Р—Р°РїСѓСЃРєР°СЋ РїР»Р°РЅРѕРІРѕРµ РѕР±РЅРѕРІР»РµРЅРёРµ РґР°РЅРЅС‹С… (Strava + Garmin)...")
     users = get_all_users()
     strava_ok = garmin_ok = vo2max_ok = 0
 
@@ -3447,7 +3483,7 @@ async def scheduled_data_refresh(context: ContextTypes.DEFAULT_TYPE):
                 if result:
                     garmin_ok += 1
 
-            # VO2max — обновляем если >7 дней
+            # VO2max вЂ” РѕР±РЅРѕРІР»СЏРµРј РµСЃР»Рё >7 РґРЅРµР№
             try:
                 profile = get_user_profile(db_user_id)
                 vo2max_updated = (profile or {}).get("vo2max_updated_at") or ""
@@ -3475,15 +3511,15 @@ async def scheduled_data_refresh(context: ContextTypes.DEFAULT_TYPE):
 
         await asyncio.sleep(1)
 
-    logger.info(f"Обновление завершено: Strava={strava_ok}, Garmin recovery={garmin_ok}, VO2max={vo2max_ok}")
+    logger.info(f"РћР±РЅРѕРІР»РµРЅРёРµ Р·Р°РІРµСЂС€РµРЅРѕ: Strava={strava_ok}, Garmin recovery={garmin_ok}, VO2max={vo2max_ok}")
 
 
 async def scheduled_morning(context: ContextTypes.DEFAULT_TYPE):
     now = datetime.now()
     if now.weekday() not in [1, 4, 6]:
         return
-    logger.info("Запускаю утреннюю рассылку...")
-    # Пользователей без профиля/трекера не беспокоим — им нечего показывать
+    logger.info("Р—Р°РїСѓСЃРєР°СЋ СѓС‚СЂРµРЅРЅСЋСЋ СЂР°СЃСЃС‹Р»РєСѓ...")
+    # РџРѕР»СЊР·РѕРІР°С‚РµР»РµР№ Р±РµР· РїСЂРѕС„РёР»СЏ/С‚СЂРµРєРµСЂР° РЅРµ Р±РµСЃРїРѕРєРѕРёРј вЂ” РёРј РЅРµС‡РµРіРѕ РїРѕРєР°Р·С‹РІР°С‚СЊ
     users = [(tid, name, un) for tid, name, un, has in get_all_users_with_status() if has]
     for telegram_id, name, _ in users:
         try:
@@ -3491,41 +3527,41 @@ async def scheduled_morning(context: ContextTypes.DEFAULT_TYPE):
             await asyncio.sleep(0.5)
         except Forbidden:
             _mark_user_inactive(telegram_id)
-            logger.info(f"Пользователь {telegram_id} заблокировал бота (утренняя рассылка)")
+            logger.info(f"РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ {telegram_id} Р·Р°Р±Р»РѕРєРёСЂРѕРІР°Р» Р±РѕС‚Р° (СѓС‚СЂРµРЅРЅСЏСЏ СЂР°СЃСЃС‹Р»РєР°)")
         except Exception as e:
             logger.error(f"Morning notification error for {telegram_id}: {e}")
 
 
-# ── ГЛОБАЛЬНЫЙ ОБРАБОТЧИК ОШИБОК ─────────────────────────────
+# в”Ђв”Ђ Р“Р›РћР‘РђР›Р¬РќР«Р™ РћР‘Р РђР‘РћРўР§РРљ РћРЁРР‘РћРљ в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Ловит все необработанные исключения из хендлеров."""
+    """Р›РѕРІРёС‚ РІСЃРµ РЅРµРѕР±СЂР°Р±РѕС‚Р°РЅРЅС‹Рµ РёСЃРєР»СЋС‡РµРЅРёСЏ РёР· С…РµРЅРґР»РµСЂРѕРІ."""
     error = context.error
 
-    # Повторное нажатие кнопки — сообщение уже не изменилось, игнорируем
+    # РџРѕРІС‚РѕСЂРЅРѕРµ РЅР°Р¶Р°С‚РёРµ РєРЅРѕРїРєРё вЂ” СЃРѕРѕР±С‰РµРЅРёРµ СѓР¶Рµ РЅРµ РёР·РјРµРЅРёР»РѕСЃСЊ, РёРіРЅРѕСЂРёСЂСѓРµРј
     if isinstance(error, BadRequest) and "Message is not modified" in str(error):
         return
 
-    # Таймауты и сетевые ошибки — просто логируем на уровне warning
+    # РўР°Р№РјР°СѓС‚С‹ Рё СЃРµС‚РµРІС‹Рµ РѕС€РёР±РєРё вЂ” РїСЂРѕСЃС‚Рѕ Р»РѕРіРёСЂСѓРµРј РЅР° СѓСЂРѕРІРЅРµ warning
     if isinstance(error, (TimedOut, NetworkError)):
         logger.warning(f"Network error: {error}")
         return
 
-    # Всё остальное — логируем полностью
-    logger.error("Необработанное исключение:", exc_info=error)
+    # Р’СЃС‘ РѕСЃС‚Р°Р»СЊРЅРѕРµ вЂ” Р»РѕРіРёСЂСѓРµРј РїРѕР»РЅРѕСЃС‚СЊСЋ
+    logger.error("РќРµРѕР±СЂР°Р±РѕС‚Р°РЅРЅРѕРµ РёСЃРєР»СЋС‡РµРЅРёРµ:", exc_info=error)
 
-    # Уведомляем пользователя
+    # РЈРІРµРґРѕРјР»СЏРµРј РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ
     if update and hasattr(update, 'effective_chat') and update.effective_chat:
         try:
             await context.bot.send_message(
                 update.effective_chat.id,
-                "⚠️ Что-то пошло не так. Попробуй ещё раз или переключи режим AI (/mode)"
+                "вљ пёЏ Р§С‚Рѕ-С‚Рѕ РїРѕС€Р»Рѕ РЅРµ С‚Р°Рє. РџРѕРїСЂРѕР±СѓР№ РµС‰С‘ СЂР°Р· РёР»Рё РїРµСЂРµРєР»СЋС‡Рё СЂРµР¶РёРј AI (/mode)"
             )
         except Exception:
             pass
 
 
-# ── ЗАПУСК ───────────────────────────────────────────────────
+# в”Ђв”Ђ Р—РђРџРЈРЎРљ в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 def main():
     init_db()
@@ -3566,10 +3602,10 @@ def main():
     app.add_error_handler(global_error_handler)
 
     job_queue = app.job_queue
-    job_queue.run_daily(scheduled_evening,       time=time(hour=17, minute=0))           # 20:00 МСК
-    job_queue.run_daily(scheduled_cache_refresh, time=time(hour=3,  minute=45))          # 06:45 МСК — все сервисы
-    job_queue.run_daily(scheduled_morning,       time=time(hour=4,  minute=0))           # 07:00 МСК — после кэша
-    job_queue.run_repeating(scheduled_new_workout_check, interval=1800, first=60)        # каждые 30 мин
+    job_queue.run_daily(scheduled_evening,       time=time(hour=17, minute=0))           # 20:00 РњРЎРљ
+    job_queue.run_daily(scheduled_cache_refresh, time=time(hour=3,  minute=45))          # 06:45 РњРЎРљ вЂ” РІСЃРµ СЃРµСЂРІРёСЃС‹
+    job_queue.run_daily(scheduled_morning,       time=time(hour=4,  minute=0))           # 07:00 РњРЎРљ вЂ” РїРѕСЃР»Рµ РєСЌС€Р°
+    job_queue.run_repeating(scheduled_new_workout_check, interval=1800, first=60)        # РєР°Р¶РґС‹Рµ 30 РјРёРЅ
 
     import oauth_server as _oauth
     _oauth.set_telegram_app(app)
@@ -3585,7 +3621,7 @@ def main():
         await site.start()
         logger.info("OAuth server started on :8080")
 
-        # Единый Telethon-клиент на процесс (прогрев)
+        # Р•РґРёРЅС‹Р№ Telethon-РєР»РёРµРЅС‚ РЅР° РїСЂРѕС†РµСЃСЃ (РїСЂРѕРіСЂРµРІ)
         try:
             import telegram_reader as _tr
             await _tr.connect_client()
@@ -3604,13 +3640,13 @@ def main():
             async with app:
                 await app.updater.start_polling()
                 await app.start()
-                logger.info("✅ Бот запущен!")
+                logger.info("вњ… Р‘РѕС‚ Р·Р°РїСѓС‰РµРЅ!")
                 try:
                     await stop_event.wait()
                 finally:
                     await app.updater.stop()
                     await app.stop()
-                logger.info("Бот остановлен")
+                logger.info("Р‘РѕС‚ РѕСЃС‚Р°РЅРѕРІР»РµРЅ")
         finally:
             await runner.cleanup()
             logger.info("OAuth server stopped")

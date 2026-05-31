@@ -30,6 +30,17 @@
 
 ---
 
+## [0.20.3] 2026-05-31 — Разделение source и lock для VO2max/ЛП
+
+### Добавлено / Изменено
+- `user_profile.vo2max_locked` / `lactate_locked` (INTEGER DEFAULT 0) + миграция. Существующие `source='manual'` — НЕ становятся locked (обновляемые по умолчанию, как хотел владелец)
+- `save_user_profile(vo2max_locked=, lactate_locked=)` / `get_user_profile` возвращает оба флага
+- Логика защиты везде заменена: `if not locked: update()` вместо `if source != 'manual'`; сервисы пишут `source='auto'`, ручной ввод — `source='manual'`, lock остаётся как есть
+- `/profile`: показывает 🔒 рядом с заблокированным значением; кнопки-тумблеры «🔓 VO2max (обновлять)» / «🔒 VO2max (не обновлять)» появляются когда значение задано (аналогично для ЛП)
+- `_build_profile_keyboard(profile)` принимает профиль для динамических кнопок
+
+---
+
 ## [0.20.2] 2026-05-31 — Галочка специализации + унификация lactate_source
 
 ### Исправлено

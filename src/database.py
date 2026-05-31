@@ -75,6 +75,8 @@ def init_db():
                 lactate_threshold_hr INTEGER,
                 gender TEXT,
                 specialization TEXT DEFAULT 'half_marathon',
+                vo2max_locked INTEGER DEFAULT 0,
+                lactate_locked INTEGER DEFAULT 0,
                 updated_at TEXT DEFAULT (datetime('now')),
                 FOREIGN KEY (user_id) REFERENCES users(id)
             );
@@ -200,7 +202,9 @@ def init_db():
                 "lactate_source TEXT",
                 "coros_email TEXT", "coros_password TEXT",
                 "polar_user_id TEXT",
-                "specialization TEXT DEFAULT 'half_marathon'"):
+                "specialization TEXT DEFAULT 'half_marathon'",
+                "vo2max_locked INTEGER DEFAULT 0",
+                "lactate_locked INTEGER DEFAULT 0"):
         with get_connection() as conn:
             try:
                 conn.execute(f"ALTER TABLE user_profile ADD COLUMN {col}")
@@ -685,7 +689,9 @@ def save_user_profile(user_id: int, vo2max: float | None = None,
                       coros_email: str | None = None,
                       coros_password: str | None = None,
                       polar_user_id: str | None = None,
-                      specialization: str | None = None):
+                      specialization: str | None = None,
+                      vo2max_locked: int | None = None,
+                      lactate_locked: int | None = None):
     """Сохраняет или обновляет профиль спортсмена. None-поля не перезаписывают существующие."""
     from datetime import datetime as _dt
     now = _dt.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -694,7 +700,8 @@ def save_user_profile(user_id: int, vo2max: float | None = None,
         existing = conn.execute(
             "SELECT vo2max, lactate_threshold_pace, lactate_threshold_hr, gender, "
             "garmin_email, garmin_password, vo2max_source, vo2max_updated_at, lactate_source, "
-            "coros_email, coros_password, polar_user_id, specialization "
+            "coros_email, coros_password, polar_user_id, specialization, "
+            "vo2max_locked, lactate_locked "
             "FROM user_profile WHERE user_id = ?",
             (user_id,)
         ).fetchone()
@@ -713,28 +720,33 @@ def save_user_profile(user_id: int, vo2max: float | None = None,
             new_coros_password = _encrypt(coros_password) if coros_password is not None else existing[10]
             new_polar_user_id = polar_user_id if polar_user_id is not None else (existing[11] if len(existing) > 11 else None)
             new_specialization = specialization if specialization is not None else (existing[12] if len(existing) > 12 else None)
+            new_vo2max_locked = vo2max_locked if vo2max_locked is not None else (existing[13] if len(existing) > 13 else 0)
+            new_lactate_locked = lactate_locked if lactate_locked is not None else (existing[14] if len(existing) > 14 else 0)
             conn.execute("""
                 UPDATE user_profile
                 SET vo2max = ?, lactate_threshold_pace = ?, lactate_threshold_hr = ?,
                     gender = ?, garmin_email = ?, garmin_password = ?,
                     vo2max_source = ?, vo2max_updated_at = ?, lactate_source = ?,
                     coros_email = ?, coros_password = ?, polar_user_id = ?,
-                    specialization = ?,
+                    specialization = ?, vo2max_locked = ?, lactate_locked = ?,
                     updated_at = datetime('now')
                 WHERE user_id = ?
             """, (new_vo2max, new_pace, new_hr, new_gender, new_garmin_email, new_garmin_password,
                   new_vo2max_source, new_vo2max_updated_at, new_lactate_source,
-                  new_coros_email, new_coros_password, new_polar_user_id, new_specialization, user_id))
+                  new_coros_email, new_coros_password, new_polar_user_id, new_specialization,
+                  new_vo2max_locked, new_lactate_locked, user_id))
         else:
             conn.execute("""
                 INSERT INTO user_profile (user_id, vo2max, lactate_threshold_pace, lactate_threshold_hr,
                     gender, garmin_email, garmin_password, vo2max_source, vo2max_updated_at, lactate_source,
-                    coros_email, coros_password, polar_user_id, specialization)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    coros_email, coros_password, polar_user_id, specialization,
+                    vo2max_locked, lactate_locked)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (user_id, vo2max, lactate_threshold_pace, lactate_threshold_hr, gender,
                   _encrypt(garmin_email), _encrypt(garmin_password), vo2max_source,
                   now if vo2max is not None else None, lactate_source,
-                  _encrypt(coros_email), _encrypt(coros_password), polar_user_id, specialization))
+                  _encrypt(coros_email), _encrypt(coros_password), polar_user_id, specialization,
+                  0, 0))
 
 
 
@@ -744,7 +756,8 @@ def get_user_profile(user_id: int) -> dict | None:
         row = conn.execute("""
             SELECT vo2max, lactate_threshold_pace, lactate_threshold_hr, gender, updated_at,
                    garmin_email, garmin_password, vo2max_source, vo2max_updated_at, lactate_source,
-                   coros_email, coros_password, polar_user_id, specialization
+                   coros_email, coros_password, polar_user_id, specialization,
+                   vo2max_locked, lactate_locked
             FROM user_profile WHERE user_id = ?
         """, (user_id,)).fetchone()
 
@@ -766,6 +779,8 @@ def get_user_profile(user_id: int) -> dict | None:
         "coros_password": _decrypt(row[11]) if len(row) > 11 else None,
         "polar_user_id": row[12] if len(row) > 12 else None,
         "specialization": row[13] if len(row) > 13 else None,
+        "vo2max_locked": bool(row[14]) if len(row) > 14 else False,
+        "lactate_locked": bool(row[15]) if len(row) > 15 else False,
     }
 
 

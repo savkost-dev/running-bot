@@ -1,7 +1,8 @@
-VERSION = "0.20.2"
+VERSION = "0.20.3"
 BUILD_DATE = "2026-05-31"
 CHANGES = [
-    "fix: _build_specialization_keyboard — ✅ на текущем выборе",
-    "fix: lactate_source унифицирован: сервисы → 'auto', ручной → 'manual' (было 'garmin')",
-    "fix: _build_profile_text — отображает 'из сервиса' для auto, 'вручную' для manual",
+    "feat: vo2max_locked / lactate_locked — раздельное управление защитой от автообновления",
+    "feat: /profile показывает 🔒, кнопки-тумблеры 🔒/🔓 для VO2max и ЛП",
+    "fix: логика защиты везде — теперь 'if not locked', source='auto' от сервисов",
+    "note: миграция — старые manual-значения НЕ становятся locked (обновляемые по умолчанию)",
 ]
