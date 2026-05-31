@@ -1159,11 +1159,16 @@ def recommend_group(analysis_json: dict, user_data: dict) -> dict | None:
         r["qvnorm"] = r["qv_raw"] / qv_max if qv_max else 0.0
         if is_borderline:
             r["pct"] = max(0, min(99, round(100 * r["use"] * r["qvnorm"])))
+            # alt_pct = "ценность зоны для другой цели В ПРИНЦИПЕ" — без qvnorm/усталости.
+            # Формула: 100 × char_affinity × spec_value[alt][zone]
+            # (основной pct = usefulness × qvnorm = "по силам сегодня", два разных смысла)
+            char_v = _CHARACTER_ZONE.get(character, _CHARACTER_ZONE["vo2"]).get(r["zone_key"], 0.5)
             best_spec, best_pct = None, r["pct"]
-            for s in _SPEC_ZONE_VALUE:           # спец-альтернатива (qvnorm не зависит от спец)
+            for s in _SPEC_ZONE_VALUE:
                 if s == spec:
                     continue
-                p = max(0, min(99, round(100 * _zone_usefulness(r["zone_key"], s, character) * r["qvnorm"])))
+                sv = _SPEC_ZONE_VALUE[s].get(r["zone_key"], 0.5)
+                p = max(0, min(99, round(100 * char_v * sv)))
                 if p > best_pct:
                     best_pct, best_spec = p, s
             r["alt_spec"], r["alt_pct"] = best_spec, best_pct
@@ -2208,8 +2213,8 @@ def format_evening_message(advice: dict, workout: dict, stats: dict | None = Non
             spec_label = _html.escape(advice.get("spec_label") or "твоя цель")
             legend_alt = next((it.get('alt_label') for it in sorted_s
                                if it.get('alt_pct') is not None and it.get('alt_label')), "другая цель")
-            lines.append(f"🟩 — для твоей цели ({spec_label})")
-            lines.append(f"🟦 — если сегодня хочешь развить другие качества ({_html.escape(legend_alt)})")
+            lines.append(f"🟩 — по твоим силам сегодня (цель: {spec_label})")
+            lines.append(f"🟦 — ценность этой зоны если бы цель была: {_html.escape(legend_alt)}")
         lines.append(sep)
 
     # Основная рекомендация
