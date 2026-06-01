@@ -973,6 +973,150 @@ def _zone_display(zone_key: str, pos: str, near: str | None) -> str:
     return f"{name} ({inner})" if inner else name
 
 
+def build_ai_b_prompt(analysis: dict, user_data: dict, zones_map: dict, recovery: dict | None) -> str:
+    """Промпт варианта B: ИИ видит Хшаг 1 + данные бегуна и САМ выбирает группу.
+    Без формул — чистая рекомендация от ИИ.
+    """
+    groups = analysis.get("groups") or []
+    structure = analysis.get("structure") or []
+    spec = user_data.get("specialization") or "half_marathon"
+    spec_labels = {
+        "5k": "5 км", "10k": "10 км", "half_marathon": "полумарафон",
+        "marathon": "марафон", "speed": "развитие скорости", "fitness": "общая форма",
+    }
+    spec_label = spec_labels.get(spec, spec)
+
+    # Зоны
+    zone_lines = []
+    for z, p in (zones_map or {}).items():
+        zone_lines.append(f"  {z}: {p} мин/км")
+    zones_text = "\n".join(zone_lines) if zone_lines else "  нет данных"
+
+    # Восстановление
+    rec_parts = []
+    if recovery:
+        rv = recovery.get("recovery_score")
+        if rv is not None:
+            rec_parts.append(f"Recovery Score: {rv}")
+        tr = recovery.get("training_readiness")
+        if isinstance(tr, dict) and tr.get("score") is not None:
+            rec_parts.append(f"Training Readiness: {tr['score']}/100")
+        hrv = recovery.get("hrv")
+        if hrv is not None:
+            rec_parts.append(f"HRV: {hrv} мс")
+        bb = recovery.get("body_battery")
+        if bb is not None:
+            rec_parts.append(f"Body Battery: {bb}")
+    rec_text = ", ".join(rec_parts) if rec_parts else "нет данных"
+
+    # Структура тренировки
+    struct_lines = []
+    for b in structure:
+        if b.get("type") == "easy":
+            struct_lines.append(f"  {b.get('distance_m')} м — лёгкий бег")
+        else:
+            struct_lines.append(
+                f"  Блок {b.get('block')}: {b.get('reps')} × {b.get('work_distance_m')} м / "
+                f"{b.get('recovery_distance_m')} м восст — {b.get('purpose', '')}"
+            )
+    struct_text = "\n".join(struct_lines) if struct_lines else "  —"
+
+    # Группы
+    groups_lines = []
+    for g in groups:
+        if g.get("health_group"):
+            groups_lines.append(f"  Группа {g.get('number')}: бег/ходьба (группа здоровья)")
+            continue
+        blocks = g.get("blocks") or []
+        block_strs = []
+        for bl in blocks:
+            ps = bl.get("work_pace_start") or "?"
+            pe = bl.get("work_pace_end")
+            pace_str = f"{ps}→{pe}" if pe and pe != ps else ps
+            rp = bl.get("recovery_pace") or "—"
+            block_strs.append(f"бл{bl.get('block')} {pace_str}/км (recovery {rp})")
+        groups_lines.append(f"  Группа {g.get('number')}: {'; '.join(block_strs)}")
+    groups_text = "\n".join(groups_lines) if groups_lines else "  —"
+
+    return f"""Ты — беговой тренер клуба Dusty Dumbbells.
+Подбери группу для бегуна. Отвечай тренерски — без шаблонов, живым языком.
+
+ТРЕНИРОВКА: {analysis.get('workout_date', '—')}
+Суть: {analysis.get('summary', '—')}
+Цель: {analysis.get('overall_purpose', '—')}
+На что обратить внимание: {analysis.get('what_to_watch', '—')}
+
+СТРУКТУРА (одинаково для всех):
+{struct_text}
+
+ГРУППЫ (отличаются только темпами):
+{groups_text}
+
+ДАННЫЕ БЕГУНА:
+Зоны темпа:
+{zones_text}
+Специализация: {spec_label}
+Восстановление: {rec_text}
+
+Дай короткую тренерскую рекомендацию:
+- Какую группу выбрать и почему
+- Что ожидать от тренировки (2-3 предложения, без лишнего)
+- Если разминка пойдёт легко/тяжело — куда сдвинуться
+
+Отвечай свободным текстом, без JSON и шаблонов."""
+
+
+def generate_ai_b_recommendation(analysis: dict, user_data: dict, zones_map: dict,
+                                  recovery: dict | None, mode: str = "smart") -> tuple[str, dict]:
+    """Чистая ИИ-рекомендация (вариант B). Возвращает (text, stats)."""
+    prompt = build_ai_b_prompt(analysis, user_data, zones_map, recovery)
+    if mode == "deep":
+        model, max_tok, timeout = MODEL_DEEP, 2000, 120
+    else:
+        model, max_tok, timeout = MODEL_SMART, 1500, 60
+
+    t0 = _time.time()
+    stats = {"time_sec": 0, "mode": mode, "input_tokens": None, "output_tokens": None}
+    try:
+        resp = _get_client().chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=max_tok,
+            temperature=0.4,
+            timeout=timeout,
+        )
+        usage = resp.usage
+        stats = {
+            "time_sec": round(_time.time() - t0, 1),
+            "mode": mode,
+            "input_tokens": usage.prompt_tokens if usage else None,
+            "output_tokens": usage.completion_tokens if usage else None,
+        }
+        text = (resp.choices[0].message.content or "").strip()
+        return text, stats
+    except Exception as e:
+        logger.warning(f"generate_ai_b_recommendation error: {e}")
+        stats["time_sec"] = round(_time.time() - t0, 1)
+        return "", stats
+
+
+def format_ai_b_message(text: str, analysis: dict, stats: dict) -> str:
+    """Форматирует сообщение варианта B для админа."""
+    import html as _h
+    date = analysis.get("workout_date", "—")
+    t = stats.get("time_sec", "?")
+    inp = stats.get("input_tokens", "?")
+    out = stats.get("output_tokens", "?")
+    mode = stats.get("mode", "?")
+    body = _h.escape(text) if text else "❌ Модель не ответила."
+    return (
+        f"🧪 <b>Вариант B — чистый ИИ ({date})</b>\n"
+        f"Без формул, ИИ сам выбирает группу.\n\n"
+        f"{body}\n\n"
+        f"<i>⏱ {t}с | {mode} | 📥 {inp} / 📤 {out}</i>"
+    )
+
+
 def _pace_sec(pace: str) -> float | None:
     """'3:53' / '3.53' → 233 сек."""
     if not pace:

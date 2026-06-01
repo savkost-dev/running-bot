@@ -2490,6 +2490,37 @@ def _user_has_data(db_user_id: int) -> bool:
     return any(get_token(db_user_id, s) for s in ("strava", "garmin", "coros", "polar"))
 
 
+async def _send_ai_variant_b(
+    telegram_id: int,
+    analysis: dict,
+    user_data: dict,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """Вариант B: чистая ИИ-рекомендация для админа.
+    Запускается асинхронно после основного сообщения.
+    """
+    import functools
+    db_user_id = user_data.get("db_user_id")
+    import zones as _zones_mod
+    zinfo = _zones_mod.get_pace_zones(db_user_id) if db_user_id is not None else None
+    zones_map = (zinfo or {}).get("zones") or {}
+    recovery = user_data.get("recovery")
+    rec_mode = (get_preferences(db_user_id) or {}).get("ai_mode", "smart")
+
+    try:
+        text, stats = await asyncio.get_event_loop().run_in_executor(
+            None,
+            functools.partial(
+                claude_advisor.generate_ai_b_recommendation,
+                analysis, user_data, zones_map, recovery, rec_mode
+            )
+        )
+        msg_text = claude_advisor.format_ai_b_message(text, analysis, stats)
+        await context.bot.send_message(telegram_id, msg_text, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"_send_ai_variant_b error: {e}")
+
+
 async def _send_recommendation(
     telegram_id: int, name: str,
     context: ContextTypes.DEFAULT_TYPE,
@@ -2625,6 +2656,10 @@ async def _send_recommendation(
             advice, workout_dict, stats=stats2, weather_line=weather_line, has_tracker=has_tracker)
 
     await _out(banner + body, final_markup, parse_mode="HTML")
+
+    # ── Вариант B: чистый ИИ — только для админа ──────────────────────
+    if telegram_id in ADMIN_TELEGRAM_IDS and not long:
+        asyncio.create_task(_send_ai_variant_b(telegram_id, analysis, user_data, context))
 
 
 async def _send_workout_recommendation(
