@@ -1541,6 +1541,20 @@ async def cmd_reanalyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await msg.edit_text("\n".join(lines), parse_mode="HTML")
 
 
+async def cmd_show_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает последний Шаг 1 из базы без нового запроса к модели (админ)."""
+    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+        await update.message.reply_text("Нет доступа.")
+        return
+    await update.message.reply_text(
+        "Показать последний анализ (Шаг 1) из базы:",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("⚡ Интервальная", callback_data="show_analyze_interval"),
+            InlineKeyboardButton("🕐 Long Run",     callback_data="show_analyze_long"),
+        ]])
+    )
+
+
 # ── КНОПКИ ───────────────────────────────────────────────────
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2021,6 +2035,30 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _build_preprocess_text(new_mode),
             reply_markup=_build_preprocess_keyboard(new_mode),
         )
+
+    elif query.data in ("show_analyze_interval", "show_analyze_long"):
+        if user.id not in ADMIN_TELEGRAM_IDS:
+            return
+        import json as _json
+        wtype = "long" if query.data == "show_analyze_long" else "interval"
+        row, status = get_latest_workout_analysis(wtype)
+        if status == "empty" or row is None:
+            await query.edit_message_text(f"😔 Нет анализа {wtype} в базе.")
+            return
+        try:
+            result = _json.loads(row.get("analyzed_json") or "{}")
+        except Exception:
+            result = {}
+        mode = row.get("analysis_mode", "?")
+        text = _format_analysis_result(result, mode)
+        first = True
+        for i in range(0, len(text), 4096):
+            chunk = text[i:i + 4096]
+            if first:
+                await query.edit_message_text(chunk)
+                first = False
+            else:
+                await context.bot.send_message(user.id, chunk)
 
     elif query.data in ("analyze_interval", "analyze_long"):
         if user.id not in ADMIN_TELEGRAM_IDS:
@@ -3351,7 +3389,11 @@ async def scheduled_evening(context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Evening notification error for {telegram_id}: {e}")
     logger.info(f"Вечерняя рассылка завершена ({wtype}, status={status}): {count} отправлено (кэш, без парсинга на лету)")
-
+    await _notify_admin(
+        context.bot,
+        f"📨 Рассылка завершена\n"
+        f"Тип: {wtype} | Отправлено: {count} пользователям"
+    )
 
 async def _get_vo2max_from_tracker(db_user_id: int) -> tuple:
     """Получает VO2max из первого доступного трекера (Garmin → COROS → Polar).
@@ -3607,12 +3649,13 @@ def main():
     app.add_handler(CommandHandler("test_workout", cmd_test_workout))
     app.add_handler(CommandHandler("test_long",    cmd_test_long))
     app.add_handler(CommandHandler("reanalyze",    cmd_reanalyze))
+    app.add_handler(CommandHandler("show_analyze",  cmd_show_analyze))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     app.add_error_handler(global_error_handler)
 
     job_queue = app.job_queue
-    job_queue.run_daily(scheduled_evening,       time=time(hour=19, minute=0))           # 22:00 МСК (TEMP: сегодня запоздали; вернуть на hour=17 завтра)
+    job_queue.run_daily(scheduled_evening,       time=time(hour=17, minute=0))           # 20:00 МСК
     job_queue.run_daily(scheduled_cache_refresh, time=time(hour=3,  minute=45))          # 06:45 МСК — все сервисы
     job_queue.run_daily(scheduled_morning,       time=time(hour=4,  minute=0))           # 07:00 МСК — после кэша
     job_queue.run_repeating(scheduled_new_workout_check, interval=1800, first=60)        # каждые 30 мин
