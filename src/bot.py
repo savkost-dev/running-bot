@@ -281,7 +281,7 @@ def _build_screen1_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("📋 Тренировка", callback_data="get_workout"),
          InlineKeyboardButton("🕐 Long Run",   callback_data="get_long_run")],
         [InlineKeyboardButton("☀️ Утро",       callback_data="get_morning"),
-         InlineKeyboardButton("🧠 Режим AI",   callback_data="ai_mode")],
+         InlineKeyboardButton("👤 Профиль",   callback_data="my_profile")],
         [InlineKeyboardButton("💬 Обратная связь", callback_data="feedback_show"),
          InlineKeyboardButton("❓ Справка",        callback_data="help")],
         [InlineKeyboardButton("⚙️ Настройки →",   callback_data="show_settings")],
@@ -301,7 +301,7 @@ def _build_screen1_onboarding_keyboard() -> InlineKeyboardMarkup:
 def _build_screen2_keyboard() -> InlineKeyboardMarkup:
     """Экран 2 — настройки."""
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("👤 Профиль",        callback_data="my_profile"),
+        [InlineKeyboardButton("🧠 Режим AI",        callback_data="ai_mode"),
          InlineKeyboardButton("🔔 Уведомления",    callback_data="notifications")],
         [InlineKeyboardButton("🔄 Обновить данные", callback_data="refresh_cache"),
          InlineKeyboardButton("🔗 Сервисы →",       callback_data="show_services")],
@@ -461,7 +461,7 @@ async def cmd_workout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db_user_id = _mark_user_active_if_needed(user.id, user.full_name, user.username)
     log_activity(db_user_id, '/workout')
-    msg = await update.message.reply_text("🔍 Подбираю тренировку...")
+    msg = await update.message.reply_text("🔍 Ищу анонс, анализирую и подбираю группу...")
     await _send_recommendation(user.id, user.full_name, context, long=False, msg=msg)
 
 
@@ -759,10 +759,10 @@ def _build_profile_text(profile: dict | None) -> str:
 def _build_profile_keyboard(profile: dict | None = None) -> InlineKeyboardMarkup:
     p = profile or {}
     rows = [
-        [InlineKeyboardButton("📊 Указать VO2max",   callback_data="profile_set_vo2max"),
-         InlineKeyboardButton("🏃 Лактатный порог", callback_data="profile_set_lactate")],
         [InlineKeyboardButton("👤 Пол", callback_data="profile_set_gender"),
          InlineKeyboardButton("🎯 Специализация", callback_data="profile_set_specialization")],
+        [InlineKeyboardButton("📊 Указать VO2max",   callback_data="profile_set_vo2max"),
+         InlineKeyboardButton("🏃 Лактатный порог", callback_data="profile_set_lactate")],
     ]
     lock_row = []
     if p.get("vo2max") is not None:
@@ -1682,7 +1682,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _send_morning_check(user.id, context, msg)
 
     elif query.data == "get_workout":
-        msg = await context.bot.send_message(user.id, "🔍 Подбираю тренировку...")
+        msg = await context.bot.send_message(user.id, "🔍 Ищу анонс, анализирую и подбираю группу...")
         await _send_recommendation(user.id, user.full_name, context, long=False, msg=msg)
 
     elif query.data == "get_long_run":
