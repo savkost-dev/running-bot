@@ -1938,7 +1938,7 @@ def recommendation_to_advice(rec: dict, analysis: dict, recovery: dict | None) -
         "preparation_tips": tips,
         "warning": _recovery_warning(analysis, main_num, recovery),
         "overall_purpose": (analysis.get("overall_purpose") or "").strip(),
-        "what_to_watch": (analysis.get("what_to_watch") or "").strip(),
+        "workout_summary": (analysis.get("summary") or "").strip(),
     }
 
 
@@ -2220,14 +2220,14 @@ def format_evening_message(advice: dict, workout: dict, stats: dict | None = Non
 
     # О тренировке (Цель + Суть) — ДО подходимости
     overall = _html.escape((advice.get("overall_purpose") or "").strip())
-    what_watch = _html.escape((advice.get("what_to_watch") or "").strip())
+    summary = _html.escape((advice.get("workout_summary") or "").strip())
+    if summary:
+        lines.append("<b>💡 Суть</b>")
+        lines.append(f"<i>{summary}</i>")
     if overall:
         lines.append("<b>🎯 Цель тренировки</b>")
         lines.append(f"<i>{overall}</i>")
-    if what_watch:
-        lines.append("<b>💡 Суть</b>")
-        lines.append(f"<i>{what_watch}</i>")
-    if overall or what_watch:
+    if overall or summary:
         lines.append(sep)
 
     # Процентная шкала — перед основной рекомендацией
