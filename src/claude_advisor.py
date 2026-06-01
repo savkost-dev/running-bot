@@ -610,7 +610,17 @@ def _build_analyze_prompt(raw_text: str, comments_text: str) -> str:
         "это Шаг 2 (рекомендация), не сюда.\n\n"
         "ЗАДАЧА 4 — ГРУППЫ (groups[]):\n"
         "Каждая группа описывается ТОЛЬКО темпами по блокам, БЕЗ повторения структуры.\n"
-        "groups[].blocks — массив {block: N, work_pace, recovery_pace, active_recovery}.\n"
+        "groups[].blocks — массив {block: N, work_pace_start, work_pace_end, work_distance_m,\n"
+        "recovery_pace, active_recovery}.\n"
+        "ПРОГРЕССИЯ ТЕМПА (критично): если рабочий темп задан ДИАПАЗОНОМ\n"
+        "(напр '600 м – 2.00–1.50 минуты' = прогрессия от 2:00 к 1:50 на отрезок):\n"
+        "  work_pace_start = темп/км ПЕРВОГО (медленного) отрезка,\n"
+        "  work_pace_end = темп/км ПОСЛЕДНЕГО (быстрого) отрезка.\n"
+        "Если прогрессии НЕТ (единый темп) — work_pace_start == work_pace_end.\n"
+        "НИКОГДА не сворачивай прогрессию в одно число и не усредняй —\n"
+        "всегда сохраняй оба края отдельно. Оба в темпе мин:сек на км.\n"
+        "work_distance_m — длина рабочего отрезка в метрах (из структуры этого блока;\n"
+        "  у групп с нестандартной дорожкой — фактическая длина этой группы).\n"
         "Привязка к структуре через 'block': N. easy-блоки в groups НЕ дублируй\n"
         "(у них нет темпа — они только в structure).\n"
         "reps_override — если у группы меньше повторов чем в общей структуре\n"
@@ -687,8 +697,8 @@ def _build_analyze_prompt(raw_text: str, comments_text: str) -> str:
         '      "reps_override": null,\n'
         '      "health_group": false,\n'
         '      "blocks": [\n'
-        '        {"block": 1, "work_pace": "3:20", "recovery_pace": "5:00", "active_recovery": true},\n'
-        '        {"block": 3, "work_pace": "2:40", "recovery_pace": "5:00", "active_recovery": true}\n'
+        '        {"block": 1, "work_pace_start": "3:20", "work_pace_end": "3:05", "work_distance_m": 300, "recovery_pace": "5:00", "active_recovery": true},\n'
+        '        {"block": 3, "work_pace_start": "2:40", "work_pace_end": "2:40", "work_distance_m": 100, "recovery_pace": "5:00", "active_recovery": true}\n'
         "      ]\n"
         "    }\n"
         "  ],\n"
@@ -1021,7 +1031,9 @@ def _recovery_value(recovery: dict | None) -> float | None:
 
 
 def _group_primary_pace(group: dict, struct_dist: dict) -> str | None:
-    """Темп определяющего (самого длинного) рабочего блока группы."""
+    """Усреднённый темп определяющего (самого длинного) рабочего блока группы.
+    Если блок с прогрессией (start≠end) — возвращает среднее, округляя до целых секунд.
+    """
     blocks = group.get("blocks") or []
     if not blocks:
         return None
@@ -1029,6 +1041,17 @@ def _group_primary_pace(group: dict, struct_dist: dict) -> str | None:
         blocks,
         key=lambda b: struct_dist.get(b.get("block"), 0) or 0,
     )
+    # Новый формат: work_pace_start / work_pace_end
+    start_pace = best_block.get("work_pace_start")
+    end_pace = best_block.get("work_pace_end")
+    if start_pace and end_pace:
+        start_sec = _pace_sec(start_pace)
+        end_sec = _pace_sec(end_pace)
+        if start_sec is not None and end_sec is not None:
+            avg_sec = round((start_sec + end_sec) / 2)
+            m, s = divmod(avg_sec, 60)
+            return f"{m}:{s:02d}"
+    # Fallback: старый формат (редко, только при миграции)
     return best_block.get("work_pace")
 
 
