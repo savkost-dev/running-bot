@@ -1486,6 +1486,11 @@ async def _reanalyze_one(workout: dict, mode: str) -> str:
     if not result:
         return f"{label} — {date_fmt}: ❌ анализ не удался (пустой ответ модели)"
 
+    # Failsafe B: анонс без групп физически бесполезен для рекомендации
+    if result.get("is_valid") and not (result.get("groups") or []):
+        result["is_valid"] = False
+        result["reject_reason"] = "нет групп с темпами — не анонс"
+
     save_workout_analysis(
         post_id=workout.get("post_id"),
         workout_date=result.get("workout_date", ""),
@@ -3253,6 +3258,11 @@ async def _autoanalyze_post(workout: dict, context=None) -> None:
         if not result:
             logger.warning(f"autoanalyze: post_id={post_id} анализ не удался ({reason})")
             return
+        # Failsafe B: анонс без групп физически бесполезен для рекомендации
+        if result.get("is_valid") and not (result.get("groups") or []):
+            result["is_valid"] = False
+            result["reject_reason"] = "нет групп с темпами — не анонс"
+            logger.info(f"autoanalyze: post_id={post_id} is_valid сброшен (groups=[])")
         save_workout_analysis(
             post_id=post_id,
             workout_date=result.get("workout_date", ""),

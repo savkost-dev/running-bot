@@ -566,6 +566,9 @@ async def find_next_long_run() -> dict | None:
         except ValueError:
             continue
 
+        if workout_date.weekday() != 6:  # long всегда воскресенье (weekday=6) в Dusty Dumbbells
+            continue
+
         if workout_date >= today:
             parsed["is_past"] = False
             future_workouts.append(parsed)
