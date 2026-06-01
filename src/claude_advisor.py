@@ -1937,6 +1937,8 @@ def recommendation_to_advice(rec: dict, analysis: dict, recovery: dict | None) -
         "gap_note": gap_note,
         "preparation_tips": tips,
         "warning": _recovery_warning(analysis, main_num, recovery),
+        "overall_purpose": (analysis.get("overall_purpose") or "").strip(),
+        "what_to_watch": (analysis.get("what_to_watch") or "").strip(),
     }
 
 
@@ -2241,6 +2243,17 @@ def format_evening_message(advice: dict, workout: dict, stats: dict | None = Non
                                if it.get('alt_pct') is not None and it.get('alt_label')), "другая цель")
             lines.append(f"🟩 — по твоим силам сегодня (цель: {spec_label})")
             lines.append(f"🟦 — ценность этой зоны если бы цель была: {_html.escape(legend_alt)}")
+        lines.append(sep)
+
+    # О тренировке
+    overall = _html.escape((advice.get("overall_purpose") or "").strip())
+    what_watch = _html.escape((advice.get("what_to_watch") or "").strip())
+    if overall or what_watch:
+        lines.append("<b>О тренировке</b>")
+        if overall:
+            lines.append(f"🎯 Суть: {overall}")
+        if what_watch:
+            lines.append(f"👀 На что обратить внимание: {what_watch}")
         lines.append(sep)
 
     # Основная рекомендация
