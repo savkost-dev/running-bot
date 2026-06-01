@@ -2218,6 +2218,18 @@ def format_evening_message(advice: dict, workout: dict, stats: dict | None = Non
 
     lines.append(sep)
 
+    # О тренировке (Цель + Суть) — ДО подходимости
+    overall = _html.escape((advice.get("overall_purpose") or "").strip())
+    what_watch = _html.escape((advice.get("what_to_watch") or "").strip())
+    if overall:
+        lines.append("<b>🎯 Цель тренировки</b>")
+        lines.append(f"<i>{overall}</i>")
+    if what_watch:
+        lines.append("<b>💡 Суть</b>")
+        lines.append(f"<i>{what_watch}</i>")
+    if overall or what_watch:
+        lines.append(sep)
+
     # Процентная шкала — перед основной рекомендацией
     if suitability:
         sorted_s = sorted(suitability, key=lambda x: x.get("percentage", 0), reverse=True)
@@ -2243,17 +2255,6 @@ def format_evening_message(advice: dict, workout: dict, stats: dict | None = Non
                                if it.get('alt_pct') is not None and it.get('alt_label')), "другая цель")
             lines.append(f"🟩 — по твоим силам сегодня (цель: {spec_label})")
             lines.append(f"🟦 — ценность этой зоны если бы цель была: {_html.escape(legend_alt)}")
-        lines.append(sep)
-
-    # О тренировке
-    overall = _html.escape((advice.get("overall_purpose") or "").strip())
-    what_watch = _html.escape((advice.get("what_to_watch") or "").strip())
-    if overall or what_watch:
-        lines.append("<b>О тренировке</b>")
-        if overall:
-            lines.append(f"🎯 Суть: {overall}")
-        if what_watch:
-            lines.append(f"👀 На что обратить внимание: {what_watch}")
         lines.append(sep)
 
     # Основная рекомендация
