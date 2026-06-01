@@ -1,7 +1,7 @@
 # deploy.ps1 - polnyy deploy running-bot na DigitalOcean
 # VAZNO: vsegda ispolzovat etot skript, nikogda ne scp otdelnyye .py fayly vruchnuyu
 
-$SSH_KEY    = "C:/Users/savko/.ssh/digitalocean"
+$SSH_KEY    = "$env:USERPROFILE/.ssh/digitalocean"
 $REMOTE     = "root@167.172.185.88"
 $SRC_LOCAL  = "D:/running-bot/src"
 $SRC_REMOTE = "/opt/running-bot/src"
