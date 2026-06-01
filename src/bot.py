@@ -3320,7 +3320,7 @@ async def scheduled_new_workout_check(context: ContextTypes.DEFAULT_TYPE):
 # ── ПЛАНИРОВЩИК ──────────────────────────────────────────────
 
 async def scheduled_evening(context: ContextTypes.DEFAULT_TYPE):
-    return  # TEMP: рассылка отключена 2026-06-01, убрать после фикса зон
+    # return  # TEMP: рассылка отключена 2026-06-01, убрать после фикса зон
     now = datetime.now()
     if now.weekday() not in [0, 3, 5]:
         return
@@ -3612,7 +3612,7 @@ def main():
     app.add_error_handler(global_error_handler)
 
     job_queue = app.job_queue
-    job_queue.run_daily(scheduled_evening,       time=time(hour=17, minute=0))           # 20:00 МСК
+    job_queue.run_daily(scheduled_evening,       time=time(hour=19, minute=0))           # 22:00 МСК (TEMP: сегодня запоздали; вернуть на hour=17 завтра)
     job_queue.run_daily(scheduled_cache_refresh, time=time(hour=3,  minute=45))          # 06:45 МСК — все сервисы
     job_queue.run_daily(scheduled_morning,       time=time(hour=4,  minute=0))           # 07:00 МСК — после кэша
     job_queue.run_repeating(scheduled_new_workout_check, interval=1800, first=60)        # каждые 30 мин

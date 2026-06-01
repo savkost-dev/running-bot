@@ -2217,6 +2217,7 @@ def format_evening_message(advice: dict, workout: dict, stats: dict | None = Non
         lines.append("⚠️ Рекомендация без данных о нагрузке — подключи Garmin, COROS или Polar для точного анализа")
 
     lines.append(sep)
+    lines.append("ℹ️ <i>Сегодня рассылка запоздала — обычно приходит в 20:00 МСК.</i>")  # TEMP 2026-06-01
 
     # О тренировке (Цель + Суть) — ДО подходимости
     overall = _html.escape((advice.get("overall_purpose") or "").strip())
@@ -2225,7 +2226,7 @@ def format_evening_message(advice: dict, workout: dict, stats: dict | None = Non
         lines.append("<b>💡 Суть</b>")
         lines.append(f"<i>{summary}</i>")
     if overall:
-        lines.append("<b>🎯 Цель тренировки</b>")
+        lines.append("<b>🏁 Цель тренировки</b>")
         lines.append(f"<i>{overall}</i>")
     if overall or summary:
         lines.append(sep)
