@@ -3320,6 +3320,7 @@ async def scheduled_new_workout_check(context: ContextTypes.DEFAULT_TYPE):
 # ── ПЛАНИРОВЩИК ──────────────────────────────────────────────
 
 async def scheduled_evening(context: ContextTypes.DEFAULT_TYPE):
+    return  # TEMP: рассылка отключена 2026-06-01, убрать после фикса зон
     now = datetime.now()
     if now.weekday() not in [0, 3, 5]:
         return
