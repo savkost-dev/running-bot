@@ -1243,8 +1243,11 @@ def _format_analysis_result(result: dict, mode: str) -> str:
             for bl in (g.get("blocks") or []):
                 ar = "🟢" if bl.get("active_recovery") else "⚪"
                 rp = bl.get("recovery_pace") or "—"
+                ps = bl.get("work_pace_start") or bl.get("work_pace") or "—"
+                pe = bl.get("work_pace_end")
+                pace_str = f"{ps}→{pe}" if pe and pe != ps else ps
                 block_strs.append(
-                    f"бл{bl.get('block', '?')} {bl.get('work_pace', '—')}/км (восст {rp} {ar})"
+                    f"бл{bl.get('block', '?')} {pace_str}/км (восст {rp} {ar})"
                 )
             body = "; ".join(block_strs) if block_strs else "—"
             lines.append(f"  {num}{tag_str}: {body}")
