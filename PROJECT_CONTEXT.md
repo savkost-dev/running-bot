@@ -1,7 +1,7 @@
 # DoDick Bot — Контекст проекта
 
 > Файл-шпаргалка для старта нового чата. Скидывать в начале сессии, чтобы не пересказывать проект заново.
-> Последнее обновление: 01.06.2026 (версия 0.21.0, после фикса ложных анонсов).
+> Последнее обновление: 02.06.2026 (версия 0.21.0, после откатa — сессия архитектуры двух вариантов).
 
 ## Что это
 Telegram бот @DoDick_bot для бегового клуба Dusty Dumbbells.
@@ -181,6 +181,93 @@ Forbidden при отправке → is_active=0 + deactivated_at. Входящ
 ## Разделение рассылки (has_data)
 - has_data=True (есть VO2max ИЛИ токен трекера) → полная рекомендация
 - has_data=False (пустой профиль) → упрощённое уведомление + призыв заполнить профиль
+
+## === АРХИТЕКТУРА ДВУХ ВАРИАНТОВ РЕКОМЕНДАЦИИ (решено 02.06, не реализовано) ===
+
+### Принцип
+ОДИН рендерер `format_evening_message` для обоих вариантов.
+ОБА варианта должны возвращать одинаковый `advice`-dict — как МИНИМУМ. Можно больше, не падать.
+Если вариант не может заполнить вечернюю форму — это баг, надо фиксить.
+
+### Текущее состояние вариантов
+
+**Вариант A** (формулы + ИИ-проза) — работает правильно:
+```
+analyze_workout → recommend_group → recommendation_to_advice → format_evening_message
+```
+
+**Вариант B** (чистый ИИ) — **БАГ**: возвращает сырой HTML, отдельная `format_ai_b_message`:
+```
+analyze_workout → generate_ai_b_recommendation → (text, stats) → format_ai_b_message  ← БАГ
+```
+
+**Целевая архитектура:**
+```
+analyze_workout (Wшаг 1) → analysis dict
+  ↓
+[A] recommend_group + recommendation_to_advice  → advice_dict
+[B] generate_ai_b_recommendation (JSON от ИИ) → advice_dict
+  ↓
+format_evening_message (единый рендерер)
+```
+
+### Обязательные поля advice-dict (вечерняя форма)
+```python
+{
+    # Из ИИ/формул (вариант обязан вернуть):
+    "recommended_group": "3",
+    "recommended_pace": "4:00–4:15 мин/км",
+    "reason": "...",
+    "if_feeling_good": "...",
+    "if_tired": "...",
+    "gap_note": "...",
+    "suitability_percentages": [{"group": "3", "percentage": 85, "comment": "идеально"}],
+    "preparation_tips": ["..."],
+    "warning": None,
+    "spec_label": "полумарафон",  # для легенды шкалы
+    # Из analysis (Шаг 1), НЕ из ИИ:
+    "overall_purpose": "...",
+    "workout_summary": "...",
+}
+```
+`overall_purpose` = `analysis["overall_purpose"]`, `workout_summary` = `analysis["summary"]`.
+ИИ варианта B их НЕ дублирует — подставляются после парсинга в коде.
+
+### PENDING задачи (в порядке выполнения)
+
+**Задача 1 — Баг «Вася» (вариант A, хирургическая правка, безопасно)**
+Файл: `claude_advisor.py`, функция `_build_step2_prompt`
+Где используется: шаг 2 варианта A — ИИ пишет прозу обоснования. Модель выдумывала имя (обращалась «Вася» к Антону).
+
+Фикс: добавить параметр `athlete_name: str | None` в `_build_step2_prompt`:
+```python
+if athlete_name:
+    parts.append(f"Имя спортсмена: {athlete_name} (обращайся только по этому имени, не выдумывай других)")
+```
+Имя брать из `user_data` (поле `first_name` или username). Цепочка: `generate_step2_prose` → `_build_step2_prompt`.
+Bot.py: в `_send_recommendation` передать имя из `user_data` (есть в context или брать из БД).
+Деплоить сразу после проверки.
+
+**Задача 2 — Вариант B → общий рендерер (b_ai)**
+Файлы: `claude_advisor.py` + `bot.py`
+
+1. `build_ai_b_prompt` — убрать HTML-инструкцию в конце, добавить JSON-схему (поля advice-dict выше),
+   добавить задачу: подбери группу + рассмотри альтернативы на скорость / на восстановление
+2. `generate_ai_b_recommendation` — парсить JSON, вернуть `(advice_dict, stats)` вместо `(text, stats)`.
+   После парсинга: `advice["overall_purpose"] = analysis.get("overall_purpose", "")`,
+   `advice["workout_summary"] = analysis.get("summary", "")`, `advice["spec_label"] = ...`
+3. `_MODE_LABELS` — добавить `"b_ai": "🧪 B (ИИ выбор)"`
+4. `bot.py`, `_send_ai_variant_b` — заменить `format_ai_b_message` на `format_evening_message`,
+   добавить `stats["mode"] = "b_ai"`
+
+Деплоить только после теста на аккаунте Антона (новые пользователи ещё активны, осторожно).
+
+### Технические заметки
+- MCP filesystem ненадёжен для `edit_file` с русскими символами (несовпадения при поиске строк).
+  Редактировать через `filesystem:write_file` (полный файл) или PowerShell на Windows.
+- Копировать файл через scp (deploy.ps1), не через PowerShell-пайп (mojibake).
+
+
 
 ## === TODO / ПЛАНЫ / МЫСЛИ НА БУДУЩЕЕ ===
 

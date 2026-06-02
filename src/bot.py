@@ -2637,6 +2637,7 @@ async def _send_recommendation(
         "strategy": advice.get("run_strategy"),
         "first_half_pace": advice.get("first_half_pace"),
         "second_half_pace": advice.get("second_half_pace"),
+        "athlete_name": name or None,
     }
     import functools
     prose, stats2 = await asyncio.get_event_loop().run_in_executor(
