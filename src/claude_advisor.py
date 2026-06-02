@@ -1078,9 +1078,9 @@ def generate_ai_b_recommendation(analysis: dict, user_data: dict, zones_map: dic
     """Чистая ИИ-рекомендация (вариант B). Возвращает (text, stats)."""
     prompt = build_ai_b_prompt(analysis, user_data, zones_map, recovery)
     if mode == "deep":
-        model, max_tok, timeout = MODEL_DEEP, 2000, 120
+        model, max_tok, timeout = MODEL_DEEP, 4000, 180
     else:
-        model, max_tok, timeout = MODEL_SMART, 1500, 60
+        model, max_tok, timeout = MODEL_SMART, 2000, 60
 
     t0 = _time.time()
     stats = {"time_sec": 0, "mode": mode, "input_tokens": None, "output_tokens": None}
@@ -1115,7 +1115,7 @@ def format_ai_b_message(text: str, analysis: dict, stats: dict) -> str:
     inp = stats.get("input_tokens", "?")
     out = stats.get("output_tokens", "?")
     mode = stats.get("mode", "?")
-    body = _h.escape(text) if text else "❌ Модель не ответила."
+    body = text if text else "❌ Модель не ответила."
     return (
         f"🧪 <b>Вариант B — чистый ИИ ({date})</b>\n"
         f"Без формул, ИИ сам выбирает группу.\n\n"
@@ -2372,13 +2372,16 @@ def format_evening_message(advice: dict, workout: dict, stats: dict | None = Non
     # О тренировке (Цель + Суть) — ДО подходимости
     overall = _html.escape((advice.get("overall_purpose") or "").strip())
     summary = _html.escape((advice.get("workout_summary") or "").strip())
+    work_text = _html.escape((workout_dict.get("work_text") or "").strip())
     if summary:
         lines.append("<b>💡 Суть</b>")
         lines.append(f"<i>{summary}</i>")
     if overall:
         lines.append("<b>🏁 Цель тренировки</b>")
         lines.append(f"<i>{overall}</i>")
-    if overall or summary:
+    if work_text:
+        lines.append(f"🚪 Работа: {work_text}")
+    if overall or summary or work_text:
         lines.append(sep)
 
     # Процентная шкала — перед основной рекомендацией
