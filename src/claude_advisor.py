@@ -2372,7 +2372,7 @@ def format_evening_message(advice: dict, workout: dict, stats: dict | None = Non
     # О тренировке (Цель + Суть) — ДО подходимости
     overall = _html.escape((advice.get("overall_purpose") or "").strip())
     summary = _html.escape((advice.get("workout_summary") or "").strip())
-    work_text = _html.escape((workout_dict.get("work_text") or "").strip())
+    work_text = _html.escape((workout.get("work_text") or "").strip())
     if summary:
         lines.append("<b>💡 Суть</b>")
         lines.append(f"<i>{summary}</i>")
