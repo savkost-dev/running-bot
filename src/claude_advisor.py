@@ -1154,6 +1154,69 @@ def format_ai_b_message(text: str, analysis: dict, stats: dict) -> str:
     )
 
 
+
+def generate_ai_b_extra(analysis: dict, advice: dict, mode: str = "smart") -> str:
+    """Второе сообщение варианта B — свободный текст от ИИ.
+    Получает уже заполненный advice_dict и пишет живым языком
+    то, что не влезло в шаблон: нюансы, физиология, наблюдения.
+    Возвращает текст (HTML-совместимый) или пустую строку при ошибке.
+    """
+    import re as _re
+
+    group = advice.get("recommended_group", "?")
+    pace = advice.get("recommended_pace", "?")
+    reason = advice.get("reason", "")
+    overall = analysis.get("overall_purpose", "")
+    summary = analysis.get("summary", "")
+    block_contrast = analysis.get("block_contrast", "")
+    target_athlete = analysis.get("target_athlete", "")
+    what_to_watch = analysis.get("what_to_watch", "")
+    intensity = analysis.get("intensity_level", "")
+
+    prompt = (
+        "Ты — беговой тренер клуба Dusty Dumbbells.\n"
+        "Только что ты выдал бегуну структурированную рекомендацию. "
+        "Теперь напиши короткое дополнение — живым тренерским языком, без шаблонов.\n\n"
+        "ЧТО УЖЕ СКАЗАНО В ШАБЛОНЕ:\n"
+        f"Рекомендована группа {group}, темп {pace}.\n"
+        f"Обоснование: {reason}\n\n"
+        "КОНТЕКСТ ТРЕНИРОВКИ:\n"
+        f"Суть: {summary}\n"
+        f"Цель: {overall}\n"
+        f"Контраст блоков: {block_contrast}\n"
+        f"На кого рассчитана: {target_athlete}\n"
+        f"Интенсивность: {intensity}\n"
+        f"На что смотреть: {what_to_watch}\n\n"
+        "ЗАДАЧА: напиши 3–5 предложений — то, что не влезает в шаблон:\n"
+        "- физиология этой тренировки (что происходит в теле)\n"
+        "- почему именно такой подбор с учётом состояния бегуна сегодня\n"
+        "- конкретный совет на первые 2–3 отрезка\n\n"
+        "Правила:\n"
+        "- Только теги <b>жирный</b> и <i>курсив</i>, никакого markdown\n"
+        "- Без вводных фраз типа 'Дополнение:', 'Итак:' — сразу по делу\n"
+        "- Живо, конкретно, по-тренерски"
+    )
+
+    if mode == "deep":
+        model, max_tok, timeout = MODEL_DEEP, 1000, 120
+    else:
+        model, max_tok, timeout = MODEL_SMART, 800, 60
+
+    try:
+        resp = _get_client().chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=max_tok,
+            temperature=0.5,
+            timeout=timeout,
+        )
+        raw = (resp.choices[0].message.content or "").strip()
+        raw = _re.sub(r"<think>.*?</think>", "", raw, flags=_re.DOTALL).strip()
+        return raw
+    except Exception as e:
+        logger.warning(f"generate_ai_b_extra error: {e}")
+        return ""
+
 def _pace_sec(pace: str) -> float | None:
     """'3:53' / '3.53' → 233 сек."""
     if not pace:

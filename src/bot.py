@@ -2539,6 +2539,19 @@ async def _send_ai_variant_b(
             advice, workout_for_render, stats
         )
         await context.bot.send_message(telegram_id, msg_text, parse_mode="HTML")
+        # Второе сообщение — свободный текст от ИИ (нюансы, физиология)
+        extra = await asyncio.get_event_loop().run_in_executor(
+            None,
+            functools.partial(
+                claude_advisor.generate_ai_b_extra, analysis, advice, rec_mode
+            )
+        )
+        if extra:
+            await context.bot.send_message(
+                telegram_id,
+                f"🧪 <b>Дополнение B</b>\n\n{extra}",
+                parse_mode="HTML"
+            )
     except Exception as e:
         logger.error(f"_send_ai_variant_b error: {e}")
 
