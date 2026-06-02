@@ -1210,8 +1210,18 @@ def generate_ai_b_extra(analysis: dict, advice: dict, mode: str = "smart") -> st
             temperature=0.5,
             timeout=timeout,
         )
-        raw = (resp.choices[0].message.content or "").strip()
+        msg = resp.choices[0].message
+        raw = (msg.content or "").strip()
         raw = _re.sub(r"<think>.*?</think>", "", raw, flags=_re.DOTALL).strip()
+        # Fallback: если content пустой — пробуем reasoning_content
+        if not raw:
+            reasoning = getattr(msg, "reasoning_content", None)
+            if reasoning:
+                raw = reasoning.strip()
+                logger.info("generate_ai_b_extra: использован reasoning_content как fallback")
+        if not raw:
+            logger.warning("generate_ai_b_extra: пустой ответ модели")
+            return ""
         return raw
     except Exception as e:
         logger.warning(f"generate_ai_b_extra error: {e}")

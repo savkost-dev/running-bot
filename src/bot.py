@@ -2495,6 +2495,8 @@ async def _send_ai_variant_b(
     analysis: dict,
     user_data: dict,
     context: ContextTypes.DEFAULT_TYPE,
+    workout_dict: dict | None = None,
+    weather_line: str = "",
 ) -> None:
     """Вариант B: чистая ИИ-рекомендация для админа.
     Запускается асинхронно после основного сообщения.
@@ -2528,15 +2530,20 @@ async def _send_ai_variant_b(
         for item in (advice.get("suitability_percentages") or []):
             if "group" in item:
                 item["group"] = claude_advisor._sanitize_group_name(str(item["group"]))
-        workout_for_render = {
-            "workout_type": analysis.get("workout_type", "interval"),
-            "workout_date": analysis.get("workout_date", ""),
-            "location": analysis.get("location", ""),
-            "schedule": "",
-            "work_text": "",
-        }
+        # Шапка/работа/погода — те же, что у варианта A (полный workout_dict).
+        # Фолбэк на минимальный dict, если вызвали без него.
+        if workout_dict:
+            workout_for_render = dict(workout_dict)
+        else:
+            workout_for_render = {
+                "workout_type": analysis.get("workout_type", "interval"),
+                "workout_date": analysis.get("workout_date", ""),
+                "location": analysis.get("location", ""),
+                "schedule": analysis.get("schedule", ""),
+                "work_text": analysis.get("work_text", ""),
+            }
         msg_text = claude_advisor.format_evening_message(
-            advice, workout_for_render, stats
+            advice, workout_for_render, stats, weather_line=weather_line
         )
         await context.bot.send_message(telegram_id, msg_text, parse_mode="HTML")
         # Второе сообщение — свободный текст от ИИ (нюансы, физиология)
@@ -2552,6 +2559,8 @@ async def _send_ai_variant_b(
                 f"🧪 <b>Дополнение B</b>\n\n{extra}",
                 parse_mode="HTML"
             )
+        else:
+            logger.warning("_send_ai_variant_b: extra (B2) empty — пропускаю второе сообщение")
     except Exception as e:
         logger.error(f"_send_ai_variant_b error: {e}")
 
@@ -2695,7 +2704,9 @@ async def _send_recommendation(
 
     # ── Вариант B: чистый ИИ — только для админа ──────────────────────
     if telegram_id in ADMIN_TELEGRAM_IDS and not long:
-        asyncio.create_task(_send_ai_variant_b(telegram_id, analysis, user_data, context))
+        asyncio.create_task(_send_ai_variant_b(
+            telegram_id, analysis, user_data, context,
+            workout_dict=workout_dict, weather_line=weather_line))
 
 
 async def _send_workout_recommendation(
