@@ -17,7 +17,8 @@ MODEL_SMART = "deepseek-v4-flash"  # thinking=True  — ⚡ Умное
 MODEL_FAST  = "deepseek-v4-flash"  # thinking=False — 🔥 Быстрое
 
 _MODE_LABELS = {"deep": "🧠 Глубокий (ИИ)", "smart": "⚡ Быстрый (ИИ)",
-                "fast": "🪶 Лёгкий (ИИ)", "calc": "📊 Расчётный"}
+                "fast": "🪶 Лёгкий (ИИ)", "calc": "📊 Расчётный",
+                "b_ai": "🧪 B (ИИ выбор)"}
 
 
 def _get_client() -> OpenAI:
@@ -1058,19 +1059,26 @@ def build_ai_b_prompt(analysis: dict, user_data: dict, zones_map: dict, recovery
 Специализация: {spec_label}
 Восстановление: {rec_text}
 
-Дай рекомендацию в формате HTML (как в Telegram).
-Правила форматирования:
-- Только теги <b>жирный</b> и <i>курсив</i>
-- Никакого markdown: без **, без *, без - как маркеров списка
-- Абзацы разделяй пустой строкой
+Дай рекомендацию строго в формате JSON:
 
-Структура ответа:
-1. 1-2 предложения: суть тренировки + структура (что и сколько)
-2. Рекомендация: какая группа и почему (с опорой на зоны и восстановление)
-3. Что ожидать на тренировке (2-3 предложения)
-4. Манёвр по разминке: если легко — куда сдвинуться, если тяжело — куда отступить
+{
+  "recommended_group": "номер группы (например: 3)",
+  "recommended_pace": "темп основной группы (например: 4:00–4:25 мин/км)",
+  "reason": "1-2 предложения: почему эта группа — укажи зоны и восстановление",
+  "if_feeling_good": "что делать если ноги бегут легко на разминке — группа выше с темпом",
+  "if_tired": "что делать если тяжело — группа ниже или промежуточный темп X.5 с цифрами",
+  "gap_note": "вывод по разрывам: небольшой (можно переходить) или большой (нужна промежуточная)",
+  "suitability_percentages": [
+    {"group": "номер группы", "percentage": число_от_0_до_100, "comment": "СТРОГО 1-2 слова"}
+  ],
+  "preparation_tips": ["совет 1", "совет 2"],
+  "warning": "предупреждение или null"
+}
 
-Живой тренерский язык, без воды."""
+Рассмотри альтернативы: какая группа для скорости, какая для восстановления.
+Группа с максимальным percentage ДОЛЖНА совпадать с recommended_group.
+Поле 'group' в suitability_percentages — ТОЛЬКО номер (допустимо: '1','2','3','3.5','4','5').
+Отвечай только JSON, без лишнего текста."""
 
 
 def generate_ai_b_recommendation(analysis: dict, user_data: dict, zones_map: dict,
@@ -1099,12 +1107,37 @@ def generate_ai_b_recommendation(analysis: dict, user_data: dict, zones_map: dic
             "input_tokens": usage.prompt_tokens if usage else None,
             "output_tokens": usage.completion_tokens if usage else None,
         }
-        text = (resp.choices[0].message.content or "").strip()
-        return text, stats
+        raw = (resp.choices[0].message.content or "").strip()
+        # Парсим JSON ответ
+        import re as _re2
+        raw_clean = _re2.sub(r"<think>.*?</think>", "", raw, flags=_re2.DOTALL).strip()
+        raw_clean = raw_clean.replace("```json", "").replace("```", "").strip()
+        advice: dict = {}
+        try:
+            advice = json.loads(raw_clean)
+        except Exception:
+            m2 = _re2.search(r'\{[\s\S]*\}', raw_clean)
+            if m2:
+                try:
+                    advice = json.loads(m2.group(0))
+                except Exception:
+                    advice = {}
+        if not isinstance(advice, dict):
+            advice = {}
+        # Поля из анализа (Шаг 1) — ИИ их не дублирует, подставляем в коде
+        advice["overall_purpose"] = analysis.get("overall_purpose", "")
+        advice["workout_summary"] = analysis.get("summary", "")
+        spec = user_data.get("specialization") or "half_marathon"
+        advice["spec_label"] = _SPEC_LABELS.get(spec, spec)
+        # Санитайз номеров групп в suitability_percentages
+        for item in (advice.get("suitability_percentages") or []):
+            if "group" in item:
+                item["group"] = _sanitize_group_name(str(item["group"]))
+        return advice, stats
     except Exception as e:
         logger.warning(f"generate_ai_b_recommendation error: {e}")
         stats["time_sec"] = round(_time.time() - t0, 1)
-        return "", stats
+        return {}, stats
 
 
 def format_ai_b_message(text: str, analysis: dict, stats: dict) -> str:

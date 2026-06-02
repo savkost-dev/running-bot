@@ -2508,14 +2508,25 @@ async def _send_ai_variant_b(
     rec_mode = (get_preferences(db_user_id) or {}).get("ai_mode", "smart")
 
     try:
-        text, stats = await asyncio.get_event_loop().run_in_executor(
+        advice, stats = await asyncio.get_event_loop().run_in_executor(
             None,
             functools.partial(
                 claude_advisor.generate_ai_b_recommendation,
                 analysis, user_data, zones_map, recovery, rec_mode
             )
         )
-        msg_text = claude_advisor.format_ai_b_message(text, analysis, stats)
+        stats["mode"] = "b_ai"
+        # Формируем workout dict из analysis для единого рендерера
+        workout_for_render = {
+            "workout_type": analysis.get("workout_type", "interval"),
+            "workout_date": analysis.get("workout_date", ""),
+            "location": analysis.get("location", ""),
+            "schedule": "",
+            "work_text": "",
+        }
+        msg_text = claude_advisor.format_evening_message(
+            advice, workout_for_render, stats
+        )
         await context.bot.send_message(telegram_id, msg_text, parse_mode="HTML")
     except Exception as e:
         logger.error(f"_send_ai_variant_b error: {e}")
