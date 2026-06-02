@@ -2373,14 +2373,14 @@ def format_evening_message(advice: dict, workout: dict, stats: dict | None = Non
     overall = _html.escape((advice.get("overall_purpose") or "").strip())
     summary = _html.escape((advice.get("workout_summary") or "").strip())
     work_text = _html.escape((workout.get("work_text") or "").strip())
+    if work_text:
+        lines.append(f"🚪 Работа: {work_text}")
     if summary:
         lines.append("<b>💡 Суть</b>")
         lines.append(f"<i>{summary}</i>")
     if overall:
         lines.append("<b>🏁 Цель тренировки</b>")
         lines.append(f"<i>{overall}</i>")
-    if work_text:
-        lines.append(f"🚪 Работа: {work_text}")
     if overall or summary or work_text:
         lines.append(sep)
 
