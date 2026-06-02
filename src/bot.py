@@ -2508,15 +2508,26 @@ async def _send_ai_variant_b(
     rec_mode = (get_preferences(db_user_id) or {}).get("ai_mode", "smart")
 
     try:
-        advice, stats = await asyncio.get_event_loop().run_in_executor(
+        prompt = claude_advisor.build_ai_b_prompt(analysis, user_data, zones_map, recovery)
+        result = await asyncio.get_event_loop().run_in_executor(
             None,
-            functools.partial(
-                claude_advisor.generate_ai_b_recommendation,
-                analysis, user_data, zones_map, recovery, rec_mode
-            )
+            functools.partial(claude_advisor.ask_groq, prompt, rec_mode)
         )
+        if not result or not result.get("advice"):
+            logger.warning("_send_ai_variant_b: ask_groq returned no advice")
+            return
+        advice = result["advice"]
+        stats = result.get("stats", {})
         stats["mode"] = "b_ai"
-        # Формируем workout dict из analysis для единого рендерера
+        # Поля из анализа (Шаг 1) — подставляем в коде, ИИ не дублирует
+        spec = (get_preferences(db_user_id) or {}).get("specialization") or "half_marathon"
+        advice["overall_purpose"] = analysis.get("overall_purpose", "")
+        advice["workout_summary"] = analysis.get("summary", "")
+        advice["spec_label"] = claude_advisor._SPEC_LABELS.get(spec, spec)
+        # Санитайз номеров групп
+        for item in (advice.get("suitability_percentages") or []):
+            if "group" in item:
+                item["group"] = claude_advisor._sanitize_group_name(str(item["group"]))
         workout_for_render = {
             "workout_type": analysis.get("workout_type", "interval"),
             "workout_date": analysis.get("workout_date", ""),
