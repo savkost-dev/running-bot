@@ -130,7 +130,16 @@ async def _get(db_user_id: int, path: str, params: dict | None = None,
                     print(f"COROS GET {path} → HTTP {resp.status}")
                     return None
                 raw = await resp.text()
-                return _json.loads(raw)
+                data = _json.loads(raw)
+                # COROS может вернуть HTTP 200 с result=1019 "Access token is invalid"
+                if isinstance(data, dict) and str(data.get("result")) == "1019" and _retry:
+                    print(f"COROS GET {path} → result 1019 (invalid token), пробуем re-auth...")
+                    new_token = await _reauth(db_user_id)
+                    if new_token:
+                        return await _get(db_user_id, path, params, _retry=False)
+                    print(f"COROS re-auth не удался для user_id={db_user_id}")
+                    return None
+                return data
     except Exception as e:
         print(f"COROS GET {path} error: {e}")
         return None
