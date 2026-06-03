@@ -166,6 +166,15 @@ def init_db():
                 value TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS raw_service_data (
+                user_id INTEGER NOT NULL,
+                service TEXT NOT NULL,
+                raw_json TEXT,
+                fetched_at TEXT DEFAULT (datetime('now')),
+                PRIMARY KEY (user_id, service),
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            );
+
         """)
     # Миграции для старых БД
     with get_connection() as conn:
@@ -1165,6 +1174,32 @@ def set_preprocess_mode(mode: str) -> None:
             (mode,)
         )
     _db_logger.info(f"preprocess_mode установлен: {mode}")
+
+
+def save_raw_service_data(user_id: int, service: str, raw_json: str) -> None:
+    """Слой 1.1: сохраняет сырой ответ сервиса as is.
+
+    raw_json — строка JSON с сырыми данными от API сервиса, без обработки.
+    """
+    with get_connection() as conn:
+        conn.execute(
+            """INSERT OR REPLACE INTO raw_service_data (user_id, service, raw_json, fetched_at)
+               VALUES (?, ?, ?, datetime('now'))""",
+            (user_id, service, raw_json)
+        )
+    _db_logger.info(f"raw_service_data сохранён: user={user_id} service={service}")
+
+
+def get_raw_service_data(user_id: int, service: str) -> dict | None:
+    """Читает сырые данные сервиса. Возвращает {raw_json, fetched_at} или None."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT raw_json, fetched_at FROM raw_service_data WHERE user_id = ? AND service = ?",
+            (user_id, service)
+        ).fetchone()
+    if not row:
+        return None
+    return {"raw_json": row[0], "fetched_at": row[1]}
 
 
 if __name__ == "__main__":

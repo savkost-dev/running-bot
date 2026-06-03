@@ -135,22 +135,14 @@ def build_evening_prompt(workout: dict, fitness: dict, recovery: dict | None = N
     if recovery:
         src = recovery.get("source", "")
         if src == "garmin":
-            if recovery.get("body_battery") is not None:
-                recovery_parts.append(f"Body Battery: {recovery['body_battery']}/100 [Garmin]")
-            if recovery.get("hrv") is not None:
-                recovery_parts.append(f"HRV: {recovery['hrv']} мс [Garmin]")
             tr = recovery.get("training_readiness")
             if tr and tr.get("score") is not None:
                 recovery_parts.append(f"Training Readiness: {tr['score']}/100 ({tr.get('level', '')})")
         else:
             if recovery.get("recovery_score") is not None:
                 recovery_parts.append(f"Recovery Score: {recovery['recovery_score']}% [Whoop]")
-            if recovery.get("hrv"):
-                recovery_parts.append(f"HRV: {recovery['hrv']} мс")
             if recovery.get("sleep_hours"):
                 recovery_parts.append(f"Сон: {recovery['sleep_hours']} ч")
-            if recovery.get("body_battery") is not None:
-                recovery_parts.append(f"Body Battery: {recovery['body_battery']}")
     recovery_line = ("Восстановление: " + ", ".join(recovery_parts)) if recovery_parts else ""
 
     # Соревнование

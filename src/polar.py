@@ -218,20 +218,16 @@ async def get_nightly_recharge(db_user_id: int) -> dict | None:
 
     ANS charge: 0-100 — аналог Whoop Recovery Score.
     """
-    polar_user_id = _load_polar_user_id(db_user_id)
-    if not polar_user_id:
-        return None
-
     today = date.today()
     params = {
         "from": (today - timedelta(days=7)).isoformat(),
         "to":   today.isoformat(),
     }
-    data = await _get(db_user_id, f"/users/{polar_user_id}/nightly-recharge", params)
+    # Правильный путь — без userId (токен сам определяет пользователя)
+    data = await _get(db_user_id, "/users/nightly-recharge", params)
     if not data:
         return None
 
-    # API может вернуть list или {"recharges": [...]} или {"items": [...]}
     items = (
         data if isinstance(data, list)
         else data.get("recharges") or data.get("items") or []
@@ -239,41 +235,45 @@ async def get_nightly_recharge(db_user_id: int) -> dict | None:
     if not items:
         return None
 
-    last = items[-1] if isinstance(items[-1], dict) else {}
+    # Берём самую свежую запись по дате
+    items = [x for x in items if isinstance(x, dict)]
+    items.sort(key=lambda x: x.get("date", ""))
+    last = items[-1] if items else {}
 
-    ans_charge = last.get("ans-charge") or last.get("ansCharge")
-    ans_rate   = last.get("ans-rate")   or last.get("ansRate")
-    hrv_rmssd  = last.get("hrv-rmssd") or last.get("hrvRmssd")
-    hrv_avg    = last.get("hrv-avg")    or last.get("hrvAvg")
-    hr_avg     = last.get("heart-rate-avg") or last.get("heartRateAvg")
-
-    hrv = hrv_rmssd or hrv_avg  # RMSSD ближе к метрике Garmin/Whoop
+    # Реальные поля Polar v3 — через подчёркивание
+    ans_charge   = last.get("ans_charge")
+    ans_status   = last.get("ans_charge_status")
+    night_status = last.get("nightly_recharge_status")
+    hrv          = last.get("heart_rate_variability_avg")
+    hr_avg       = last.get("heart_rate_avg")
+    br_avg       = last.get("breathing_rate_avg")
 
     if ans_charge is None and hrv is None:
         return None
 
-    print(f"Polar nightly recharge: ans={ans_charge} ({ans_rate}), hrv={hrv}")
+    print(f"Polar nightly recharge [{last.get('date')}]: "
+          f"ans_charge={ans_charge} (status {ans_status}), hrv={hrv}, hr={hr_avg}")
     return {
         "source": "polar",
-        "recovery_score": int(float(ans_charge)) if ans_charge is not None else None,
+        "date": last.get("date"),
+        "ans_charge": float(ans_charge) if ans_charge is not None else None,
+        "ans_charge_status": int(ans_status) if ans_status is not None else None,
+        "nightly_recharge_status": int(night_status) if night_status is not None else None,
         "hrv": round(float(hrv), 1) if hrv is not None else None,
         "hr_avg": int(float(hr_avg)) if hr_avg is not None else None,
-        "ans_rate": str(ans_rate) if ans_rate else None,
+        "breathing_rate": round(float(br_avg), 1) if br_avg is not None else None,
     }
 
 
 async def get_sleep(db_user_id: int) -> dict | None:
     """Данные сна за последние 7 дней."""
-    polar_user_id = _load_polar_user_id(db_user_id)
-    if not polar_user_id:
-        return None
-
     today = date.today()
     params = {
         "from": (today - timedelta(days=7)).isoformat(),
         "to":   today.isoformat(),
     }
-    data = await _get(db_user_id, f"/users/{polar_user_id}/sleep", params)
+    # Правильный путь — без userId
+    data = await _get(db_user_id, "/users/sleep", params)
     if not data:
         return None
 
@@ -281,19 +281,30 @@ async def get_sleep(db_user_id: int) -> dict | None:
         data if isinstance(data, list)
         else data.get("nights") or data.get("items") or []
     )
+    items = [x for x in items if isinstance(x, dict)]
     if not items:
         return None
 
-    last = items[-1] if isinstance(items[-1], dict) else {}
+    items.sort(key=lambda x: x.get("date", ""))
+    last = items[-1]
 
-    sleep_score    = last.get("sleep-score")  or last.get("sleepScore")
-    total_sleep_s  = last.get("total-sleep")  or last.get("totalSleep") or 0
-    total_sleep_h  = round(int(total_sleep_s) / 3600, 1) if total_sleep_s else None
+    sleep_score = last.get("sleep_score")
+    # Общее время сна = фазы light + deep + rem (в секундах)
+    light = last.get("light_sleep", 0) or 0
+    deep  = last.get("deep_sleep", 0) or 0
+    rem   = last.get("rem_sleep", 0) or 0
+    total_s = light + deep + rem
+    total_h = round(total_s / 3600, 1) if total_s else None
 
-    print(f"Polar sleep: score={sleep_score}, hours={total_sleep_h}")
+    print(f"Polar sleep [{last.get('date')}]: score={sleep_score}, hours={total_h}")
     return {
+        "date": last.get("date"),
         "sleep_score": int(sleep_score) if sleep_score is not None else None,
-        "sleep_hours": total_sleep_h,
+        "sleep_hours": total_h,
+        "sleep_charge": last.get("sleep_charge"),
+        "sleep_cycles": last.get("sleep_cycles"),
+        "deep_sleep_min": round(deep / 60) if deep else None,
+        "rem_sleep_min": round(rem / 60) if rem else None,
     }
 
 
@@ -320,6 +331,29 @@ async def get_vo2max(db_user_id: int) -> float | None:
                 pass
 
     return None
+
+
+async def get_profile(db_user_id: int) -> dict | None:
+    """Сырые профильные показатели Polar as is (слой 1.1).
+
+    Грузит пол и дату рождения как есть, без обработки.
+    Возраст из birthdate считается позже (слой 1.2/2).
+    """
+    polar_user_id = _load_polar_user_id(db_user_id)
+    if not polar_user_id:
+        return None
+
+    data = await _get(db_user_id, f"/users/{polar_user_id}")
+    if not isinstance(data, dict):
+        return None
+
+    result: dict = {"source": "polar"}
+    if data.get("gender") is not None:
+        result["gender"] = data["gender"]        # MALE / FEMALE — as is
+    if data.get("birthdate") is not None:
+        result["birthdate"] = data["birthdate"]  # "1982-08-20" — as is
+
+    return result if len(result) > 1 else None
 
 
 async def get_full_data(db_user_id: int) -> dict | None:
@@ -361,12 +395,17 @@ async def get_full_data(db_user_id: int) -> dict | None:
         fitness["vo2max_source"] = "Polar"
 
     if recharge:
+        # ANS charge (-10..+10) → recovery_score 0–100
+        ans_charge = recharge.get("ans_charge")
+        rec_score = None
+        if ans_charge is not None:
+            rec_score = max(0, min(100, round((ans_charge + 10) / 20 * 100)))
+            recharge["recovery_score"] = rec_score
         fitness["recovery"] = recharge
-        ans = recharge.get("recovery_score")
-        if ans is not None:
+        if rec_score is not None:
             fitness["fatigue_level"] = (
-                "fresh"  if ans >= 70 else
-                "tired"  if ans <  40 else
+                "fresh"  if rec_score >= 70 else
+                "tired"  if rec_score <  40 else
                 "normal"
             )
 
@@ -377,8 +416,7 @@ async def get_full_data(db_user_id: int) -> dict | None:
     if vo2max:
         parts.append(f"VO2max {vo2max} (Polar)")
     if recharge and recharge.get("recovery_score") is not None:
-        rate = recharge.get("ans_rate") or ""
-        parts.append(f"ANS Recharge {recharge['recovery_score']}% ({rate})")
+        parts.append(f"ANS Recharge {recharge['recovery_score']}%")
     fitness["summary"] = " | ".join(parts) if parts else "Polar данные получены"
 
     return fitness
@@ -398,10 +436,14 @@ async def get_recovery_for_prompt(db_user_id: int) -> dict | None:
     result: dict = {"source": "polar"}
 
     if not isinstance(recharge, Exception) and recharge:
-        if recharge.get("recovery_score") is not None:
-            result["recovery_score"] = recharge["recovery_score"]
+        # ANS charge (-10..+10) → recovery_score 0–100
+        ans_charge = recharge.get("ans_charge")
+        if ans_charge is not None:
+            result["recovery_score"] = max(0, min(100, round((ans_charge + 10) / 20 * 100)))
         if recharge.get("hrv") is not None:
             result["hrv"] = recharge["hrv"]
+        if recharge.get("hr_avg") is not None:
+            result["rhr"] = recharge["hr_avg"]
 
     if not isinstance(sleep, Exception) and sleep:
         if sleep.get("sleep_hours") is not None:
@@ -413,3 +455,52 @@ async def get_recovery_for_prompt(db_user_id: int) -> dict | None:
         return None
 
     return result
+
+# ── Слой 1.1: загрузка сырых данных ──────────────────────────
+
+async def fetch_raw(db_user_id: int) -> dict | None:
+    """Слой 1.1: тянет сырые ответы Polar и сохраняет в raw_service_data as is.
+
+    Собирает три endpoint в один объект:
+    - profile          — /users/{id} (пол, дата рождения, антропометрия)
+    - nightly_recharge — /users/nightly-recharge (восстановление, HRV)
+    - sleep            — /users/sleep (сон)
+
+    Ничего не парсит — кладёт сырые JSON как пришли. Парсинг — слой 2.
+    """
+    import json
+    import database as db
+
+    polar_user_id = _load_polar_user_id(db_user_id)
+    if not polar_user_id:
+        return None
+
+    today = date.today()
+    frm = (today - timedelta(days=7)).isoformat()
+    to = today.isoformat()
+
+    profile, recharge, sleep = await asyncio.gather(
+        _get(db_user_id, f"/users/{polar_user_id}"),
+        _get(db_user_id, "/users/nightly-recharge", {"from": frm, "to": to}),
+        _get(db_user_id, "/users/sleep", {"from": frm, "to": to}),
+        return_exceptions=True,
+    )
+
+    if isinstance(profile,  Exception): profile  = None
+    if isinstance(recharge, Exception): recharge = None
+    if isinstance(sleep,    Exception): sleep    = None
+
+    if not profile and not recharge and not sleep:
+        print(f"Polar fetch_raw: нет данных для user_id={db_user_id}")
+        return None
+
+    raw = {
+        "profile": profile,
+        "nightly_recharge": recharge,
+        "sleep": sleep,
+    }
+
+    db.save_raw_service_data(db_user_id, _SERVICE, json.dumps(raw, ensure_ascii=False))
+    print(f"Polar fetch_raw: сохранено для user_id={db_user_id} "
+          f"(profile={bool(profile)}, recharge={bool(recharge)}, sleep={bool(sleep)})")
+    return raw

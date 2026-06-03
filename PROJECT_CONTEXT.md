@@ -1,10 +1,10 @@
 # DoDick Bot — Контекст проекта
 
 > Файл-шпаргалка для старта нового чата. Скидывать в начале сессии, чтобы не пересказывать проект заново.
-> Последнее обновление: 02.06.2026 (версия 0.21.0, после откатa — сессия архитектуры двух вариантов).
+> Последнее обновление: 02.06.2026 (версия 0.21.0, сессия исследования COROS API + метрики).
 
 ## Что это
-Telegram бот @DoDick_bot для бегового клуба Dusty Dumbbells.
+Telegram бот @DD_adviser_bot (имя: DoDick) для бегового клуба Dusty Dumbbells.
 Помогает участникам выбрать группу для тренировки на основе их физической формы.
 
 **Фокус аудитории:** ~30 активных пользователей, которые бегают вт/пт интервальные.
@@ -20,16 +20,32 @@ Telegram бот @DoDick_bot для бегового клуба Dusty Dumbbells.
 - Сервер: DigitalOcean 167.172.185.88 (2GB RAM, Ubuntu 24.04)
 - SSH: `ssh -i $env:USERPROFILE/.ssh/digitalocean root@167.172.185.88`
 - Проект локально: D:\running-bot\
+- Проект на сервере: `/opt/running-bot/` (НЕ /root/running-bot/ !)
+- БД на сервере: `/opt/running-bot/running_bot.db`
 - GitHub: github.com/savkost-dev/running-bot (ветка master)
 - Деплой: `.\deploy.ps1` (копирует все *.py через scp; git-истории на сервере НЕТ)
 - Сервис: `systemctl {status|restart} running-bot`
 - Логи: `journalctl -u running-bot -n 100 -f`
 
+### Что установлено на сервере
+- Python 3.x — есть
+- sqlite3 (CLI) — НЕ установлен. Для запросов к БД использовать Python:
+  ```bash
+  python3 -c "import sqlite3; conn = sqlite3.connect('/opt/running-bot/running_bot.db'); ..."
+  ```
+- bash — есть
+
+### Деплой отдельного файла (минуя deploy.ps1)
+```powershell
+scp -i $env:USERPROFILE\.ssh\digitalocean D:\running-bot\src\FILE.py root@167.172.185.88:/opt/running-bot/src/FILE.py
+ssh -i $env:USERPROFILE\.ssh\digitalocean root@167.172.185.88 "systemctl restart running-bot"
+```
+
 ## Стек
 - Python 3.12, python-telegram-bot (+ APScheduler job_queue), Telethon (единый клиент на процесс)
 - DeepSeek API (4 режима: deep/smart/fast + calc), fallback Groq llama-3.3-70b
 - SQLite база данных
-- Сервисы: Strava, Garmin, COROS, Whoop, Polar
+- Сервисы: Garmin, Polar, COROS (основные), Strava (агрегатор нагрузки + прогнозы), Whoop (заплатка, низкий приоритет)
 
 ## Структура проекта
 ```
@@ -131,6 +147,7 @@ Long-анонсы (`find_next_long_run`) принимаются только е�
 /analyze — анализ анонса (Шаг 1) | /preprocess_mode — режим анализа (deep/smart)
 /test_workout /test_long — ТЕСТ Шага 2 на свежем анонсе (постоянные admin-инструменты)
 /reanalyze — форс-переанализ последних анонсов обоих типов (игнорит idempotency)
+/show_analyze — показать последний Шаг 1 из базы
 ```
 
 ## Режимы рекомендации (/mode) — 4 кнопки
@@ -182,39 +199,43 @@ Forbidden при отправке → is_active=0 + deactivated_at. Входящ
 - has_data=True (есть VO2max ИЛИ токен трекера) → полная рекомендация
 - has_data=False (пустой профиль) → упрощённое уведомление + призыв заполнить профиль
 
-## === АРХИТЕКТУРА ДВУХ ВАРИАНТОВ РЕКОМЕНДАЦИИ (решено 02.06, не реализовано) ===
+## === АРХИТЕКТУРА ДВУХ ВАРИАНТОВ РЕКОМЕНДАЦИИ ===
 
-### Принцип
-ОДИН рендерер `format_evening_message` для обоих вариантов.
-ОБА варианта должны возвращать одинаковый `advice`-dict — как МИНИМУМ. Можно больше, не падать.
-Если вариант не может заполнить вечернюю форму — это баг, надо фиксить.
+Вариант B существует ТОЛЬКО для эксперимента — получает только админ.
+Вариант A — это прод, его не трогаем.
 
-### Текущее состояние вариантов
+### Реализованная архитектура
 
-**Вариант A** (формулы + ИИ-проза) — работает правильно:
+**Вариант A** (формулы + ИИ-проза) — прод, работает:
 ```
 analyze_workout → recommend_group → recommendation_to_advice → format_evening_message
 ```
 
-**Вариант B** (чистый ИИ) — **БАГ**: возвращает сырой HTML, отдельная `format_ai_b_message`:
+**Вариант B** (чистый ИИ) — СДЕЛАНО, работает через общий рендерер:
 ```
-analyze_workout → generate_ai_b_recommendation → (text, stats) → format_ai_b_message  ← БАГ
+analyze_workout → build_ai_b_prompt → ask_groq → advice_dict → format_evening_message  (В1)
+                                                              → generate_ai_b_extra     (В2)
 ```
 
-**Целевая архитектура:**
-```
-analyze_workout (Wшаг 1) → analysis dict
-  ↓
-[A] recommend_group + recommendation_to_advice  → advice_dict
-[B] generate_ai_b_recommendation (JSON от ИИ) → advice_dict
-  ↓
-format_evening_message (единый рендерер)
-```
+**Три сообщения для админа при /workout:**
+- **А1** — стандартная рекомендация (как у всех пользователей), вариант A
+- **В1** — та же структура/шаблон, но группу выбирает чистый ИИ (без формул)
+- **В2** — свободный текст от ИИ: физиология, нюансы, совет на первые отрезки
+
+### Функции в claude_advisor.py
+- `build_ai_b_prompt(analysis, user_data, zones_map, recovery)` → строка промпта
+- `ask_groq(prompt, mode)` → `{"advice": dict, "stats": dict}` — используется для B1
+- `generate_ai_b_extra(analysis, advice, mode)` → строка HTML-текста — используется для B2
+- `format_evening_message(advice, workout, stats, weather_line, has_tracker)` — единый рендерер
+
+### Функция в bot.py
+`_send_ai_variant_b(telegram_id, analysis, user_data, context, workout_dict, weather_line)`
+Запускается через `asyncio.create_task` после основного сообщения А1.
+Принимает `workout_dict` и `weather_line` от вызывающего кода (не переформировывает сама).
 
 ### Обязательные поля advice-dict (вечерняя форма)
 ```python
 {
-    # Из ИИ/формул (вариант обязан вернуть):
     "recommended_group": "3",
     "recommended_pace": "4:00–4:15 мин/км",
     "reason": "...",
@@ -224,52 +245,251 @@ format_evening_message (единый рендерер)
     "suitability_percentages": [{"group": "3", "percentage": 85, "comment": "идеально"}],
     "preparation_tips": ["..."],
     "warning": None,
-    "spec_label": "полумарафон",  # для легенды шкалы
-    # Из analysis (Шаг 1), НЕ из ИИ:
-    "overall_purpose": "...",
-    "workout_summary": "...",
+    "spec_label": "полумарафон",
+    "overall_purpose": "...",   # из analysis["overall_purpose"], подставляется в коде
+    "workout_summary": "...",   # из analysis["summary"], подставляется в коде
 }
 ```
-`overall_purpose` = `analysis["overall_purpose"]`, `workout_summary` = `analysis["summary"]`.
-ИИ варианта B их НЕ дублирует — подставляются после парсинга в коде.
 
-### PENDING задачи (в порядке выполнения)
+### PENDING — баг В2 не приходит
 
-**Задача 1 — Баг «Вася» (вариант A, хирургическая правка, безопасно)**
-Файл: `claude_advisor.py`, функция `_build_step2_prompt`
-Где используется: шаг 2 варианта A — ИИ пишет прозу обоснования. Модель выдумывала имя (обращалась «Вася» к Антону).
+**Диагноз (02.06.2026):** `generate_ai_b_extra` использует DeepSeek (`_get_client()`),
+а не Groq. Модель `deepseek-v4-flash` — thinking-модель. При `temperature=0.5` и
+`max_tokens=800` она может потратить все токены на `<think>...</think>`, после чего
+`content` будет пустым. После `_re.sub` останется пустая строка — функция возвращает `""`
+без какого-либо логирования. Бот тихо пропускает второе сообщение.
 
-Фикс: добавить параметр `athlete_name: str | None` в `_build_step2_prompt`:
+**Фикс (НЕ задеплоен):** в `generate_ai_b_extra` заменить блок `try/except`:
 ```python
-if athlete_name:
-    parts.append(f"Имя спортсмена: {athlete_name} (обращайся только по этому имени, не выдумывай других)")
+    try:
+        resp = _get_client().chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=max_tok,
+            temperature=0.5,
+            timeout=timeout,
+        )
+        msg = resp.choices[0].message
+        raw = (msg.content or "").strip()
+        raw = _re.sub(r"<think>.*?</think>", "", raw, flags=_re.DOTALL).strip()
+        # Fallback: если content пустой — пробуем reasoning_content
+        if not raw:
+            reasoning = getattr(msg, "reasoning_content", None)
+            if reasoning:
+                raw = reasoning.strip()
+                logger.info("generate_ai_b_extra: использован reasoning_content как fallback")
+        if not raw:
+            logger.warning("generate_ai_b_extra: пустой ответ модели")
+            return ""
+        return raw
+    except Exception as e:
+        logger.warning(f"generate_ai_b_extra error: {e}")
+        return ""
 ```
-Имя брать из `user_data` (поле `first_name` или username). Цепочка: `generate_step2_prose` → `_build_step2_prompt`.
-Bot.py: в `_send_recommendation` передать имя из `user_data` (есть в context или брать из БД).
-Деплоить сразу после проверки.
-
-**Задача 2 — Вариант B → общий рендерер (b_ai)**
-Файлы: `claude_advisor.py` + `bot.py`
-
-1. `build_ai_b_prompt` — убрать HTML-инструкцию в конце, добавить JSON-схему (поля advice-dict выше),
-   добавить задачу: подбери группу + рассмотри альтернативы на скорость / на восстановление
-2. `generate_ai_b_recommendation` — парсить JSON, вернуть `(advice_dict, stats)` вместо `(text, stats)`.
-   После парсинга: `advice["overall_purpose"] = analysis.get("overall_purpose", "")`,
-   `advice["workout_summary"] = analysis.get("summary", "")`, `advice["spec_label"] = ...`
-3. `_MODE_LABELS` — добавить `"b_ai": "🧪 B (ИИ выбор)"`
-4. `bot.py`, `_send_ai_variant_b` — заменить `format_ai_b_message` на `format_evening_message`,
-   добавить `stats["mode"] = "b_ai"`
-
-Деплоить только после теста на аккаунте Антона (новые пользователи ещё активны, осторожно).
+После деплоя — проверить логи: либо придёт В2, либо будет `generate_ai_b_extra: пустой ответ модели`.
 
 ### Технические заметки
-- MCP filesystem ненадёжен для `edit_file` с русскими символами (несовпадения при поиске строк).
+- MCP filesystem не делает str_replace на Windows-путях с кириллицей — несовпадения.
   Редактировать через `filesystem:write_file` (полный файл) или PowerShell на Windows.
+- MCP read_file читает весь файл в контекст — сжирает токены. Для отладки скидывать
+  только нужные функции копипастом, не читать файлы через MCP.
 - Копировать файл через scp (deploy.ps1), не через PowerShell-пайп (mojibake).
 
 
 
+
+## === АРХИТЕКТУРА ДАННЫХ — ЦЕЛЕВАЯ (спроектировано 02.06.2026) ===
+
+### Три слоя
+
+**Слой 1 — Raw Fetch** (сервисные файлы: garmin.py, coros.py, strava.py, whoop.py, polar.py)
+- Тянут данные как есть, сохраняют сырой JSON в БД (новое поле raw_json в кэше)
+- Никакого парсинга и преобразований — только fetch + сохранение
+- Сырые данные хранятся: весят мало, помогают при отладке и будущих изменениях
+
+**Слой 2 — Normalize** (новый файл: data_normalizer.py)
+- Запускается сразу после fetch (не по запросу)
+- Читает сырой JSON, парсит в единый формат UnifiedUserData
+- Сохраняет нормализованные данные в БД (новая таблица: unified_cache)
+- Каждый сервис имеет свой normalizer: normalize_garmin(), normalize_coros() и т.д.
+
+**Слой 3 — Consume** (claude_advisor.py, bot.py)
+- Читает только UnifiedUserData из unified_cache
+- Не знает откуда данные пришли (Garmin/COROS/Whoop — неважно)
+- Добавление нового сервиса = написать fetch + normalize, промпт не трогать
+
+### Единый формат UnifiedUserData (только универсальные поля)
+```python
+{
+    # Форма — источник зон и рекомендации группы
+    "lactate_threshold_pace": "4:04",  # мин:сек/км, строка
+    "lactate_threshold_hr": 172,       # уд/мин
+    "vo2max": 54.0,                    # мл/кг/мин
+    "zones": {                         # рассчитывается в zones.py
+        "easy": "5:30",
+        "marathon": "4:35",
+        "threshold": "4:04",
+        "interval": "3:42",
+        "repetition": "3:26",
+    },
+
+    # Восстановление — единая шкала 0–100 для всех
+    "recovery_score": 99,   # 0–100: Whoop нативный, COROS recoveryPct,
+                            # Polar ANS recharge, Garmin из BB (100-BB/100*100)
+    "hrv": 87.0,            # мс, ночной
+    "hrv_baseline": 95.0,   # 7-дневная база (если есть)
+    "rhr": 44,              # ЧСС покоя
+
+    # Нагрузка
+    "load_48h": {
+        "sessions_48h": 1,
+        "total_km_48h": 8.2,
+        "last_activity_hours_ago": 14,
+        "intensity": "moderate",  # low/moderate/high — нормализованный уровень
+    },
+    "training_load": {      # CTL/ATL/TSB если есть у сервиса, None если нет
+        "ctl": 45.0,
+        "atl": 52.0,
+        "tsb": -7.0,
+        "summary": "небольшая усталость",
+    },
+
+    # Мета
+    "sources": ["coros"],          # какие сервисы дали данные
+                                   # Strava — агрегатор активностей, не источник биометрии.
+                                   # Участвует только в load_48h и training_load (CTL/ATL/TSB)
+    "source_priority": {           # приоритет при конфликте (настраивается)
+        "recovery_score": ["coros", "polar", "garmin", "whoop"],
+        "hrv":            ["garmin", "coros", "polar", "whoop"],
+        "vo2max":         ["garmin", "coros", "polar", "strava"],
+        "load_48h":       ["garmin", "coros", "strava"],
+        "training_load":  ["strava", "garmin", "coros"],
+    },
+    "updated_at": "2026-06-02T16:00:00",
+}
+```
+
+### Неуниверсальные поля — выпилить из общего знаменателя
+Следующие поля специфичны для конкретного сервиса. Сейчас НЕ включаются в UnifiedUserData.
+Добавляются позже как «фича сервиса» когда будет понятна ценность:
+- `body_battery` — только Garmin. ВЫПИЛИТЬ ИЗ ПРОМПТА (слишком тонкая фишка, мешает).
+- `training_readiness` — только Garmin (убрана из формулы, смещение). Остаётся в промпте как текст.
+- `sleep_hours`, `sleep_score` — Whoop, Polar. Фича этих сервисов.
+- `suffer_score` — внутренний расчёт Strava, используется внутри load_48h для определения intensity, наружу не выходит.
+- `stamina_level`, `evolab_scores` — только COROS EvoLab. Фича COROS.
+- `recovery_time_h` — только COROS (fullRecoveryHours). Фича COROS.
+- `ans_rate` — только Polar. Фича Polar.
+
+### Приоритизация при конфликте
+`source_priority` в UnifiedUserData — упорядоченный список сервисов для каждого поля.
+При наличии нескольких подключённых сервисов берётся первый у кого есть данные.
+Готов к настройке в любой момент без изменения кода промпта.
+
+Пример: у пользователя Garmin + Whoop.
+- `recovery_score`: берётся Whoop (приоритет выше для этого поля)
+- `hrv`: берётся Whoop
+- `vo2max`: берётся Garmin
+- `load_48h`: берётся Garmin
+
+### Статус реализации
+⏳ Спроектировано, не реализовано (02.06.2026).
+Текущий код: каждый сервис парсит напрямую в промпт, нет единого слоя нормализации.
+Переход к новой архитектуре — отдельная задача, не трогать текущий флоу до готовности.
+
+## === COROS API — статус и архитектура (02.06.2026) ===
+
+### Рабочий endpoint
+`GET https://teamapi.coros.com/dashboard/query` — возвращает EvoLab данные.
+Авторизация: заголовок `accesstoken: TOKEN` (токен из логина через MD5 пароля).
+Домен зависит от региона: `teamapi` (US/глобал), `teameuapi` (EU) — токен привязан к региону.
+
+### Что возвращает /dashboard/query → summaryInfo
+```
+ltsp: 244          # лактатный порог в сек/км → '4:04' мин/км (ключ для зон!)
+lthr: 172          # лактатный порог ЧСС
+recoveryPct: 99    # нативный Recovery % (0–100) — аналог Whoop Recovery Score
+recoveryState: 4   # уровень: 1=истощён, 2=уставший, 3=хороший, 4=отличный
+rhr: 44            # ЧСС покоя
+fullRecoveryHours: 2  # часов до полного восстановления
+sleepHrvData:
+  avgSleepHrv: 87  # HRV последней ночи (мс, RMSSD)
+  sleepHrvBase: 95 # базовый HRV (скользящая 7 дней)
+  sleepHrvList: [] # история по дням за 7 дней
+staminaLevel: 94.5 # уровень выносливости
+aerobicEnduranceScore, anaerobicCapacityScore, etc. — EvoLab скоры
+```
+VO2max в этом endpoint НЕ приходит. Считается из ltsp через VDOT (zones.py).
+
+### Дополнительный рабочий endpoint
+`GET https://teamapi.coros.com/activity/query?size=N&pageNumber=1` — список активностей.
+Поля: `trainingLoad`, `avgHr`, `avgSpeed`, `distance`, `totalTime`, `date`, `startTime` — для нагрузки 48ч.
+
+### Что НЕ работает (5C4D208)
+`/sport/dailySummary/query`, `/analyse/training/load/query`, `/health/hrv/query`,
+`/v2/coros/sport/detail/dayDetail` и все `/dashboard/fitnessOverview`, `/dashboard/fitness` и т.п.
+Код 5C4D208 = endpoint не поддерживается для данного аккаунта/региона.
+
+### Официальный API
+Заявка подана 02.06.2026 через Feishu-форму (ссылка из support.coros.com).
+Запрошено: Activity Sync (one way), Access Daily Health Data, Structured Workouts Sync.
+До одобрения — работаем через неофициальный /dashboard/query.
+
+### Функция get_dashboard_data (coros.py)
+Тянет /dashboard/query и возвращает:
+- `lactate_threshold_pace` — из ltsp
+- `lactate_threshold_hr` — из lthr  
+- `recovery_score` — из recoveryPct (нативный!)
+- `hrv` — из sleepHrvData.avgSleepHrv
+- `rhr` — ЧСС покоя
+- EvoLab скоры формы
+
+## === ОБЩИЙ ЗНАМЕНАТЕЛЬ МЕТРИК (все сервисы) ===
+
+### В промпт идут (у всех сервисов)
+| Поле | Garmin | Strava | Whoop | COROS | Polar |
+|---|---|---|---|---|---|
+| ЛП темп → зоны | auto/manual | ~ VDOT из прогнозов | — | ltsp нативный | — |
+| VO2max | нативный | ~ VDOT из прогнозов | — | ~ из ltsp | нативный |
+| recovery_score | — | — | нативный* | recoveryPct | ANS recharge |
+| HRV | ночной | — | ночной* | avgSleepHrv | RMSSD |
+| нагрузка 48ч | есть | есть | — | из activity/query | — |
+| CTL/ATL/TSB | нативный | своя метрика | — | ~ из активностей | — |
+
+*Whoop — заплатка, низкий приоритет разработки
+
+### Только у конкретных сервисов (в промпте если есть)
+- **Body Battery** — только Garmin
+- **Sleep hours** — Whoop, Polar
+- **CTL/ATL/TSB** — Strava (нативный), Garmin (своя метрика)
+- **Suffer Score** — только Strava
+
+### Training Readiness
+Убрана из формулы (только Garmin, смещение при частичной доступности).
+Остаётся в промпте как текстовый контекст.
+
 ## === TODO / ПЛАНЫ / МЫСЛИ НА БУДУЩЕЕ ===
+
+### Восстановление — убрать из вечерней рекомендации совсем (идея 02.06.2026)
+Восстановление за ночь сильно меняется. Вечерняя рекомендация на вечерних данных
+восстановления = неточно (как было с Body Battery). Идея: убрать ВСЁ восстановление
+из вечерней рекомендации, перенести только в утреннюю рассылку (где данные свежие
+и за ночь не успеют поменяться). Вечером — только форма/зоны/нагрузка.
+
+### Разобраться как работает утренняя рассылка (большой запрос)
+Отдельная сессия: детально разобрать механику build_morning_prompt, тайминги,
+cache_refresh (6:45), что подаётся, как считается recovery_level. Связано с идеей
+выше — если переносим восстановление в утреннюю, надо понимать её устройство.
+
+### Workout-прогноз — отдать полностью ИИ (почти готово)
+Сейчас прогноз тренировки разлетается с формульным подходом в основном из-за
+восстановления. Дать ИИ делать полный прогноз. Большая часть уже готова.
+
+### Калибровка формулы по ИИ (двойной расчёт)
+Для каждого человека делать два расчёта (как сейчас для админа): формульный и ИИ.
+Пользователю слать тот что у него в настройках, в базе копить статистику обоих.
+Так подправится форма кривой формулы на реальных данных по каждому человеку.
+
+
 
 ### Большой блок — Вечерняя загрузка фактов (петля обратной связи)
 Вечером после тренировки подтягивать активность из сервиса → смотреть как реально прошло.
@@ -284,7 +504,11 @@ Bot.py: в `_send_recommendation` передать имя из `user_data` (ес
 ### ⚠️ ОНБОРДИНГ И ПОСТАВЩИКИ ДАННЫХ — узкое место
 - **Strava** задумывалась как универсальный вход (OAuth). НО: лимит API = 1 пользователь.
   Заявка на 100 подана, висит. Срок одобрения неизвестен.
-- **Garmin / COROS** работают, но через логин+пароль — люди боятся вводить.
+- **Garmin** работает через логин+пароль — люди боятся вводить. Основной трекер.
+- **COROS** работает через логин+пароль. Рабочий endpoint: `/dashboard/query`. Заявка на официальный API подана 02.06.2026. Основной трекер.
+- **Polar** — OAuth, работает (починен 03.06.2026). Основной трекер для 1 пользователя.
+- **Strava** — агрегатор: нагрузка 48ч, CTL/ATL/TSB, прогнозы забегов → VDOT. Лимит API 1 юзер, заявка на 100 подана.
+- **Whoop** — низкий приоритет, заплатка. Подключается но не в фокусе разработки.
 - **Ручной ввод** (Риегель → зоны) есть, но подаётся как fallback — должен быть первым классом.
 
 Направления:
@@ -310,3 +534,7 @@ Bot.py: в `_send_recommendation` передать имя из `user_data` (ес
 - Калибровать формулы на реальных GPX-данных, не на догадках
 - Ретроспективный пост с упоминанием будущего события может пройти детектор анонсов —
   нужны failsafe-фильтры на уровне кода (не только промт). Решено в 0.21.0 тремя слоями.
+- MCP read_file съедает контекст чата целиком — скидывать только нужные функции копипастом
+- COROS: teamapi.coros.com стучать через GET /dashboard/query. Другие endpoint-ы дают 5C4D208. Домен зависит от региона токена (teamapi vs teameuapi)
+- COROS: sqlite3 CLI не установлен на сервере — только через python3. Venv: /opt/running-bot/venv/bin/python3
+- Polar AccessLink v3: путь БЕЗ userId — /v3/users/nightly-recharge и /v3/users/sleep (токен сам определяет юзера). С userId в пути → 404. Поля через подчёркивание: ans_charge, heart_rate_variability_avg, heart_rate_avg, sleep_score, light_sleep/deep_sleep/rem_sleep (секунды). ANS charge шкала -10..+10 → recovery 0-100 через (ans+10)/20*100

@@ -1,0 +1,166 @@
+
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+.wrap { padding: 1rem 0; font-family: var(--font-sans); }
+table { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: fixed; }
+col.cm { width: 14%; }
+col.cs { width: 18%; }
+col.cg { width: 18%; }
+col.cw { width: 17%; }
+col.cc { width: 16%; }
+col.cp { width: 17%; }
+thead th {
+  font-size: 11px; font-weight: 500; text-align: left;
+  padding: 6px 8px; border-bottom: 0.5px solid var(--color-border-secondary);
+  color: var(--color-text-secondary);
+}
+th.h-strava { color: #993C1D; }
+th.h-garmin { color: #185FA5; }
+th.h-whoop  { color: #854F0B; }
+th.h-coros  { color: #3B6D11; }
+th.h-polar  { color: #533AB7; }
+@media (prefers-color-scheme: dark) {
+  th.h-strava { color: #F0997B; }
+  th.h-garmin { color: #85B7EB; }
+  th.h-whoop  { color: #EF9F27; }
+  th.h-coros  { color: #97C459; }
+  th.h-polar  { color: #AFA9EC; }
+}
+tbody tr { border-bottom: 0.5px solid var(--color-border-tertiary); }
+tbody tr:last-child { border-bottom: none; }
+tbody td { padding: 6px 8px; vertical-align: top; line-height: 1.45; color: var(--color-text-primary); word-break: break-word; }
+td.metric { font-weight: 500; font-size: 12px; }
+.cat { padding: 10px 8px 2px; font-size: 10px; font-weight: 500; letter-spacing: 0.06em; text-transform: uppercase; color: var(--color-text-tertiary); }
+.none { color: var(--color-text-tertiary); font-style: italic; font-size: 11.5px; }
+.approx { color: var(--color-text-warning); font-size: 11px; }
+.note { color: var(--color-text-danger); font-size: 11px; }
+.good { color: var(--color-text-success); font-size: 11px; }
+.muted { color: var(--color-text-secondary); font-size: 11px; }
+.tag { display: inline-block; font-size: 10px; padding: 1px 5px; border-radius: 3px; margin-bottom: 2px; }
+.tag-native { background: var(--color-background-success); color: var(--color-text-success); }
+.tag-approx { background: var(--color-background-warning); color: var(--color-text-warning); }
+.tag-calc   { background: var(--color-background-info);    color: var(--color-text-info); }
+</style>
+<div class="wrap">
+<table>
+  <colgroup><col class="cm"><col class="cs"><col class="cg"><col class="cw"><col class="cc"><col class="cp"></colgroup>
+  <thead>
+    <tr>
+      <th>Метрика</th>
+      <th class="h-strava">Strava</th>
+      <th class="h-garmin">Garmin</th>
+      <th class="h-whoop">Whoop</th>
+      <th class="h-coros">COROS</th>
+      <th class="h-polar">Polar</th>
+    </tr>
+  </thead>
+  <tbody>
+
+    <tr><td colspan="6" class="cat">Восстановление</td></tr>
+
+    <tr>
+      <td class="metric">Body Battery</td>
+      <td class="none">—</td>
+      <td><span class="tag tag-native">нативная</span><br>Алгоритм Garmin: HRV + активность. 0–100</td>
+      <td class="none">—</td>
+      <td class="none">—</td>
+      <td class="none">—</td>
+    </tr>
+    <tr>
+      <td class="metric">Recovery Score</td>
+      <td class="none">—</td>
+      <td class="none">—</td>
+      <td><span class="tag tag-native">нативная</span><br>0–100%. Интегрально: HRV + сон + ЧСС покоя</td>
+      <td><span class="tag tag-approx">расчётный</span><br><code>100 − fatigue%</code> или <code>100 − recoveryTime×4</code>. Не нативная метрика COROS</td>
+      <td><span class="tag tag-native">нативная</span><br>ANS Recharge 0–100. Автономная нервная система по RMSSD за ночь. Аналог Whoop по смыслу</td>
+    </tr>
+    <tr>
+      <td class="metric">HRV</td>
+      <td class="none">—</td>
+      <td><span class="tag tag-native">нативная</span><br>RMSSD ночью, мс. Только Fenix / Forerunner 955+</td>
+      <td><span class="tag tag-native">нативная</span><br>Ночной RMSSD, мс. Методология отличается от Garmin — не сравнивать</td>
+      <td><span class="tag tag-native">нативная</span><br>Из /health/hrv. last_night + weekly_avg за 7 дней</td>
+      <td><span class="tag tag-native">нативная</span><br>hrv_rmssd из nightly-recharge. RMSSD — та же методология что Garmin/Whoop</td>
+    </tr>
+    <tr>
+      <td class="metric">Training Readiness</td>
+      <td class="none">—</td>
+      <td><span class="tag tag-native">нативная</span><br>0–100 + уровень. Учитывает сон, BB, HRV, нагрузку<br><span class="note">⚠ убрана из формулы</span></td>
+      <td class="none">—</td>
+      <td class="none">— <span class="muted">(Training Status — статус формы, не готовность)</span></td>
+      <td class="none">—</td>
+    </tr>
+    <tr>
+      <td class="metric">Sleep</td>
+      <td class="none">—</td>
+      <td class="none">— <span class="muted">(не отдаёт)</span></td>
+      <td><span class="tag tag-native">нативная</span><br>sleep_hours из recovery dict</td>
+      <td class="none">—</td>
+      <td><span class="tag tag-native">нативная</span><br>sleep_hours + sleep_score из /users/{id}/sleep. Единственный сервис кроме Whoop с данными сна</td>
+    </tr>
+
+    <tr><td colspan="6" class="cat">Форма</td></tr>
+
+    <tr>
+      <td class="metric">VO2max</td>
+      <td><span class="tag tag-calc">VDOT</span><br>Расчёт по прогнозам (5km/10km/1 mile). Формула Дэниелса — не прямое измерение</td>
+      <td><span class="tag tag-native">нативная</span><br>Из устройства в тренировках с GPS+ЧСС. Наиболее точный</td>
+      <td class="none">—</td>
+      <td><span class="tag tag-native">нативная</span><br>EvoLab, /analyse/training/load/query. Два fallback endpoint-а</td>
+      <td><span class="tag tag-native">нативная</span><br>aerobic-fitness из /users/{id}. Только если Polar считает его достаточно данных</td>
+    </tr>
+    <tr>
+      <td class="metric">ЛП темп / ЧСС</td>
+      <td class="none">—</td>
+      <td><span class="muted">Auto из тестов + ручной ввод</span></td>
+      <td class="none">—</td>
+      <td class="none">—</td>
+      <td class="none">—</td>
+    </tr>
+    <tr>
+      <td class="metric">CTL / ATL / TSB</td>
+      <td><span class="tag tag-native">нативная</span><br>Хроническая (42d) / острая (7d). Suffer Score — единица нагрузки</td>
+      <td><span class="muted">Training Load — другая формула, несравнима со Strava</span></td>
+      <td class="none">—</td>
+      <td><span class="tag tag-native">нативная</span><br>EvoLab. TSB считает бот если не пришёл: <code>CTL − ATL</code></td>
+      <td class="none">— <span class="muted">(training load не предоставляет)</span></td>
+    </tr>
+    <tr>
+      <td class="metric">Прогнозы забегов</td>
+      <td><span class="tag tag-native">нативная</span><br>5km / 10km / Half-Marathon. source: actual или прогноз</td>
+      <td class="none">—</td>
+      <td class="none">—</td>
+      <td class="none">—</td>
+      <td class="none">—</td>
+    </tr>
+
+    <tr><td colspan="6" class="cat">Ситуативные</td></tr>
+
+    <tr>
+      <td class="metric">Нагрузка 48ч</td>
+      <td><span class="muted">sessions, km, suffer, avg_pace, last_hours_ago</span></td>
+      <td><span class="muted">Аналогично из активностей</span></td>
+      <td class="none">—</td>
+      <td class="none">—</td>
+      <td class="none">—</td>
+    </tr>
+    <tr>
+      <td class="metric">Suffer Score</td>
+      <td><span class="tag tag-native">нативная</span><br>Интенсивность активности. Основной путь оценки нагрузки 48ч</td>
+      <td class="none">—</td>
+      <td class="none">—</td>
+      <td class="none">—</td>
+      <td class="none">—</td>
+    </tr>
+    <tr>
+      <td class="metric">last_race</td>
+      <td><span class="muted">days_since, still_recovering, recovery_until</span></td>
+      <td class="none">—</td>
+      <td class="none">—</td>
+      <td class="none">—</td>
+      <td class="none">—</td>
+    </tr>
+
+  </tbody>
+</table>
+</div>
