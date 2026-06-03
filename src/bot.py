@@ -915,7 +915,9 @@ def _build_help_text(is_admin: bool) -> str:
             "/test_workout — тест Шага 2 (рекомендация группы) на твоих данных\n"
             "/test_long — тест Шага 2 для длительной на твоих данных\n"
             "/reanalyze — форс переанализа свежих анонсов (обновить кэш)\n"
-            "/show_analyze — показать последний Шаг 1 из базы"
+            "/show_analyze — показать последний Шаг 1 из базы\n"
+            "/b — вариант B для себя\n"
+            "/b_user — вариант B для выбранного пользователя"
         )
     return text
 
@@ -3760,7 +3762,55 @@ async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYP
 
 # ── ЗАПУСК ───────────────────────────────────────────────────
 
-# ── /b — вариант B для выбранного пользователя (admin only) ──────
+# ── /b — вариант B для себя / /b_user — с выбором юзера (admin only) ──
+
+async def b_self_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Вариант B для самого админа — без выбора пользователя."""
+    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+        return
+
+    admin_tid = update.effective_user.id
+    db_user_id = get_or_create_user(admin_tid, update.effective_user.full_name or "admin")
+
+    live = await find_next_workout()
+    cur_post = live.get("post_id") if live else None
+    cur_date = live.get("workout_date") if live else None
+    cur_edit = live.get("edit_date") if live else None
+    row, status = get_latest_workout_analysis("interval", cur_post, cur_date, cur_edit)
+
+    if status == "empty" or row is None:
+        await update.message.reply_text("😔 Нет анонса интервальной тренировки.")
+        return
+
+    import json as _json
+    try:
+        analysis = _json.loads(row.get("analyzed_json") or "{}")
+    except Exception:
+        analysis = {}
+
+    user_data = {
+        "db_user_id": db_user_id,
+        "specialization": (get_user_profile(db_user_id) or {}).get("specialization"),
+        "recovery": await _get_recovery_data(db_user_id, force_fresh=True),
+    }
+
+    workout_dict = dict(live) if live else {"workout_date": analysis.get("workout_date", "")}
+    workout_dict["workout_type"] = "interval"
+    workout_dict["is_past"] = (status == "past")
+    workout_dict["even_pace_available"] = analysis.get("even_pace_available")
+    weather = await get_weather_for_workout(
+        workout_dict.get("location", ""),
+        workout_dict.get("workout_date", ""),
+        workout_dict.get("schedule", ""),
+    )
+    weather_line = format_weather_for_message(weather) if weather else ""
+
+    await update.message.reply_text("🧪 Вариант B — запускаю...")
+    asyncio.create_task(_send_ai_variant_b(
+        admin_tid, analysis, user_data, context,
+        workout_dict=workout_dict, weather_line=weather_line,
+    ))
+
 
 async def b_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
@@ -3869,7 +3919,8 @@ def main():
     app.add_handler(CommandHandler("test_long",    cmd_test_long))
     app.add_handler(CommandHandler("reanalyze",    cmd_reanalyze))
     app.add_handler(CommandHandler("show_analyze",  cmd_show_analyze))
-    app.add_handler(CommandHandler("b",         b_command))
+    app.add_handler(CommandHandler("b",         b_self_command))
+    app.add_handler(CommandHandler("b_user",    b_command))
     app.add_handler(CallbackQueryHandler(b_user_callback, pattern=r"^b_user_\d+$"))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
