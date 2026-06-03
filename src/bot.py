@@ -917,7 +917,8 @@ def _build_help_text(is_admin: bool) -> str:
             "/reanalyze — форс переанализа свежих анонсов (обновить кэш)\n"
             "/show_analyze — показать последний Шаг 1 из базы\n"
             "/b — вариант B для себя\n"
-            "/b_user — вариант B для выбранного пользователя"
+            "/b_user — вариант B для выбранного пользователя\n"
+            "/a_user — вариант A для выбранного пользователя"
         )
     return text
 
@@ -3880,6 +3881,48 @@ async def b_user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     ))
 
 
+# ── /a_user — вариант A для выбранного пользователя (admin only) ─────
+
+async def a_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+        return
+    users = get_users_list_for_b()
+    if not users:
+        await update.message.reply_text("Нет пользователей в базе.")
+        return
+    keyboard = [
+        [InlineKeyboardButton(u["name"], callback_data=f"a_user_{u['db_user_id']}")]
+        for u in users
+    ]
+    await update.message.reply_text(
+        "📊 Вариант A — выбери пользователя:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+async def a_user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query.from_user.id not in ADMIN_TELEGRAM_IDS:
+        await query.answer("Нет доступа.")
+        return
+    await query.answer()
+
+    db_user_id = int(query.data.rsplit("_", 1)[-1])
+    users = get_users_list_for_b()
+    user = next((u for u in users if u["db_user_id"] == db_user_id), None)
+    if not user:
+        await query.edit_message_text("Пользователь не найден.")
+        return
+
+    msg = await query.edit_message_text(
+        f"📊 Вариант A — <b>{user['name']}</b>\nЗапускаю...",
+        parse_mode="HTML",
+    )
+    # _send_recommendation отредактирует msg — результат в чате админа,
+    # данные — выбранного пользователя
+    await _send_recommendation(user["telegram_id"], user["name"], context, long=False, msg=msg)
+
+
 def main():
     init_db()
 
@@ -3917,7 +3960,9 @@ def main():
     app.add_handler(CommandHandler("show_analyze",  cmd_show_analyze))
     app.add_handler(CommandHandler("b",         b_self_command))
     app.add_handler(CommandHandler("b_user",    b_command))
+    app.add_handler(CommandHandler("a_user",    a_user_command))
     app.add_handler(CallbackQueryHandler(b_user_callback, pattern=r"^b_user_\d+$"))
+    app.add_handler(CallbackQueryHandler(a_user_callback, pattern=r"^a_user_\d+$"))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     app.add_error_handler(global_error_handler)
