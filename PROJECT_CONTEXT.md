@@ -23,7 +23,7 @@ Telegram бот @DD_adviser_bot (имя: DoDick) для бегового клу�
 - Проект на сервере: `/opt/running-bot/` (НЕ /root/running-bot/ !)
 - БД на сервере: `/opt/running-bot/running_bot.db`
 - GitHub: github.com/savkost-dev/running-bot (ветка master)
-- Деплой: `.\deploy.ps1` (копирует все *.py через scp; git-истории на сервере НЕТ)
+- Деплой: `.\deploy.ps1` — основной инструмент (см. раздел «Деплой» ниже: копирует все *.py, рестарт, проверка, git commit+push)
 - Сервис: `systemctl {status|restart} running-bot`
 - Логи: `journalctl -u running-bot -n 100 -f`
 
@@ -35,11 +35,28 @@ Telegram бот @DD_adviser_bot (имя: DoDick) для бегового клу�
   ```
 - bash — есть
 
-### Деплой отдельного файла (минуя deploy.ps1)
+### Деплой — ВСЕГДА через .\deploy.ps1 (основной инструмент)
+Запуск из `D:\running-bot`:
+```powershell
+.\deploy.ps1
+```
+Что делает за один прогон:
+1. Обновляет BUILD_DATE в version.py на сегодня
+2. Копирует ВСЕ src/*.py + .env + CHANGELOG.md + CLAUDE.md на сервер (scp)
+3. Рестартит сервис (systemctl restart running-bot)
+4. Проверяет: health-эндпоинт (версия), OAuth URI Whoop/Strava, ai_mode, хвост логов
+5. git add -A + commit (сообщение = первая строка CHANGES из version.py) + push origin master
+
+Перед запуском: обновить version.py (VERSION + первая строка CHANGES = сообщение коммита).
+Секреты защищены .gitignore (.env, *.db, *.session, .garmin_token) — в репозиторий не попадают.
+git-истории на сервере НЕТ, только на GitHub: github.com/savkost-dev/running-bot (ветка master).
+
+### Деплой отдельного файла (минуя deploy.ps1 — только для быстрого теста)
 ```powershell
 scp -i $env:USERPROFILE\.ssh\digitalocean D:\running-bot\src\FILE.py root@167.172.185.88:/opt/running-bot/src/FILE.py
 ssh -i $env:USERPROFILE\.ssh\digitalocean root@167.172.185.88 "systemctl restart running-bot"
 ```
+ВНИМАНИЕ: одиночный scp не коммитит в git и не обновляет версию. Для финального деплоя — всегда deploy.ps1.
 
 ## Стек
 - Python 3.12, python-telegram-bot (+ APScheduler job_queue), Telethon (единый клиент на процесс)
