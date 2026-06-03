@@ -347,13 +347,15 @@ async def get_profile(db_user_id: int) -> dict | None:
     if not isinstance(data, dict):
         return None
 
-    result: dict = {"source": "polar"}
-    if data.get("gender") is not None:
-        result["gender"] = data["gender"]        # MALE / FEMALE — as is
-    if data.get("birthdate") is not None:
-        result["birthdate"] = data["birthdate"]  # "1982-08-20" — as is
+    result: dict = {}
+    gender = data.get("gender")
+    if gender:
+        result["gender"] = "female" if str(gender).upper() == "FEMALE" else "male"
+    birthdate = data.get("birthdate")
+    if birthdate:
+        result["birthdate"] = str(birthdate)[:10]  # уже YYYY-MM-DD
 
-    return result if len(result) > 1 else None
+    return result if result else None
 
 
 async def get_full_data(db_user_id: int) -> dict | None:

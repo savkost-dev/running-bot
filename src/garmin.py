@@ -536,3 +536,37 @@ async def fetch_raw(db_user_id: int) -> dict | None:
     got = [k for k, v in raw.items() if v is not None]
     print(f"Garmin fetch_raw: сохранено для user_id={db_user_id} ({', '.join(got)})")
     return raw
+
+# ── Профиль: пол и дата рождения (статичные данные) ──────────
+
+async def get_profile(db_user_id: int) -> dict | None:
+    """Пол и дата рождения из Garmin в едином формате.
+
+    Возвращает {gender: 'male'/'female', birthdate: 'YYYY-MM-DD'} или None.
+    Garmin userData.gender = MALE/FEMALE, userData.birthDate = '1981-06-20'.
+    """
+    client = await _client(db_user_id)
+    if not client:
+        return None
+
+    def _fetch():
+        try:
+            prof = client.get_user_profile()
+            return (prof or {}).get("userData") or {}
+        except Exception as e:
+            print(f"Garmin get_profile error: {e}")
+            return {}
+
+    ud = await asyncio.to_thread(_fetch)
+    if not ud:
+        return None
+
+    result: dict = {}
+    gender = ud.get("gender")
+    if gender:
+        result["gender"] = "female" if str(gender).upper() == "FEMALE" else "male"
+    bdate = ud.get("birthDate")
+    if bdate:
+        result["birthdate"] = str(bdate)[:10]  # уже YYYY-MM-DD
+
+    return result or None

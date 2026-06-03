@@ -574,3 +574,32 @@ async def fetch_raw(db_user_id: int) -> dict | None:
     got = [k for k, v in raw.items() if v is not None]
     print(f"COROS fetch_raw: сохранено для user_id={db_user_id} ({', '.join(got)})")
     return raw
+
+# ── Профиль: пол и дата рождения (статичные данные) ──────────
+
+async def get_profile(db_user_id: int) -> dict | None:
+    """Пол и дата рождения из COROS /account/query в едином формате.
+
+    Возвращает {gender: 'male'/'female', birthdate: 'YYYY-MM-DD'} или None.
+    COROS: sex 0=мужской, 1=женский (ДОПУЩЕНИЕ по одному примеру — Ксения sex=1.
+    Если окажется наоборот — поправить тут и UPDATE в БД по всем COROS-юзерам).
+    birthday: 19961205 → '1996-12-05'.
+    """
+    data = await _get(db_user_id, "/account/query")
+    if not _ok(data):
+        return None
+    acc = data.get("data") or {}
+
+    result: dict = {}
+
+    sex = acc.get("sex")
+    if sex is not None:
+        result["gender"] = "female" if int(sex) == 1 else "male"
+
+    bday = acc.get("birthday")
+    if bday:
+        s = str(bday)
+        if len(s) == 8:  # 19961205
+            result["birthdate"] = f"{s[:4]}-{s[4:6]}-{s[6:8]}"
+
+    return result or None

@@ -505,6 +505,37 @@ async def fetch_raw(db_user_id: int) -> dict | None:
     return raw
 
 
+# ── Профиль: пол (Strava даёт пол, дату рождения — нет) ──────
+
+async def get_profile(db_user_id: int) -> dict | None:
+    """Пол из Strava /athlete в едином формате.
+
+    Возвращает {gender: 'male'/'female'} или None.
+    Strava sex = M/F. Дату рождения Strava не отдаёт.
+    """
+    import aiohttp as _aiohttp
+
+    token = await ensure_valid_token(db_user_id)
+    if not token:
+        return None
+
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        async with _aiohttp.ClientSession() as s:
+            async with s.get("https://www.strava.com/api/v3/athlete", headers=headers) as r:
+                if r.status != 200:
+                    return None
+                d = await r.json()
+    except Exception as e:
+        print(f"Strava get_profile error: {e}")
+        return None
+
+    sex = d.get("sex")
+    if not sex:
+        return None
+    return {"gender": "female" if str(sex).upper() == "F" else "male"}
+
+
 if __name__ == "__main__":
     print("Strava auth URL:")
     print(get_auth_url(123456789))
