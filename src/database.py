@@ -1252,6 +1252,16 @@ def get_unified_data(user_id: int, max_age_hours: int = 12) -> dict | None:
     return {"unified_json": row[0], "sources": row[1], "updated_at": row[2]}
 
 
+def get_users_list_for_b() -> list[dict]:
+    """Пользователи для кнопки /b."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT id, telegram_id, COALESCE(name, username, 'user_' || id) "
+            "FROM users ORDER BY id"
+        ).fetchall()
+    return [{"db_user_id": r[0], "telegram_id": r[1], "name": r[2]} for r in rows]
+
+
 if __name__ == "__main__":
     # Тест: запусти python src/database.py чтобы проверить
     from dotenv import load_dotenv

@@ -30,6 +30,7 @@ from database import (
     save_feedback, save_rating, get_recent_ratings, get_recent_feedbacks,
     save_workout_analysis, get_workout_analysis, get_latest_workout_analysis,
     get_preprocess_mode, set_preprocess_mode,
+    get_users_list_for_b,
 )
 from strava import (
     get_auth_url, get_recent_runs, analyze_fitness,
@@ -3759,6 +3760,80 @@ async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYP
 
 # ── ЗАПУСК ───────────────────────────────────────────────────
 
+# ── /b — вариант B для выбранного пользователя (admin only) ──────
+
+async def b_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+        return
+    users = get_users_list_for_b()
+    if not users:
+        await update.message.reply_text("Нет пользователей в базе.")
+        return
+    keyboard = [
+        [InlineKeyboardButton(u["name"], callback_data=f"b_user_{u['db_user_id']}")]
+        for u in users
+    ]
+    await update.message.reply_text(
+        "🧪 Вариант B — выбери пользователя:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+async def b_user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query.from_user.id not in ADMIN_TELEGRAM_IDS:
+        await query.answer("Нет доступа.")
+        return
+    await query.answer()
+
+    db_user_id = int(query.data.rsplit("_", 1)[-1])
+    admin_tid = query.from_user.id
+
+    live = await find_next_workout()
+    cur_post = live.get("post_id") if live else None
+    cur_date = live.get("workout_date") if live else None
+    cur_edit = live.get("edit_date") if live else None
+    row, status = get_latest_workout_analysis("interval", cur_post, cur_date, cur_edit)
+
+    if status == "empty" or row is None:
+        await query.edit_message_text("😔 Нет анонса интервальной тренировки.")
+        return
+
+    import json as _json
+    try:
+        analysis = _json.loads(row.get("analyzed_json") or "{}")
+    except Exception:
+        analysis = {}
+
+    profile = get_user_profile(db_user_id) or {}
+    user_name = profile.get("name") or profile.get("username") or f"user_{db_user_id}"
+    user_data = {
+        "db_user_id": db_user_id,
+        "specialization": profile.get("specialization"),
+        "recovery": await _get_recovery_data(db_user_id, force_fresh=True),
+    }
+
+    workout_dict = dict(live) if live else {"workout_date": analysis.get("workout_date", "")}
+    workout_dict["workout_type"] = "interval"
+    workout_dict["is_past"] = (status == "past")
+    workout_dict["even_pace_available"] = analysis.get("even_pace_available")
+    weather = await get_weather_for_workout(
+        workout_dict.get("location", ""),
+        workout_dict.get("workout_date", ""),
+        workout_dict.get("schedule", ""),
+    )
+    weather_line = format_weather_for_message(weather) if weather else ""
+
+    await query.edit_message_text(
+        f"🧪 Вариант B — <b>{user_name}</b>\nЗапускаю...",
+        parse_mode="HTML",
+    )
+    asyncio.create_task(_send_ai_variant_b(
+        admin_tid, analysis, user_data, context,
+        workout_dict=workout_dict, weather_line=weather_line,
+    ))
+
+
 def main():
     init_db()
 
@@ -3794,6 +3869,8 @@ def main():
     app.add_handler(CommandHandler("test_long",    cmd_test_long))
     app.add_handler(CommandHandler("reanalyze",    cmd_reanalyze))
     app.add_handler(CommandHandler("show_analyze",  cmd_show_analyze))
+    app.add_handler(CommandHandler("b",         b_command))
+    app.add_handler(CallbackQueryHandler(b_user_callback, pattern=r"^b_user_\d+$"))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     app.add_error_handler(global_error_handler)
