@@ -2705,11 +2705,7 @@ async def _send_recommendation(
 
     await _out(banner + body, final_markup, parse_mode="HTML")
 
-    # ── Вариант B: чистый ИИ — только для админа ──────────────────────
-    if telegram_id in ADMIN_TELEGRAM_IDS and not long:
-        asyncio.create_task(_send_ai_variant_b(
-            telegram_id, analysis, user_data, context,
-            workout_dict=workout_dict, weather_line=weather_line))
+
 
 
 async def _send_workout_recommendation(
