@@ -20,6 +20,20 @@ _MODE_LABELS = {"deep": "🧠 Глубокий (ИИ)", "smart": "⚡ Быстр
                 "fast": "🪶 Лёгкий (ИИ)", "calc": "📊 Расчётный",
                 "b_ai": "🧪 B (ИИ выбор)"}
 
+# Словарь эпитетов для шкалы подходимости.
+# ИИ возвращает ключ → рендер подставляет текст. Ключи ASCII, текст ≤10 симв.
+_SUIT_EPITHET_MAP = {
+    "optimal":   "оптимально",
+    "good":      "хорошо",
+    "careful":   "щадяще",
+    "ambitious": "амбициозно",
+    "easy":      "легко",
+    "hard":      "тяжело",
+    "risk":      "риск схода",
+    "unload":    "разгрузка",
+    "tooslow":   "оч.медленно",
+}
+
 
 def _get_client() -> OpenAI:
     return OpenAI(
@@ -342,7 +356,7 @@ def build_evening_prompt(workout: dict, fitness: dict, recovery: dict | None = N
   "if_tired": "что делать если устал — группа ниже или промежуточный темп X.5 с цифрами",
   "gap_note": "вывод по разрывам: небольшой (можно переходить) или большой (нужна промежуточная)",
   "suitability_percentages": [
-    {"group": "номер группы", "percentage": число_от_0_до_100, "comment": "СТРОГО 1-2 слова (примеры: идеально, запасной, быстро, легко, опасно, на грани)"}
+    {"group": "номер группы", "percentage": число_от_0_до_100, "comment": "ОДИН ключ из списка: optimal/good/careful/ambitious/easy/hard/risk/unload/tooslow"}
   ],
   "preparation_tips": ["совет 1", "совет 2"],
   "warning": "предупреждение или null",
@@ -1033,7 +1047,7 @@ def build_ai_b_prompt(analysis: dict, user_data: dict, zones_map: dict, recovery
         + '"if_feeling_good": "что делать если ноги бегут легко на разминке — группа выше с темпом", '
         + '"if_tired": "что делать если тяжело — группа ниже или промежуточный темп X.5 с цифрами", '
         + '"gap_note": "вывод по разрывам: небольшой (можно переходить) или большой (нужна промежуточная)", '
-        + '"suitability_percentages": [{"group": "номер", "percentage": 0..100, "comment": "1-2 слова"}], '
+        + '"suitability_percentages": [{"group": "номер", "percentage": 0..100, "comment": "ключ: optimal/good/careful/ambitious/easy/hard/risk/unload/tooslow"}], '
         + '"preparation_tips": ["совет 1"], '
         + '"warning": "предупреждение или null"'
         + "}"
@@ -1634,11 +1648,11 @@ def recommend_long(analysis_json: dict, user_data: dict) -> dict | None:
     for j, p in enumerate(with_pace):
         d = j - base_idx
         if d == 0:
-            pct, comment = 92, "идеально"
+            pct, comment = 92, "optimal"
         elif d < 0:
-            pct, comment = max(5, 92 - 22 * abs(d)), ("быстровато" if d == -1 else "слишком быстро")
+            pct, comment = max(5, 92 - 22 * abs(d)), ("ambitious" if d == -1 else "hard")
         else:
-            pct, comment = max(5, 92 - 14 * d), ("спокойнее" if d == 1 else "слишком медленно")
+            pct, comment = max(5, 92 - 14 * d), ("careful" if d == 1 else "tooslow")
         groups_markup.append({"number": p["number"], "pace": p["pace"], "pct": pct, "comment": comment})
     if health:
         groups_markup.append({"number": health.get("number", "здоровье"), "pace": None,
@@ -2053,20 +2067,20 @@ def _pct_bar(pct: int, width: int = 8, color: str = '🟩') -> str:
 
 
 def _suit_comment(g: dict, main_num: str) -> str:
-    """Короткая словесная метка для шкалы подходимости (≤12 симв.)."""
+    """Ключ из _SUIT_EPITHET_MAP для шкалы подходимости (формульная ветка)."""
     if str(g.get("number")) == main_num:
-        return "оптимально"
+        return "optimal"
     tag = (g.get("tag") or "").lower()
     if "риск" in tag:
-        return "риск схода"
+        return "risk"
     if "тяжело" in tag or "перебор" in tag:
-        return "тяжело"
+        return "hard"
     if "слишком легко" in tag:
-        return "оч.легко"
+        return "tooslow"
     if "низкий" in tag:
-        return "легко"
+        return "easy"
     pct = g.get("pct") or 0
-    return "хорошо" if pct >= 60 else "запасной"
+    return "good" if pct >= 60 else "careful"
 
 
 def _recovery_warning(analysis: dict, main_num: str, recovery: dict | None) -> str:
@@ -2485,9 +2499,11 @@ def format_evening_message(advice: dict, workout: dict, stats: dict | None = Non
         for item in sorted_s:
             g = _sanitize_group_name(str(item.get("group", "?")))
             pct = int(item.get("percentage", 0))
-            comment = (item.get('comment') or '')[:12]
+            comment_raw = (item.get('comment') or '').strip()
+            comment = _SUIT_EPITHET_MAP.get(comment_raw, comment_raw[:10])
             comment_str = f" — {_html.escape(comment)}" if comment else ""
-            lines.append(f"<code>Гр.{g:<4} {_pct_bar(pct)} {pct:>3}%{comment_str}</code>")
+            g_disp = g if any(c.isdigit() for c in g) else "Здоровье"
+            lines.append(f"<code>Гр.{g_disp:<4} {_pct_bar(pct)} {pct:>3}%{comment_str}</code>")
             # Второй ряд (🟦) — если есть значимая альтернатива (другая цель)
             alt_pct = item.get("alt_pct")
             if alt_pct is not None:
@@ -2757,7 +2773,7 @@ def build_long_run_prompt(workout: dict, fitness: dict, recovery: dict | None = 
   "second_half_pace": "X:XX или null если ровный темп",
   "strategy_reason": "1-2 предложения НА РУССКОМ — почему именно эта группа и стратегия",
   "suitability_percentages": [ВСЕ группы из раздела ГРУППЫ, каждая обязательна:
-    {"group": "только номер группы", "percentage": число_от_0_до_100, "comment": "СТРОГО 1-2 слова (примеры: идеально, запасной, слишком быстро, на грани, слишком легко, опасно)"}
+    {"group": "только номер группы", "percentage": число_от_0_до_100, "comment": "ОДИН ключ из списка: optimal/good/careful/ambitious/easy/hard/risk/unload/tooslow"}
   ],
   "if_feeling_good": "НА РУССКОМ — что делать если на разминке легко (например: перейди в группу 3)",
   "if_tired": "НА РУССКОМ — что делать если на разминке тяжело (например: останься в группе 4, не прогрессируй)",
@@ -2819,9 +2835,11 @@ def format_long_run_message(advice: dict, workout: dict, stats: dict | None = No
             g = _sanitize_group_name(str(item.get("group", "?")))
             pct = int(item.get("percentage", 0))
             bar = _pct_bar(pct)
-            comment = (item.get('comment') or '')[:12]
+            comment_raw = (item.get('comment') or '').strip()
+            comment = _SUIT_EPITHET_MAP.get(comment_raw, comment_raw[:10])
             comment_str = f" — {_html.escape(comment)}" if comment else ""
-            lines.append(f"<code>Гр.{g:<4} {bar} {pct:>3}%{comment_str}</code>")
+            g_disp = g if any(c.isdigit() for c in g) else "Здоровье"
+            lines.append(f"<code>Гр.{g_disp:<4} {bar} {pct:>3}%{comment_str}</code>")
         lines.append(sep)
 
     group_raw = str(advice.get("recommended_group", "—"))
