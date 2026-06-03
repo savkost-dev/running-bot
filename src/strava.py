@@ -460,6 +460,51 @@ def _format_time(seconds: int) -> str:
     return f"{seconds // 3600}:{(seconds % 3600) // 60:02d}:{seconds % 60:02d}"
 
 
+# ── Слой 1.1: загрузка сырых данных ──────────────────────────
+
+async def fetch_raw(db_user_id: int) -> dict | None:
+    """Слой 1.1: тянет сырые данные Strava и сохраняет в raw_service_data as is.
+
+    Strava — агрегатор: нагрузка 48ч, CTL/ATL/TSB, прогнозы забегов.
+    НЕ источник биометрии. Парсинг — слой 2 (data_normalizer).
+    """
+    import json
+    import asyncio
+    import database as db
+
+    token = await ensure_valid_token(db_user_id)
+    if not token:
+        print(f"Strava fetch_raw: нет токена для user_id={db_user_id}")
+        return None
+
+    athlete, load_48h = await asyncio.gather(
+        get_full_athlete_data(token),
+        get_recent_48h_load(token),
+        return_exceptions=True,
+    )
+
+    def _clean(x):
+        return None if isinstance(x, Exception) else x
+
+    athlete = _clean(athlete) or {}
+    raw = {
+        "training_load": athlete.get("training_load"),
+        "predictions":   athlete.get("predictions"),
+        "best_efforts":  athlete.get("best_efforts"),
+        "fitness":       athlete.get("fitness"),
+        "load_48h":      _clean(load_48h),
+    }
+
+    if not any(v is not None for v in raw.values()):
+        print(f"Strava fetch_raw: нет данных для user_id={db_user_id}")
+        return None
+
+    db.save_raw_service_data(db_user_id, "strava", json.dumps(raw, ensure_ascii=False, default=str))
+    got = [k for k, v in raw.items() if v is not None]
+    print(f"Strava fetch_raw: сохранено для user_id={db_user_id} ({', '.join(got)})")
+    return raw
+
+
 if __name__ == "__main__":
     print("Strava auth URL:")
     print(get_auth_url(123456789))

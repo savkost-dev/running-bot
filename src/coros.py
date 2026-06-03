@@ -540,3 +540,37 @@ async def get_recovery_for_prompt(db_user_id: int) -> dict | None:
         return None
 
     return result
+
+# ── Слой 1.1: загрузка сырых данных ──────────────────────────
+
+async def fetch_raw(db_user_id: int) -> dict | None:
+    """Слой 1.1: тянет сырые данные COROS и сохраняет в raw_service_data as is.
+
+    Основной источник — get_dashboard_data (/dashboard/query) + training_load.
+    Парсинг — слой 2 (data_normalizer).
+    """
+    import json
+    import database as db
+
+    dashboard, training_load = await asyncio.gather(
+        get_dashboard_data(db_user_id),
+        get_training_load(db_user_id),
+        return_exceptions=True,
+    )
+
+    def _clean(x):
+        return None if isinstance(x, Exception) else x
+
+    raw = {
+        "dashboard":     _clean(dashboard),
+        "training_load": _clean(training_load),
+    }
+
+    if not any(v is not None for v in raw.values()):
+        print(f"COROS fetch_raw: нет данных для user_id={db_user_id}")
+        return None
+
+    db.save_raw_service_data(db_user_id, "coros", json.dumps(raw, ensure_ascii=False, default=str))
+    got = [k for k, v in raw.items() if v is not None]
+    print(f"COROS fetch_raw: сохранено для user_id={db_user_id} ({', '.join(got)})")
+    return raw

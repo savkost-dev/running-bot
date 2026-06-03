@@ -486,3 +486,53 @@ async def get_full_data(db_user_id: int, force_static: bool = False) -> dict | N
             out["training_status"] = training_status
 
     return out if len(out) > 1 else None
+
+# ── Слой 1.1: загрузка сырых данных ──────────────────────────
+
+async def fetch_raw(db_user_id: int) -> dict | None:
+    """Слой 1.1: тянет сырые данные Garmin и сохраняет в raw_service_data as is.
+
+    Собирает все основные показатели в один объект, без обработки.
+    Парсинг — слой 2 (data_normalizer).
+    """
+    import json
+    import database as db
+
+    (vo2max, training_status, training_readiness, body_battery,
+     hrv_status, lactate_threshold, training_load, activities_48h,
+     best_efforts) = await asyncio.gather(
+        get_vo2max(db_user_id),
+        get_training_status(db_user_id),
+        get_training_readiness(db_user_id),
+        get_body_battery(db_user_id),
+        get_hrv_status(db_user_id),
+        get_lactate_threshold(db_user_id),
+        get_training_load(db_user_id),
+        get_activities_48h(db_user_id),
+        get_best_efforts(db_user_id),
+        return_exceptions=True,
+    )
+
+    def _clean(x):
+        return None if isinstance(x, Exception) else x
+
+    raw = {
+        "vo2max":             _clean(vo2max),
+        "training_status":    _clean(training_status),
+        "training_readiness": _clean(training_readiness),
+        "body_battery":       _clean(body_battery),
+        "hrv_status":         _clean(hrv_status),
+        "lactate_threshold":  _clean(lactate_threshold),
+        "training_load":      _clean(training_load),
+        "activities_48h":     _clean(activities_48h),
+        "best_efforts":       _clean(best_efforts),
+    }
+
+    if not any(v is not None for v in raw.values()):
+        print(f"Garmin fetch_raw: нет данных для user_id={db_user_id}")
+        return None
+
+    db.save_raw_service_data(db_user_id, "garmin", json.dumps(raw, ensure_ascii=False, default=str))
+    got = [k for k, v in raw.items() if v is not None]
+    print(f"Garmin fetch_raw: сохранено для user_id={db_user_id} ({', '.join(got)})")
+    return raw

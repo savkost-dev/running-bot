@@ -994,12 +994,6 @@ def build_ai_b_prompt(analysis: dict, user_data: dict, zones_map: dict, recovery
         tr = recovery.get("training_readiness")
         if isinstance(tr, dict) and tr.get("score") is not None:
             rec_parts.append(f"Training Readiness: {tr['score']}/100")
-        hrv = recovery.get("hrv")
-        if hrv is not None:
-            rec_parts.append(f"HRV: {hrv} мс")
-        bb = recovery.get("body_battery")
-        if bb is not None:
-            rec_parts.append(f"Body Battery: {bb}")
     rec_text = ", ".join(rec_parts) if rec_parts else "нет данных"
 
     # Структура тренировки
