@@ -609,17 +609,26 @@ async def get_recovery_for_prompt(db_user_id: int) -> dict | None:
 # ── Слой 1.1: загрузка сырых данных ──────────────────────────
 
 async def fetch_raw(db_user_id: int) -> dict | None:
-    """Слой 1.1: тянет сырые данные COROS и сохраняет в raw_service_data as is.
+    """Слой 1.1: сырые ответы COROS API as is, БЕЗ парсинга.
 
-    Основной источник — get_dashboard_data (/dashboard/query) + training_load.
-    Парсинг — слой 2 (data_normalizer).
+    Зовёт сырые endpoint напрямую через _get (не наши обёртки),
+    кладёт нетронутый JSON со всеми датами. Парсинг — слой 2.
     """
     import json
     import database as db
+    from datetime import date, timedelta
 
-    dashboard, training_load = await asyncio.gather(
-        get_dashboard_data(db_user_id),
-        get_training_load(db_user_id),
+    today = date.today()
+    start_48 = today - timedelta(days=2)
+
+    dashboard, account, activity = await asyncio.gather(
+        _get(db_user_id, "/dashboard/query"),
+        _get(db_user_id, "/account/query"),
+        _get(db_user_id, "/activity/query", {
+            "size": "20", "pageNumber": "1",
+            "startDay": start_48.strftime("%Y%m%d"),
+            "endDay":   today.strftime("%Y%m%d"),
+        }),
         return_exceptions=True,
     )
 
@@ -627,8 +636,9 @@ async def fetch_raw(db_user_id: int) -> dict | None:
         return None if isinstance(x, Exception) else x
 
     raw = {
-        "dashboard":     _clean(dashboard),
-        "training_load": _clean(training_load),
+        "dashboard": _clean(dashboard),
+        "account":   _clean(account),
+        "activity":  _clean(activity),
     }
 
     if not any(v is not None for v in raw.values()):

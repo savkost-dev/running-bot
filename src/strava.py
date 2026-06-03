@@ -463,36 +463,46 @@ def _format_time(seconds: int) -> str:
 # ── Слой 1.1: загрузка сырых данных ──────────────────────────
 
 async def fetch_raw(db_user_id: int) -> dict | None:
-    """Слой 1.1: тянет сырые данные Strava и сохраняет в raw_service_data as is.
+    """Слой 1.1: сырые ответы Strava API as is, БЕЗ расчётов.
 
-    Strava — агрегатор: нагрузка 48ч, CTL/ATL/TSB, прогнозы забегов.
-    НЕ источник биометрии. Парсинг — слой 2 (data_normalizer).
+    Strava отдаёт активности и профиль — это сырьё. CTL/ATL/TSB и прогнозы
+    это уже НАШИ расчёты (слой enrich/2), не сырьё, поэтому тут их нет.
+    Сохраняет профиль атлета + список активностей (30 дней) со всеми датами.
     """
     import json
     import asyncio
+    import aiohttp as _aiohttp
     import database as db
+    from datetime import datetime, timedelta
 
     token = await ensure_valid_token(db_user_id)
     if not token:
         print(f"Strava fetch_raw: нет токена для user_id={db_user_id}")
         return None
 
-    athlete, load_48h = await asyncio.gather(
-        get_full_athlete_data(token),
-        get_recent_48h_load(token),
-        return_exceptions=True,
-    )
+    headers = {"Authorization": f"Bearer {token}"}
+    after_ts = int((datetime.now() - timedelta(days=30)).timestamp())
 
-    def _clean(x):
-        return None if isinstance(x, Exception) else x
+    async def _raw_get(session, url, params=None):
+        try:
+            async with session.get(url, headers=headers, params=params or {}) as r:
+                if r.status != 200:
+                    return None
+                return await r.json()
+        except Exception as e:
+            print(f"  Strava [{url}] err: {str(e)[:50]}")
+            return None
 
-    athlete = _clean(athlete) or {}
+    async with _aiohttp.ClientSession() as session:
+        athlete, activities = await asyncio.gather(
+            _raw_get(session, f"{STRAVA_API_BASE}/athlete"),
+            _raw_get(session, f"{STRAVA_API_BASE}/athlete/activities",
+                     {"after": after_ts, "per_page": 100}),
+        )
+
     raw = {
-        "training_load": athlete.get("training_load"),
-        "predictions":   athlete.get("predictions"),
-        "best_efforts":  athlete.get("best_efforts"),
-        "fitness":       athlete.get("fitness"),
-        "load_48h":      _clean(load_48h),
+        "athlete":    athlete,     # профиль: пол, вес и т.д.
+        "activities": activities,  # сырой список активностей со start_date (с зоной)
     }
 
     if not any(v is not None for v in raw.values()):
@@ -500,8 +510,8 @@ async def fetch_raw(db_user_id: int) -> dict | None:
         return None
 
     db.save_raw_service_data(db_user_id, "strava", json.dumps(raw, ensure_ascii=False, default=str))
-    got = [k for k, v in raw.items() if v is not None]
-    print(f"Strava fetch_raw: сохранено для user_id={db_user_id} ({', '.join(got)})")
+    n_act = len(activities) if isinstance(activities, list) else 0
+    print(f"Strava fetch_raw: сохранено для user_id={db_user_id} (athlete={bool(athlete)}, activities={n_act})")
     return raw
 
 

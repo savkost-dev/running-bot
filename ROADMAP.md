@@ -69,6 +69,7 @@ data_normalizer.py уже написан и протестирован, оста
 |--------|--------|
 | Официальный COROS API (заявка подана 02.06) | ждём одобрения. Когда дадут — ati/cti (длительная нагрузка), прогнозы recordDetailList |
 | Polar Running Index (VO2max) | в профиле нет, лежит в детализации тренировки. Пока МПК вручную |
+| Polar physical-info в fetch_raw | get_physical_info готова, но physical-info — событийный pull (отдаётся 1 раз). Вызывать в fetch_raw и сразу сохранять vo2max/ЛП в user_profile, иначе данные теряются |
 | Мультимодельность (DeepSeek + Anthropic) | спланировано, не сделано |
 
 ---

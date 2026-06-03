@@ -540,6 +540,21 @@ Garmin авто-релогин (_reauth в _client) работает, но Garmi
 МНОГО токенов протухнет разом (напр. все в cache_refresh) — Garmin может временно
 забанить IP сервера. TODO: добавить задержку между релогинами или не делать пачкой.
 
+### Polar physical-info (VO2max + пороги) — событийный pull, ловить в fetch_raw
+VO2max (фитнес-тест), ЛП по пульсу (anaerobic-threshold), max_hr, rhr лежат в Polar
+physical-information, НЕ в профиле. Достаются через transaction-механику (POST создать →
+GET список → GET запись → PUT commit). Путь С userId: /v3/users/{pid}/physical-information-transactions.
+Функция get_physical_info в polar.py готова.
+ВАЖНО — pull-механика: каждая запись отдаётся ОДИН РАЗ. После прочтения (или коммита
+транзакции) данные считаются доставленными, новый POST даёт 204 "нет новых". Текущее
+значение повторно НЕ достать — только при следующем фитнес-тесте появится новая запись.
+ВЫВОД: get_physical_info надо вызывать в регулярном fetch_raw и СРАЗУ сохранять результат
+в свою БД (user_profile: vo2max, lactate_threshold_hr). Вычитал раз — записал навсегда.
+Нельзя дёргать "по запросу" и ждать текущее значение.
+Поля physical-info: vo2-max, maximum-heart-rate, resting-heart-rate, aerobic-threshold (ЧСС),
+anaerobic-threshold (ЧСС ≈ ЛП по пульсу), weight, height.
+Игорю (user 7) VO2max=50 + ЛП_hr=182 вписаны ВРУЧНУЮ 03.06.2026 (данные уже были вычитаны тестами).
+
 ### Пол и возраст в промпт (03.06.2026)
 В промпте сейчас НЕТ возраста, пол учитывается частично (gender_line в build_evening_prompt).
 Возраст важен — нормы VO2max и макс. пульс зависят от возраста (VO2max 50 у 25-летнего

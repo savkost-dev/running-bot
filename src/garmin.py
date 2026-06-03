@@ -527,43 +527,46 @@ async def get_full_data(db_user_id: int, force_static: bool = False) -> dict | N
 # ── Слой 1.1: загрузка сырых данных ──────────────────────────
 
 async def fetch_raw(db_user_id: int) -> dict | None:
-    """Слой 1.1: тянет сырые данные Garmin и сохраняет в raw_service_data as is.
+    """Слой 1.1: сырые ответы Garmin API as is, БЕЗ парсинга.
 
-    Собирает все основные показатели в один объект, без обработки.
-    Парсинг — слой 2 (data_normalizer).
+    Зовёт сырые client.* методы напрямую (не наши get_* обёртки),
+    сохраняет нетронутый ответ со всеми timestamp'ами. Парсинг — слой 2.
     """
     import json
     import database as db
+    from datetime import date, timedelta
 
-    (vo2max, training_status, training_readiness, body_battery,
-     hrv_status, lactate_threshold, training_load, activities_48h,
-     best_efforts) = await asyncio.gather(
-        get_vo2max(db_user_id),
-        get_training_status(db_user_id),
-        get_training_readiness(db_user_id),
-        get_body_battery(db_user_id),
-        get_hrv_status(db_user_id),
-        get_lactate_threshold(db_user_id),
-        get_training_load(db_user_id),
-        get_activities_48h(db_user_id),
-        get_best_efforts(db_user_id),
-        return_exceptions=True,
-    )
+    client = await _client(db_user_id)
+    if not client:
+        print(f"Garmin fetch_raw: нет клиента для user_id={db_user_id}")
+        return None
 
-    def _clean(x):
-        return None if isinstance(x, Exception) else x
+    today = date.today().isoformat()
+    start_48 = (date.today() - timedelta(days=2)).isoformat()
+    start_ce = (date.today() - timedelta(days=42)).isoformat()  # для best efforts / chronic
 
-    raw = {
-        "vo2max":             _clean(vo2max),
-        "training_status":    _clean(training_status),
-        "training_readiness": _clean(training_readiness),
-        "body_battery":       _clean(body_battery),
-        "hrv_status":         _clean(hrv_status),
-        "lactate_threshold":  _clean(lactate_threshold),
-        "training_load":      _clean(training_load),
-        "activities_48h":     _clean(activities_48h),
-        "best_efforts":       _clean(best_efforts),
-    }
+    def _fetch():
+        raw = {}
+        # каждый вызов изолирован — один упавший не валит остальные
+        calls = {
+            "max_metrics":        lambda: client.get_max_metrics(today),
+            "training_status":    lambda: client.get_training_status(today),
+            "training_readiness": lambda: client.get_training_readiness(today),
+            "user_summary":       lambda: client.get_user_summary(today),
+            "hrv_data":           lambda: client.get_hrv_data(today),
+            "lactate_threshold":  lambda: client.get_lactate_threshold(),
+            "activities_48h":     lambda: client.get_activities_by_date(start_48, today, "running"),
+            "user_profile":       lambda: client.get_user_profile(),
+        }
+        for key, fn in calls.items():
+            try:
+                raw[key] = fn()
+            except Exception as e:
+                raw[key] = None
+                print(f"  Garmin [{key}] err: {str(e)[:60]}")
+        return raw
+
+    raw = await asyncio.to_thread(_fetch)
 
     if not any(v is not None for v in raw.values()):
         print(f"Garmin fetch_raw: нет данных для user_id={db_user_id}")
