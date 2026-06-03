@@ -12,9 +12,51 @@ from datetime import date, timedelta
 
 import aiohttp
 
-_BASE_URL = "https://teamapi.coros.com"
+_BASE_URL = "https://teamapi.coros.com"     # US/глобал (дефолт)
+_BASE_URL_EU = "https://teameuapi.coros.com"  # EU-регион
 _SERVICE  = "coros"
 _TIMEOUT  = aiohttp.ClientTimeout(total=30)
+
+# Кэш рабочего домена по db_user_id (в памяти, сбрасывается при рестарте).
+# Постоянное хранение — в user_profile.coros_region (шаг 2).
+_USER_REGION: dict[int, str] = {}
+
+
+def _base_url(db_user_id: int) -> str:
+    """Рабочий домен COROS для пользователя.
+
+    Приоритет: колонка БД → кэш в памяти → дефолт teamapi.
+    """
+    # 1. Из профиля (постоянное хранение)
+    try:
+        from database import get_user_profile
+        prof = get_user_profile(db_user_id) or {}
+        region = prof.get("coros_region")
+        if region == "eu":
+            return _BASE_URL_EU
+        if region == "global":
+            return _BASE_URL
+    except Exception:
+        pass
+    # 2. Из кэша в памяти
+    cached = _USER_REGION.get(db_user_id)
+    if cached == "eu":
+        return _BASE_URL_EU
+    if cached == "global":
+        return _BASE_URL
+    # 3. Дефолт
+    return _BASE_URL
+
+
+def _set_region(db_user_id: int, base_url: str) -> None:
+    """Запоминает рабочий регион — в память и в профиль."""
+    region = "eu" if base_url == _BASE_URL_EU else "global"
+    _USER_REGION[db_user_id] = region
+    try:
+        from database import save_user_profile
+        save_user_profile(db_user_id, coros_region=region)
+    except Exception:
+        pass  # колонки может не быть (шаг 2) — кэш в памяти всё равно работает
 
 
 # ── Утилиты ──────────────────────────────────────────────────
@@ -106,15 +148,16 @@ async def _reauth(db_user_id: int) -> str | None:
 # ── HTTP хелпер ───────────────────────────────────────────────
 
 async def _get(db_user_id: int, path: str, params: dict | None = None,
-               _retry: bool = True) -> dict | None:
-    """GET запрос к COROS API с автоматической re-авторизацией."""
+               _retry: bool = True, _tried_eu: bool = False) -> dict | None:
+    """GET запрос к COROS API с авто-reauth и определением региона (teamapi/teameuapi)."""
     token = _load_token(db_user_id)
     if not token:
         return None
+    base = _base_url(db_user_id)
     try:
         async with aiohttp.ClientSession(timeout=_TIMEOUT) as session:
             async with session.get(
-                f"{_BASE_URL}{path}",
+                f"{base}{path}",
                 params=params or {},
                 headers=_headers(token),
             ) as resp:
@@ -123,7 +166,7 @@ async def _get(db_user_id: int, path: str, params: dict | None = None,
                     print(f"COROS GET {path} → HTTP {resp.status}, пробуем re-auth...")
                     new_token = await _reauth(db_user_id)
                     if new_token:
-                        return await _get(db_user_id, path, params, _retry=False)
+                        return await _get(db_user_id, path, params, _retry=False, _tried_eu=_tried_eu)
                     print(f"COROS re-auth не удался для user_id={db_user_id}")
                     return None
                 if resp.status != 200:
@@ -131,15 +174,28 @@ async def _get(db_user_id: int, path: str, params: dict | None = None,
                     return None
                 raw = await resp.text()
                 data = _json.loads(raw)
-                # COROS может вернуть HTTP 200 с result=1019 "Access token is invalid"
-                if isinstance(data, dict) and str(data.get("result")) == "1019" and _retry:
-                    print(f"COROS GET {path} → result 1019 (invalid token), пробуем re-auth...")
-                    new_token = await _reauth(db_user_id)
-                    if new_token:
-                        return await _get(db_user_id, path, params, _retry=False)
-                    print(f"COROS re-auth не удался для user_id={db_user_id}")
+                # result=1019 "Access token is invalid" с HTTP 200
+                if isinstance(data, dict) and str(data.get("result")) == "1019":
+                    # Если ещё не пробовали EU-регион — токен может быть EU
+                    if not _tried_eu and base == _BASE_URL:
+                        print(f"COROS GET {path} → 1019 на teamapi, пробуем EU-регион...")
+                        _set_region(db_user_id, _BASE_URL_EU)
+                        return await _get(db_user_id, path, params, _retry=_retry, _tried_eu=True)
+                    # Иначе пробуем reauth
+                    if _retry:
+                        print(f"COROS GET {path} → 1019, пробуем re-auth...")
+                        new_token = await _reauth(db_user_id)
+                        if new_token:
+                            return await _get(db_user_id, path, params, _retry=False, _tried_eu=_tried_eu)
+                    print(f"COROS GET {path} → 1019, не удалось восстановить для user_id={db_user_id}")
                     return None
+                # Успешный ответ — запомним рабочий регион
+                if isinstance(data, dict) and _ok(data):
+                    _set_region(db_user_id, base)
                 return data
+    except Exception as e:
+        print(f"COROS GET {path} error: {e}")
+        return None
     except Exception as e:
         print(f"COROS GET {path} error: {e}")
         return None
