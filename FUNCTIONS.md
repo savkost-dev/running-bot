@@ -1,6 +1,6 @@
 # Список функций по файлам
 
-> Последнее обновление: 2026-06-03
+> Последнее обновление: 2026-06-03 (polar.py 413 стр, database.py 1062 стр)
 > Строка — второстепенный ориентир, плывёт при правках. Искать по имени функции.
 
 ---
@@ -219,8 +219,82 @@
 
 ## Остальные файлы
 
-### database.py — 1033 строк
-Всё хранение данных: пользователи, токены, профили, кэш атлета, кэш восстановления, анализы анонсов, оценки, уведомления.
+### database.py — 1062 строк
+
+| Функция | ~строка | Описание |
+|---------|---------|---------|
+| `get_connection` | 17 | Контекстный менеджер SQLite-соединения |
+| `init_db` | 21 | Инициализация всех таблиц (CREATE IF NOT EXISTS + миграции) |
+| `get_or_create_user` | 245 | Возвращает db_user_id, создаёт если нет |
+| `user_exists` | 267 | Проверяет существование пользователя по telegram_id |
+| `get_all_users` | 275 | Все пользователи (telegram_id, name, username) |
+| `get_active_users` | 283 | Только активные (is_active=1) |
+| `get_inactive_users` | 294 | Только неактивные (заблокировали бота) |
+| `get_all_users_with_status` | 305 | Все с флагом has_data (VO2max или трекер есть) |
+| `get_users_for_notification` | 333 | Пользователи с включённым типом уведомлений |
+| `_encrypt` / `_decrypt` | 349/355 | Шифрование токенов (Fernet) |
+| `save_token` | 361 | Сохраняет access/refresh токен сервиса |
+| `get_token` | 380 | Читает токен сервиса для пользователя |
+| `get_users_with_service` | 399 | Список user_id с подключённым сервисом |
+| `set_preference` | 412 | Устанавливает настройку пользователя (ai_mode, уведомления и др.) |
+| `get_preferences` | 420 | Все настройки пользователя |
+| `log_activity` | 445 | Логирует команду в user_activity |
+| `get_bot_stats` | 454 | Агрегированная статистика для /stats |
+| `get_all_users_with_details` | 526 | Детальный список пользователей для /users |
+| `get_users_with_service_full` | 534 | Пользователи сервиса с деталями |
+| `get_users_with_profile_full` | 546 | Пользователи с заполненным профилем |
+| `delete_token` | 558 | Удаляет токен (отключение сервиса) |
+| `count_users_with_service` | 567 | Количество пользователей сервиса |
+| `get_user_display` | 575 | Имя + @username для отображения |
+| `save_athlete_cache` | 588 | Сохраняет CTL/ATL/TSB + прогнозы + последняя гонка |
+| `get_athlete_cache` | 616 | Читает кэш атлета |
+| `save_pace_zones` | 653 | Сохраняет темповые зоны + источник |
+| `get_pace_zones_raw` | 669 | Читает зоны как dict |
+| `save_user_profile` | 690 | Сохраняет профиль (VO2max, ЛП, пол, специализация, замки) |
+| `get_user_profile` | 762 | Читает профиль пользователя |
+| `save_last_recommendation` | 798 | Сохраняет последнюю рекомендацию (для /debug) |
+| `get_last_recommendation` | 832 | Читает последнюю рекомендацию |
+| `get_garmin_recovery_cache` | 878 | Кэш восстановления Garmin (TTL 8ч по умолчанию) |
+| `save_garmin_recovery_cache` | 908 | Перезаписывает кэш восстановления Garmin (один слот на юзера) |
+| `get_workout_notification` | 939 | Уведомление об анонсе по post_id |
+| `save_workout_notification` | 957 | Сохраняет факт уведомления об анонсе |
+| `get_last_workout_notification` | 971 | Последнее уведомление об анонсе |
+| `save_feedback` | 991 | Сохраняет отзыв пользователя |
+| `get_recent_feedbacks` | 1000 | Последние N отзывов |
+| `save_rating` | 1014 | Сохраняет оценку рекомендации |
+| `get_recent_ratings` | 1025 | Последние N оценок |
+| `save_workout_analysis` | 1044 | Сохраняет результат Шага 1 (INSERT OR REPLACE по post_id) |
+| `get_workout_analysis` | 1083 | Читает анализ по post_id |
+| `get_latest_workout_analysis` | 1097 | Актуальный анализ для типа тренировки + статус (current/analyzing/past/empty) |
+| `update_extra_groups` | 1147 | Обновляет extra_groups_json существующего анализа |
+| `get_preprocess_mode` | 1160 | Текущий режим препроцессинга (deep/smart) |
+| `set_preprocess_mode` | 1169 | Устанавливает режим препроцессинга |
+| `save_raw_service_data` | 1179 | Слой 1.1: сохраняет сырой ответ сервиса as is |
+| `get_raw_service_data` | 1193 | Читает сырые данные сервиса → {raw_json, fetched_at} |
+
+### polar.py — 413 строк
+
+| Функция | ~строка | Описание |
+|---------|---------|---------|
+| `_basic_auth` | 36 | Base64 'client_id:client_secret' для HTTP Basic Auth |
+| `_load_token` | 41 | Читает access_token из БД |
+| `_load_refresh_token` | 47 | Читает refresh_token из БД |
+| `_save_tokens` | 53 | Сохраняет access/refresh токены + expiry |
+| `_load_polar_user_id` | 60 | Читает polar_user_id из БД |
+| `_save_polar_user_id` | 66 | Сохраняет polar_user_id |
+| `_headers` | 71 | Authorization-заголовки для запросов |
+| `get_auth_url` | 81 | Формирует URL авторизации Polar Flow |
+| `exchange_code` | 95 | Обменивает authorization code на access/refresh токены |
+| `register_user` | 115 | Регистрирует пользователя в Polar AccessLink → polar_user_id |
+| `refresh_access_token` | 153 | Обновляет access_token по refresh_token |
+| `_get` | 184 | GET к Polar API с автообновлением токена при 401 |
+| `get_nightly_recharge` | 216 | ANS recharge + HRV за последние 7 дней |
+| `get_sleep` | 268 | Данные сна за последние 7 дней |
+| `get_vo2max` | 311 | VO2max из профиля Polar |
+| `get_profile` | 336 | Сырые профильные показатели Polar (слой 1.1) |
+| `get_full_data` | 359 | Все данные для промта: ANS recharge, HRV, сон, VO2max |
+| `get_recovery_for_prompt` | 425 | Recovery dict совместимый с Whoop/Garmin/COROS |
+| `fetch_raw` | 461 | Слой 1.1: тянет сырые ответы Polar → raw_service_data |
 
 ### telegram_reader.py — 631 строк
 Чтение канала @Dusty_Dumbbells через Telethon. Детектор анонсов (`find_next_workout`, `find_next_long_run`), парсер постов, поиск доп. групп в комментариях.
