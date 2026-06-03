@@ -99,7 +99,24 @@ async def get_recovery(access_token: str) -> dict | None:
     r = records[0]
     score = r.get("score") or {}
     recovery_score = score.get("recovery_score")
-    date = r.get("created_at", "")[:10]
+    created_at = r.get("created_at", "")
+    date = created_at[:10]
+
+    # Проверка: восстановление за сегодня.
+    # created_at от Whoop содержит offset локации пользователя.
+    # Сравниваем дату записи с "сейчас" в ТОЙ ЖЕ таймзоне — UTC не участвует.
+    from datetime import datetime
+    try:
+        rec_dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+        rec_date = rec_dt.date()
+        today_local = datetime.now(rec_dt.tzinfo).date()
+        if rec_date != today_local:
+            print(f"Whoop recovery: запись за {rec_date}, не сегодня ({today_local}) — пропускаем")
+            return None
+    except Exception as e:
+        print(f"Whoop recovery: не удалось разобрать дату '{created_at}': {e}")
+        return None
+
     print(f"Whoop recovery: score={recovery_score}, date={date}")
 
     return {
@@ -131,6 +148,23 @@ async def get_sleep(access_token: str) -> dict | None:
 
     s = records[0]
     score = s.get("score") or {}
+
+    # Проверка: сон закончился сегодня.
+    # end (пробуждение) содержит offset локации пользователя.
+    # Сравниваем с "сейчас" в той же таймзоне — UTC не участвует.
+    from datetime import datetime
+    end_raw = s.get("end", "")
+    try:
+        end_dt = datetime.fromisoformat(end_raw.replace("Z", "+00:00"))
+        end_date = end_dt.date()
+        today_local = datetime.now(end_dt.tzinfo).date()
+        if end_date != today_local:
+            print(f"Whoop sleep: пробуждение {end_date}, не сегодня ({today_local}) — пропускаем")
+            return None
+    except Exception as e:
+        print(f"Whoop sleep: не удалось разобрать end '{end_raw}': {e}")
+        return None
+
     stage_summary = score.get("stage_summary") or {}
     total_sleep_ms = (
         stage_summary.get("total_light_sleep_time_milli", 0) +
