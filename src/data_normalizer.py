@@ -61,6 +61,10 @@ class UnifiedUserData:
     # Мета
     sources:    list = field(default_factory=list)
     updated_at: str  = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    # Даты фиксации: когда каждый метрик был записан/получен
+    # Ключи: '<service>_fetched' (время fetch_raw), '<service>_measured' (фактическая дата измерения)
+    # Пример: {'garmin_fetched': '2026-06-03T03:45:12', 'polar_measured': '2026-06-03'}
+    data_dates: dict = field(default_factory=dict)
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), ensure_ascii=False, default=str)
@@ -450,3 +454,362 @@ def merge(parts: list[UnifiedUserData]) -> UnifiedUserData:
 
     result.updated_at = datetime.now(timezone.utc).isoformat()
     return result
+
+
+# ── Парсеры сырых API-ответов (мост между слоями 1.1 и 2) ─────
+
+def _parse_garmin_raw(raw: dict) -> dict:
+    """Извлекает нужные поля из сырого ответа Garmin API в формат для normalize_garmin.
+
+    raw — dict из garmin.fetch_raw: {max_metrics, training_status, training_readiness,
+                                      user_summary, hrv_data, lactate_threshold,
+                                      activities_48h, user_profile}.
+    """
+    out: dict = {}
+
+    # VO2max из max_metrics
+    mm = raw.get("max_metrics")
+    if isinstance(mm, list) and mm:
+        g = (mm[0] or {}).get("generic") or {}
+        vo2 = g.get("vo2MaxPreciseValue") or g.get("vo2MaxValue")
+        if vo2:
+            out["vo2max"] = round(float(vo2), 1)
+
+    # Лактатный порог из lactate_threshold
+    lt = raw.get("lactate_threshold")
+    if isinstance(lt, dict):
+        shr = lt.get("speed_and_heart_rate") or {}
+        speed_raw = shr.get("speed")
+        hr = shr.get("heartRate")
+        if speed_raw and hr:
+            try:
+                speed_ms = float(speed_raw) * 10
+                pace_sec = 1000 / speed_ms
+                out["lactate_threshold_pace"] = f"{int(pace_sec) // 60}:{int(pace_sec) % 60:02d}"
+                out["lactate_threshold_hr"] = int(hr)
+            except Exception:
+                pass
+
+    # Body Battery и ЧСС покоя из user_summary
+    us = raw.get("user_summary") or {}
+    if isinstance(us, dict):
+        bb = us.get("bodyBatteryMostRecentValue")
+        if bb is not None:
+            out["body_battery"] = int(bb)
+        rhr = us.get("restingHeartRate")
+        if rhr:
+            out["rhr"] = int(rhr)
+
+    # Training Readiness
+    tr_raw = raw.get("training_readiness")
+    if tr_raw:
+        item = tr_raw[0] if isinstance(tr_raw, list) else tr_raw
+        if isinstance(item, dict) and item.get("score") is not None:
+            level_raw = (item.get("level") or "").upper()
+            level_map = {"POOR": "low", "LOW": "low", "FAIR": "low",
+                         "MODERATE": "moderate", "GOOD": "moderate",
+                         "HIGH": "high", "PRIME": "high", "OPTIMAL": "high"}
+            out["training_readiness"] = {
+                "score": item["score"],
+                "level": level_map.get(level_raw, level_raw.lower() or "unknown"),
+                "factors": [],
+            }
+
+    # HRV из hrv_data
+    hrv_raw = raw.get("hrv_data")
+    if isinstance(hrv_raw, dict):
+        summary = hrv_raw.get("hrvSummary") or {}
+        last_night = summary.get("lastNightAvg")
+        weekly = summary.get("weeklyAvg")
+        if last_night or weekly:
+            out["hrv"] = {
+                "hrv_last_night": float(last_night) if last_night else None,
+                "hrv_weekly_avg": float(weekly) if weekly else None,
+            }
+
+    # Training Load из training_status
+    ts = raw.get("training_status")
+    if ts:
+        item = ts[0] if isinstance(ts, list) else ts
+        if isinstance(item, dict):
+            acute = item.get("acuteLoad")
+            chronic = item.get("chronicLoad")
+            if acute is not None or chronic is not None:
+                a = float(acute) if acute is not None else None
+                c = float(chronic) if chronic is not None else None
+                tsb = round(c - a, 1) if (a is not None and c is not None) else None
+                out["training_load"] = {"ctl": c, "atl": a, "tsb": tsb}
+
+    # Нагрузка за 48ч из activities_48h
+    acts = raw.get("activities_48h")
+    if isinstance(acts, list) and acts:
+        total_km = round(sum((a.get("distance") or 0) for a in acts) / 1000, 1)
+        out["load_48h"] = {"sessions_48h": len(acts), "total_km_48h": total_km, "km_48h": total_km}
+
+    return out
+
+
+def _parse_coros_raw(raw: dict) -> dict:
+    """Извлекает нужные поля из сырого ответа COROS API в формат для normalize_coros.
+
+    raw — dict из coros.fetch_raw: {dashboard, account, activity}.
+    """
+    out: dict = {}
+
+    dash = raw.get("dashboard")
+    if isinstance(dash, dict) and str(dash.get("result")) == "0000":
+        info = ((dash.get("data") or {}).get("summaryInfo")) or {}
+
+        # Лактатный порог
+        ltsp = info.get("ltsp")
+        lthr = info.get("lthr")
+        if ltsp and int(ltsp) > 0:
+            s = int(ltsp)
+            out["lactate_threshold_pace"] = f"{s // 60}:{s % 60:02d}"
+            out["ltsp"] = s
+        if lthr and int(lthr) > 0:
+            out["lactate_threshold_hr"] = int(lthr)
+
+        # Recovery (суточное)
+        rpc = info.get("recoveryPct")
+        if rpc is not None:
+            out["recovery_score"] = max(0, min(100, int(rpc)))
+
+        # HRV
+        hrv_data = info.get("sleepHrvData") or {}
+        if isinstance(hrv_data, dict):
+            hrv_last = hrv_data.get("avgSleepHrv")
+            hrv_base = hrv_data.get("sleepHrvBase")
+            if hrv_last and float(hrv_last) > 0:
+                out["hrv"] = float(hrv_last)
+            if hrv_base and float(hrv_base) > 0:
+                out["hrv_baseline"] = float(hrv_base)
+
+        # RHR
+        rhr = info.get("rhr")
+        if rhr and int(rhr) > 0:
+            out["rhr"] = int(rhr)
+
+        # VO2max
+        for key in ("vo2Max", "vo2max", "maxOxygenUptake"):
+            val = info.get(key)
+            if val and float(val) > 0:
+                out["vo2max"] = round(float(val), 1)
+                break
+
+    # Нагрузка 48ч из activity
+    activity = raw.get("activity")
+    if isinstance(activity, dict) and str(activity.get("result")) == "0000":
+        acts_list = ((activity.get("data") or {}).get("dataList")) or []
+        if acts_list:
+            total_km = round(sum((a.get("distance") or 0) for a in acts_list if isinstance(a, dict)) / 1000, 1)
+            out["load_48h"] = {"sessions_48h": len(acts_list), "total_km_48h": total_km}
+
+    return out
+
+
+def _parse_polar_raw(raw: dict) -> dict:
+    """Извлекает нужные поля из сырого ответа Polar API в формат для normalize_polar.
+
+    raw — dict из polar.fetch_raw: {profile, nightly_recharge, sleep}.
+    """
+    out: dict = {}
+
+    # VO2max из profile
+    profile = raw.get("profile")
+    if isinstance(profile, dict):
+        for key in ("vo2max", "vo2Max", "aerobic-fitness", "aerobicFitness"):
+            val = profile.get(key)
+            if val:
+                try:
+                    fval = float(val)
+                    if fval > 10:
+                        out["vo2max"] = round(fval, 1)
+                        break
+                except Exception:
+                    pass
+
+    # ANS Recharge / HRV / RHR из nightly_recharge
+    recharge = raw.get("nightly_recharge")
+    items: list = []
+    if isinstance(recharge, list):
+        items = recharge
+    elif isinstance(recharge, dict):
+        items = recharge.get("recharges") or recharge.get("items") or []
+    items = [x for x in items if isinstance(x, dict)]
+    if items:
+        items.sort(key=lambda x: x.get("date", ""))
+        last = items[-1]
+        ans = last.get("ans_charge")
+        if ans is not None:
+            out["ans_charge"] = float(ans)
+        hrv = last.get("heart_rate_variability_avg")
+        if hrv is not None:
+            out["hrv"] = round(float(hrv), 1)
+        hr_avg = last.get("heart_rate_avg")
+        if hr_avg is not None:
+            out["hr_avg"] = int(float(hr_avg))
+
+    return out
+
+
+def _parse_strava_raw(raw: dict, athlete_cache: dict | None = None) -> dict:
+    """Извлекает нужные поля из сырого ответа Strava API в формат для normalize_strava.
+
+    raw — dict из strava.fetch_raw: {athlete, activities}.
+    athlete_cache — опциональный кэш (predictions, CTL/ATL/TSB) из БД.
+    """
+    from datetime import datetime as _dt, timedelta as _td
+    out: dict = {}
+
+    # Прогнозы из athlete_cache (рассчитаны refresh_athlete_cache)
+    if athlete_cache:
+        predictions = athlete_cache.get("predictions") or {}
+        if predictions:
+            out["predictions"] = predictions
+        tl = athlete_cache.get("training_load") or {}
+        if tl.get("ctl") is not None:
+            out["training_load"] = tl
+            tsb = tl.get("tsb")
+            if tsb is not None:
+                out["s3_recovery_total"] = tsb
+
+    # Нагрузка 48ч из activities
+    acts = raw.get("activities")
+    if isinstance(acts, list):
+        cutoff = _dt.utcnow() - _td(hours=48)
+        recent = []
+        for a in acts:
+            if a.get("type") != "Run":
+                continue
+            ts = a.get("start_date", "")
+            try:
+                dt = _dt.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S")
+                if dt >= cutoff:
+                    recent.append(a)
+            except Exception:
+                pass
+        if recent:
+            total_km = round(sum((a.get("distance") or 0) for a in recent) / 1000, 1)
+            suffer = sum((a.get("suffer_score") or 0) for a in recent)
+            out["load_48h"] = {
+                "sessions_48h": len(recent),
+                "total_km_48h": total_km,
+                "suffer_48h": suffer,
+            }
+
+    return out
+
+
+def run_normalization(user_id: int) -> "UnifiedUserData | None":
+    """Слой 2: читает raw_service_data из БД → нормализует → мёрджит → сохраняет в unified_cache.
+
+    Приоритет при мёрдже (по DATA_NORMALIZER_SPEC.md):
+    - тренированность: garmin → coros → polar → strava
+    - восстановление суточное: coros → polar → garmin
+    - нагрузка: strava → garmin → coros
+    """
+    import json as _json
+    import database as db
+
+    u_garmin = u_coros = u_polar = u_strava = None
+
+    # Даты фиксации для каждого сервиса
+    data_dates: dict = {}
+
+    # Garmin
+    raw_g = db.get_raw_service_data(user_id, "garmin")
+    if raw_g:
+        data_dates["garmin_fetched"] = raw_g["fetched_at"]
+        try:
+            parsed = _parse_garmin_raw(_json.loads(raw_g["raw_json"]))
+            u_garmin = normalize_garmin(parsed)
+        except Exception as e:
+            logger.warning(f"normalize_garmin error user={user_id}: {e}")
+
+    # COROS
+    raw_c = db.get_raw_service_data(user_id, "coros")
+    if raw_c:
+        data_dates["coros_fetched"] = raw_c["fetched_at"]
+        try:
+            parsed = _parse_coros_raw(_json.loads(raw_c["raw_json"]))
+            u_coros = normalize_coros(parsed)
+        except Exception as e:
+            logger.warning(f"normalize_coros error user={user_id}: {e}")
+
+    # Polar
+    raw_p = db.get_raw_service_data(user_id, "polar")
+    if raw_p:
+        data_dates["polar_fetched"] = raw_p["fetched_at"]
+        try:
+            raw_p_data = _json.loads(raw_p["raw_json"])
+            # Фактическая дата измерения восстановления (Polar явно даёт дату ночи)
+            nr = raw_p_data.get("nightly_recharge")
+            items = nr if isinstance(nr, list) else ((nr or {}).get("recharges") or (nr or {}).get("items") or [])
+            items = [x for x in items if isinstance(x, dict)]
+            if items:
+                items.sort(key=lambda x: x.get("date", ""))
+                mdate = items[-1].get("date")
+                if mdate:
+                    data_dates["polar_measured"] = str(mdate)
+            parsed = _parse_polar_raw(raw_p_data)
+            u_polar = normalize_polar(parsed)
+        except Exception as e:
+            logger.warning(f"normalize_polar error user={user_id}: {e}")
+
+    # Strava (обогащаем athlete_cache для CTL/predictions)
+    raw_s = db.get_raw_service_data(user_id, "strava")
+    if raw_s:
+        data_dates["strava_fetched"] = raw_s["fetched_at"]
+        try:
+            athlete_cache = db.get_athlete_cache(user_id)
+            if athlete_cache and athlete_cache.get("updated_at"):
+                data_dates["strava_ctl_at"] = athlete_cache["updated_at"]
+            parsed = _parse_strava_raw(_json.loads(raw_s["raw_json"]), athlete_cache)
+            u_strava = normalize_strava(parsed)
+        except Exception as e:
+            logger.warning(f"normalize_strava error user={user_id}: {e}")
+
+    if not any([u_garmin, u_coros, u_polar, u_strava]):
+        logger.info(f"run_normalization: нет сырых данных для user={user_id}")
+        return None
+
+    # Мёрдж: тренированность — garmin → coros → polar → strava
+    fitness_priority = [p for p in [u_garmin, u_coros, u_polar, u_strava] if p]
+    merged = merge(fitness_priority)
+
+    # Переопределяем recovery_daily по правильному приоритету: coros → polar → garmin
+    for p in [u_coros, u_polar, u_garmin]:
+        if p and p.s3_recovery_daily is not None:
+            merged.s3_recovery_daily = p.s3_recovery_daily
+            break
+
+    # recovery_total: Strava TSB как эталон
+    if u_strava and u_strava.s3_recovery_total is not None:
+        merged.s3_recovery_total = u_strava.s3_recovery_total
+    elif u_garmin and u_garmin.s3_recovery_total is not None:
+        merged.s3_recovery_total = u_garmin.s3_recovery_total
+
+    # load_recent: strava → garmin → coros
+    for p in [u_strava, u_garmin, u_coros]:
+        if p and p.s3_load_recent is not None:
+            merged.s3_load_recent = p.s3_load_recent
+            break
+
+    # load_chronic: strava → garmin → coros
+    for p in [u_strava, u_garmin, u_coros]:
+        if p and p.s3_load_chronic is not None:
+            merged.s3_load_chronic = p.s3_load_chronic
+            break
+
+    sources = list(dict.fromkeys(merged.sources))  # deduplicate, preserve order
+    merged.sources = sources
+    merged.data_dates = data_dates
+
+    db.save_unified_data(user_id, merged.to_json(), ",".join(sources))
+    logger.info(
+        f"run_normalization OK: user={user_id} sources={sources} "
+        f"vo2max={merged.s3_vo2max} lt={merged.s3_lactate_threshold_pace} "
+        f"rec_daily={merged.s3_recovery_daily} hrv={merged.s3_hrv}"
+    )
+    return merged

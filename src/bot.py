@@ -3189,6 +3189,51 @@ async def _send_long_run_recommendation(
                                        reply_markup=get_main_keyboard(from_recommendation=True))
 
 
+def _update_garmin_recovery_from_raw(db_user_id: int, raw: dict) -> None:
+    """Обновляет garmin_recovery_cache из сырого ответа garmin.fetch_raw.
+
+    Обеспечивает совместимость с _get_recovery_data, который читает из garmin_recovery_cache.
+    """
+    result: dict = {"source": "garmin"}
+
+    # Body Battery и ЧСС покоя из user_summary
+    us = raw.get("user_summary") or {}
+    bb = us.get("bodyBatteryMostRecentValue")
+    if bb is not None:
+        result["body_battery"] = int(bb)
+        result["recovery_score"] = int(bb)
+
+    # HRV из hrv_data
+    hrv_raw = raw.get("hrv_data") or {}
+    summary = hrv_raw.get("hrvSummary") or {}
+    if summary:
+        last_night = summary.get("lastNightAvg")
+        weekly = summary.get("weeklyAvg")
+        if last_night:
+            result["hrv"] = float(last_night)
+        if weekly:
+            result["hrv_weekly_avg"] = float(weekly)
+        result["hrv_status"] = summary.get("status")
+
+    # Training Readiness
+    tr_raw = raw.get("training_readiness")
+    if tr_raw:
+        item = tr_raw[0] if isinstance(tr_raw, list) else tr_raw
+        if isinstance(item, dict) and item.get("score") is not None:
+            level_raw = (item.get("level") or "").upper()
+            level_map = {"POOR": "low", "LOW": "low", "FAIR": "low",
+                         "MODERATE": "moderate", "GOOD": "moderate",
+                         "HIGH": "high", "PRIME": "high", "OPTIMAL": "high"}
+            result["training_readiness"] = {
+                "score": item["score"],
+                "level": level_map.get(level_raw, level_raw.lower() or "unknown"),
+                "factors": [],
+            }
+
+    if len(result) > 1:
+        save_garmin_recovery_cache(db_user_id, result)
+
+
 async def _fetch_garmin_recovery(db_user_id: int) -> dict | None:
     """Запрашивает данные восстановления из Garmin API и сохраняет в кэш."""
     from garmin import get_body_battery, get_hrv_status, get_training_readiness
@@ -3522,7 +3567,7 @@ async def scheduled_cache_refresh(context: ContextTypes.DEFAULT_TYPE):
     """
     logger.info("Запускаю обновление кэша всех сервисов (03:45 UTC)...")
     users = get_all_users()
-    counts = {"strava": 0, "garmin": 0, "coros": 0, "polar": 0, "vo2max": 0}
+    counts = {"strava": 0, "garmin": 0, "coros": 0, "polar": 0, "vo2max": 0, "normalized": 0}
 
     for telegram_id, name, _ in users:
         db_user_id = get_or_create_user(telegram_id, name)
@@ -3532,6 +3577,8 @@ async def scheduled_cache_refresh(context: ContextTypes.DEFAULT_TYPE):
             access_token = await ensure_valid_token(db_user_id)
             if access_token:
                 await refresh_athlete_cache(db_user_id, access_token)
+                from strava import fetch_raw as _strava_fetch_raw
+                await _strava_fetch_raw(db_user_id)
                 counts["strava"] += 1
         except Exception as e:
             logger.warning(f"Strava cache error for {telegram_id}: {e}")
@@ -3539,29 +3586,31 @@ async def scheduled_cache_refresh(context: ContextTypes.DEFAULT_TYPE):
         # ── Garmin: recovery (Body Battery, HRV, TR) ──────────
         if get_token(db_user_id, "garmin"):
             try:
-                result = await _fetch_garmin_recovery(db_user_id)
-                if result:
+                import garmin as _garmin
+                raw_g = await _garmin.fetch_raw(db_user_id)
+                if raw_g:
+                    _update_garmin_recovery_from_raw(db_user_id, raw_g)
                     counts["garmin"] += 1
             except Exception as e:
-                logger.warning(f"Garmin recovery error for {telegram_id}: {e}")
+                logger.warning(f"Garmin fetch_raw error for {telegram_id}: {e}")
 
         # ── COROS ─────────────────────────────────────────────
         if get_token(db_user_id, "coros"):
             try:
                 import coros as _coros
-                await _coros.get_full_data(db_user_id)
+                await _coros.fetch_raw(db_user_id)
                 counts["coros"] += 1
             except Exception as e:
-                logger.warning(f"COROS refresh error for {telegram_id}: {e}")
+                logger.warning(f"COROS fetch_raw error for {telegram_id}: {e}")
 
         # ── Polar ─────────────────────────────────────────────
         if get_token(db_user_id, "polar"):
             try:
                 import polar as _polar
-                await _polar.get_full_data(db_user_id)
+                await _polar.fetch_raw(db_user_id)
                 counts["polar"] += 1
             except Exception as e:
-                logger.warning(f"Polar refresh error for {telegram_id}: {e}")
+                logger.warning(f"Polar fetch_raw error for {telegram_id}: {e}")
 
         # ── VO2max из трекера (тихо) ───────────────────────────
         new_vo2max, tracker_key, tracker_name = await _get_vo2max_from_tracker(db_user_id)
@@ -3585,11 +3634,20 @@ async def scheduled_cache_refresh(context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.warning(f"Zones recalc error for {telegram_id}: {e}")
 
+        # Слой 2: нормализация raw_service_data → unified_cache
+        try:
+            from data_normalizer import run_normalization
+            if run_normalization(db_user_id):
+                counts["normalized"] += 1
+        except Exception as e:
+            logger.warning(f"Normalization error for {telegram_id}: {e}")
+
         await asyncio.sleep(1)
 
     logger.info(
         f"Кэш обновлён: Strava={counts['strava']}, Garmin={counts['garmin']}, "
-        f"COROS={counts['coros']}, Polar={counts['polar']}, VO2max изменён={counts['vo2max']}"
+        f"COROS={counts['coros']}, Polar={counts['polar']}, VO2max изменён={counts['vo2max']}, "
+        f"normalized={counts['normalized']}"
     )
 
 

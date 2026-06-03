@@ -175,6 +175,14 @@ def init_db():
                 FOREIGN KEY (user_id) REFERENCES users(id)
             );
 
+            CREATE TABLE IF NOT EXISTS unified_cache (
+                user_id    INTEGER PRIMARY KEY,
+                unified_json TEXT NOT NULL,
+                sources    TEXT,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            );
+
         """)
     # Миграции для старых БД
     with get_connection() as conn:
@@ -1209,6 +1217,39 @@ def get_raw_service_data(user_id: int, service: str) -> dict | None:
     if not row:
         return None
     return {"raw_json": row[0], "fetched_at": row[1]}
+
+
+# ── Нормализованный кэш (слой 2) ─────────────────────────────
+
+def save_unified_data(user_id: int, unified_json: str, sources: str = "") -> None:
+    """Слой 2: сохраняет нормализованные данные всех сервисов в unified_cache."""
+    with get_connection() as conn:
+        conn.execute("""
+            INSERT OR REPLACE INTO unified_cache (user_id, unified_json, sources, updated_at)
+            VALUES (?, ?, ?, datetime('now'))
+        """, (user_id, unified_json, sources))
+    _db_logger.info(f"unified_cache сохранён: user={user_id} sources={sources}")
+
+
+def get_unified_data(user_id: int, max_age_hours: int = 12) -> dict | None:
+    """Слой 2: читает нормализованные данные из unified_cache.
+
+    Возвращает {unified_json, sources, updated_at} или None если нет/устарел.
+    """
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT unified_json, sources, updated_at FROM unified_cache WHERE user_id = ?",
+            (user_id,)
+        ).fetchone()
+    if not row:
+        return None
+    try:
+        age = (datetime.now() - datetime.fromisoformat(row[2])).total_seconds() / 3600
+        if age > max_age_hours:
+            return None
+    except Exception:
+        return None
+    return {"unified_json": row[0], "sources": row[1], "updated_at": row[2]}
 
 
 if __name__ == "__main__":
