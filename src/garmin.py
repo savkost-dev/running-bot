@@ -36,11 +36,48 @@ async def connect(db_user_id: int, email: str, password: str) -> bool:
     return True
 
 
+async def _reauth(db_user_id: int):
+    """Повторная авторизация Garmin через сохранённые credentials.
+
+    Возвращает свежий клиент или None. По образцу COROS._reauth.
+    """
+    from database import get_user_profile
+    profile = get_user_profile(db_user_id)
+    if not profile:
+        return None
+    email = profile.get("garmin_email")
+    password = profile.get("garmin_password")
+    if not email or not password:
+        print(f"Garmin re-auth: нет сохранённых credentials для user_id={db_user_id}")
+        return None
+    try:
+        def _login():
+            from garminconnect import Garmin
+            client = Garmin(email=email, password=password)
+            client.login()
+            return client
+        client = await asyncio.to_thread(_login)
+        # сохраняем свежий токен
+        token_json = client.client.dumps()
+        _save_token(db_user_id, token_json)
+        print(f"Garmin: re-auth успешен для user_id={db_user_id}")
+        return client
+    except Exception as e:
+        print(f"Garmin re-auth error для user_id={db_user_id}: {e}")
+        return None
+
+
 async def _client(db_user_id: int):
     token_json = _load_token(db_user_id)
     if not token_json:
         return None
-    return _build_client(token_json)
+    # Пробуем построить клиент из сохранённого токена
+    try:
+        return await asyncio.to_thread(_build_client, token_json)
+    except Exception as e:
+        # Токен протух (401 / Failed to retrieve social profile) — релогин по credentials
+        print(f"Garmin: токен невалиден для user_id={db_user_id} ({str(e)[:60]}), пробуем re-auth...")
+        return await _reauth(db_user_id)
 
 
 async def get_vo2max(db_user_id: int) -> float | None:
