@@ -540,6 +540,22 @@ Garmin авто-релогин (_reauth в _client) работает, но Garmi
 МНОГО токенов протухнет разом (напр. все в cache_refresh) — Garmin может временно
 забанить IP сервера. TODO: добавить задержку между релогинами или не делать пачкой.
 
+### Слой 1.1 fetch_raw — ТОЛЬКО сырьё as is (переделано 03.06.2026)
+ВАЖНО: fetch_raw должен звать СЫРЫЕ API напрямую, НЕ наши get_* обёртки.
+Была ошибка: первая версия fetch_raw звала get_training_readiness и т.п., которые
+уже распарсили и ВЫКИНУЛИ timestamp'ы — в raw попадал огрызок без дат.
+Исправлено: fetch_raw зовёт сырые методы и кладёт нетронутый ответ.
+- Garmin: client.get_max_metrics/get_training_status/get_training_readiness/get_user_summary/
+  get_hrv_data/get_lactate_threshold/get_activities_by_date/get_user_profile (сырые методы garminconnect)
+- COROS: _get на /dashboard/query, /account/query, /activity/query (сырой JSON)
+- Strava: /athlete + /athlete/activities (CTL/ATL/прогнозы УБРАНЫ — это наши расчёты, не сырьё!)
+- Polar: /users/{id}, /users/nightly-recharge, /users/sleep
+Теперь raw_service_data хранит исходные timestamp'ы: Garmin training_readiness несёт
+timestamp+timestampLocal, Strava activities — start_date+start_date_local, и т.д.
+Зачем: для рекомендаций критично ЗНАТЬ когда метрика зафиксирована в источнике
+(не наше время загрузки). Юзер мог не синхронить часы 3 дня — "свежий" TR на деле старый.
+Извлечение source-времени из сырья — задача слоя 2.
+
 ### Polar physical-info (VO2max + пороги) — событийный pull, ловить в fetch_raw
 VO2max (фитнес-тест), ЛП по пульсу (anaerobic-threshold), max_hr, rhr лежат в Polar
 physical-information, НЕ в профиле. Достаются через transaction-механику (POST создать →
