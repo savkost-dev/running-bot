@@ -506,3 +506,100 @@ async def fetch_raw(db_user_id: int) -> dict | None:
     print(f"Polar fetch_raw: сохранено для user_id={db_user_id} "
           f"(profile={bool(profile)}, recharge={bool(recharge)}, sleep={bool(sleep)})")
     return raw
+
+# ── Physical info: VO2max + пороги (через transaction-механику) ──
+
+async def get_physical_info(db_user_id: int) -> dict | None:
+    """VO2max и пороги из Polar physical-information (фитнес-тест).
+
+    Polar отдаёт эти данные через transaction: POST создаёт транзакцию,
+    GET возвращает список записей, GET по ссылке — содержимое.
+    Путь С userId (в отличие от recharge/sleep).
+
+    Возвращает {vo2max, max_hr, rhr, aerobic_threshold_hr, anaerobic_threshold_hr, ...}
+    из самой свежей записи, или None.
+
+    Источник: фитнес-тест на часах Polar. anaerobic_threshold_hr ≈ ЛП по пульсу.
+    """
+    polar_user_id = _load_polar_user_id(db_user_id)
+    if not polar_user_id:
+        return None
+
+    token = _load_token(db_user_id)
+    if not token:
+        return None
+
+    base = f"{_BASE_URL}/users/{polar_user_id}/physical-information-transactions"
+
+    try:
+        async with aiohttp.ClientSession(timeout=_TIMEOUT) as session:
+            # 1. Создаём transaction (POST). 201 = есть данные, 204 = новых нет
+            async with session.post(base, headers=_headers(token)) as resp:
+                if resp.status == 401:
+                    token = await refresh_access_token(db_user_id)
+                    if not token:
+                        return None
+                    async with session.post(base, headers=_headers(token)) as resp2:
+                        if resp2.status != 201:
+                            print(f"Polar physical-info: нет новых данных (HTTP {resp2.status})")
+                            return None
+                        tx = (await resp2.json(content_type=None)).get("transaction-id")
+                elif resp.status == 201:
+                    tx = (await resp.json(content_type=None)).get("transaction-id")
+                else:
+                    print(f"Polar physical-info: нет новых данных (HTTP {resp.status})")
+                    return None
+
+            if not tx:
+                return None
+
+            # 2. Список записей в транзакции
+            tx_url = f"{base}/{tx}"
+            async with session.get(tx_url, headers=_headers(token)) as resp:
+                if resp.status != 200:
+                    return None
+                links = (await resp.json(content_type=None)).get("physical-informations", [])
+
+            if not links:
+                return None
+
+            # 3. Забираем все записи, берём самую свежую по created
+            records = []
+            for url in links:
+                # url абсолютный — берём path после _BASE_URL
+                path = url.replace(_BASE_URL, "")
+                rec = await _get(db_user_id, path)
+                if rec:
+                    records.append(rec)
+
+            if not records:
+                return None
+
+            records.sort(key=lambda r: r.get("created", ""))
+            last = records[-1]
+
+            # 4. Коммитим транзакцию (PUT) — помечаем прочитанной, чтобы данные не зависли
+            try:
+                async with session.put(tx_url, headers=_headers(token)) as resp:
+                    pass
+            except Exception:
+                pass
+
+    except Exception as e:
+        print(f"Polar get_physical_info error: {e}")
+        return None
+
+    vo2 = last.get("vo2-max")
+    result = {
+        "vo2max": int(vo2) if vo2 else None,
+        "max_hr": last.get("maximum-heart-rate"),
+        "rhr": last.get("resting-heart-rate"),
+        "aerobic_threshold_hr": last.get("aerobic-threshold"),
+        "anaerobic_threshold_hr": last.get("anaerobic-threshold"),
+        "weight": last.get("weight"),
+        "height": last.get("height"),
+        "date": (last.get("created") or "")[:10],
+    }
+    print(f"Polar physical-info [{result['date']}]: vo2max={result['vo2max']}, "
+          f"ПАНО_hr={result['anaerobic_threshold_hr']}, max_hr={result['max_hr']}")
+    return result
