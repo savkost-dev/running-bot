@@ -1047,7 +1047,7 @@ def build_ai_b_prompt(analysis: dict, user_data: dict, zones_map: dict, recovery
         + '"if_feeling_good": "что делать если ноги бегут легко на разминке — группа выше с темпом", '
         + '"if_tired": "что делать если тяжело — группа ниже или промежуточный темп X.5 с цифрами", '
         + '"gap_note": "вывод по разрывам: небольшой (можно переходить) или большой (нужна промежуточная)", '
-        + '"suitability_percentages": [{"group": "номер", "percentage": 0..100, "comment": "ключ: optimal/good/careful/ambitious/easy/hard/risk/unload/tooslow"}], '
+        + '"suitability_percentages": [{"group": "номер", "percentage": 0..100, "comment": "ТОЛЬКО одно слово без пробелов и двоеточий: optimal или good или careful или ambitious или easy или hard или risk или unload или tooslow"}], '
         + '"preparation_tips": ["совет 1"], '
         + '"warning": "предупреждение или null"'
         + "}"
@@ -1074,9 +1074,10 @@ def build_ai_b_prompt(analysis: dict, user_data: dict, zones_map: dict, recovery
         "Группа с максимальным percentage ДОЛЖНА совпадать с recommended_group.\n"
         "Поле 'group' в suitability_percentages — ТОЛЬКО номер (допустимо: '1','2','3','3.5','4','5').\n"
         "ЗАПРЕЩЕНО: 'Группа 3', '3 быстрая'. Только цифра или цифра с точкой.\n"
-        "Поле warning: если у рекомендованной группы recovery_pace быстрее 5:30 мин/км — "
-        "активное восстановление. Напиши: 'восстановление между отрезками ~X:XX/км — активное (трусцой)'. "
-        "Иначе — null.\n"
+        "Поле warning: проверь recovery_pace рекомендованной группы (видно в GROUPS выше как 'recovery X:XX'). "
+        "Если recovery_pace быстрее 5:30 мин/км — напиши ТОЧНО: "
+        "'восстановление между отрезками ~X:XX/км — активное (трусцой)' (вставь реальный темп). "
+        "Если recovery_pace >= 5:30 или нет — null. НИКАКОГО другого текста в warning.\n"
         "Отвечай только JSON, без лишнего текста."
     )
 
@@ -2839,7 +2840,8 @@ def format_long_run_message(advice: dict, workout: dict, stats: dict | None = No
             pct = int(item.get("percentage", 0))
             bar = _pct_bar(pct)
             comment_raw = (item.get('comment') or '').strip()
-            comment = _SUIT_EPITHET_MAP.get(comment_raw, comment_raw[:10])
+            _key = comment_raw.split(':')[0].strip().lower()
+            comment = _SUIT_EPITHET_MAP.get(_key, _SUIT_EPITHET_MAP.get(comment_raw, comment_raw[:10]))
             comment_str = f" — {_html.escape(comment)}" if comment else ""
             g_disp = g if any(c.isdigit() for c in g) else "Здоровье"
             lines.append(f"<code>Гр.{g_disp:<4} {bar} {pct:>3}%{comment_str}</code>")
