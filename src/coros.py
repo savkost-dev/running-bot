@@ -646,8 +646,7 @@ async def get_profile(db_user_id: int) -> dict | None:
     """Пол и дата рождения из COROS /account/query в едином формате.
 
     Возвращает {gender: 'male'/'female', birthdate: 'YYYY-MM-DD'} или None.
-    COROS: sex 0=мужской, 1=женский (ДОПУЩЕНИЕ по одному примеру — Ксения sex=1.
-    Если окажется наоборот — поправить тут и UPDATE в БД по всем COROS-юзерам).
+    COROS: sex 0=мужской, 1=женский (ПОДТВЕРЖДЕНО на Karpov user 20 муж / Ксения,Истомина жен).
     birthday: 19961205 → '1996-12-05'.
     """
     data = await _get(db_user_id, "/account/query")
