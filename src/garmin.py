@@ -73,7 +73,13 @@ async def _client(db_user_id: int):
         return None
     # Пробуем построить клиент из сохранённого токена
     try:
-        return await asyncio.to_thread(_build_client, token_json)
+        client = await asyncio.to_thread(_build_client, token_json)
+        # Сохраняем обратно — библиотека могла тихо обновить токен внутри login()
+        try:
+            _save_token(db_user_id, client.client.dumps())
+        except Exception:
+            pass
+        return client
     except Exception as e:
         # Токен протух (401 / Failed to retrieve social profile) — релогин по credentials
         print(f"Garmin: токен невалиден для user_id={db_user_id} ({str(e)[:60]}), пробуем re-auth...")
