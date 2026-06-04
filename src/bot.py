@@ -511,6 +511,31 @@ async def cmd_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text("❌ Не удалось обновить данные. Попробуй позже.")
 
 
+def _extract_group_pace(grp: dict) -> tuple:
+    """Возвращает (pace_start, pace_end, progression) для группы.
+    Работает и для лонга (прямые поля) и для интервальных (через blocks).
+    """
+    ps   = grp.get("pace_start")
+    pe   = grp.get("pace_end")
+    prog = grp.get("progression")
+    if not ps:
+        blocks = grp.get("blocks") or []
+        work_blocks = [b for b in blocks
+                       if b.get("type") == "work"
+                       or b.get("work_pace_start")
+                       or b.get("pace_start")]
+        if work_blocks:
+            ps = (work_blocks[0].get("work_pace_start")
+                  or work_blocks[0].get("pace_start"))
+            pe = (work_blocks[-1].get("work_pace_end")
+                  or work_blocks[-1].get("pace_end")
+                  or work_blocks[-1].get("work_pace_start")
+                  or work_blocks[-1].get("pace_start"))
+            if not prog and len(work_blocks) > 1 and ps and pe and ps != pe:
+                prog = True
+    return ps, pe, prog
+
+
 def _fmt_workout_date(workout_date: str) -> tuple[str, str]:
     """Возвращает (date_fmt '27.05', weekday 'Вторник')."""
     _WEEKDAYS_RU = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
@@ -2684,9 +2709,8 @@ async def _send_recommendation(
         (g for g in analysis.get("groups", []) if str(g.get("number", "")) == _adv_grp_num),
         {},
     )
-    advice["rec_group_pace_start"]  = _adv_grp.get("pace_start")
-    advice["rec_group_pace_end"]    = _adv_grp.get("pace_end")
-    advice["rec_group_progression"] = _adv_grp.get("progression")
+    advice["rec_group_pace_start"], advice["rec_group_pace_end"], \
+        advice["rec_group_progression"] = _extract_group_pace(_adv_grp)
 
     # Режим рекомендации (Шаг 2) из настроек пользователя; анализ (Шаг 1) всегда deep
     rec_mode = (get_preferences(db_user_id) or {}).get("ai_mode", "smart")
@@ -2697,6 +2721,7 @@ async def _send_recommendation(
         (g for g in analysis.get("groups", []) if str(g.get("number", "")) == _rec_group_num),
         None,
     )
+    _rg_ps, _rg_pe, _rg_prog = _extract_group_pace(_rec_grp or {})
     facts = {
         "group": advice.get("recommended_group"),
         "pace": advice.get("recommended_pace") or advice.get("first_half_pace"),
@@ -2714,9 +2739,9 @@ async def _send_recommendation(
         "athlete_name": name or None,
         "gender":                _profile.get("gender"),
         "birth_year":            _profile.get("birth_year"),
-        "rec_group_pace_start":  (_rec_grp or {}).get("pace_start"),
-        "rec_group_pace_end":    (_rec_grp or {}).get("pace_end"),
-        "rec_group_progression": (_rec_grp or {}).get("progression"),
+        "rec_group_pace_start":  _rg_ps,
+        "rec_group_pace_end":    _rg_pe,
+        "rec_group_progression": _rg_prog,
     }
     import functools
     prose, stats2 = await asyncio.get_event_loop().run_in_executor(

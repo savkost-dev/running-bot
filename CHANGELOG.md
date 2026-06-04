@@ -5,6 +5,16 @@
 
 ---
 
+## [0.24.8] 2026-06-04 — _extract_group_pace: темпы через blocks[] для интервальных
+
+### Добавлено / Изменено
+- **bot.py**: хелпер `_extract_group_pace(grp)` — возвращает `(pace_start, pace_end, progression)` с поддержкой обоих форматов: прямые поля (лонг) и `blocks[].work_pace_start/end` (интервальные)
+- **bot.py**: оба rec_group lookup в `_send_recommendation` используют хелпер
+- **`format_evening_message`**: заголовок `🎯 Группа X` — `ps→pe (прогрессия)` / `ps (прогрессия)` / `ps` / fallback на `recommended_pace`
+- **`_build_step2_prompt`**: ПОСЧИТАНО — `ps→pe (прогрессия)` / `ps` / `ps (прогрессия)` / ничего; инструкция прогрессии — только если `ps != pe`
+
+---
+
 ## [0.24.7] 2026-06-04 — Прогрессия: заголовок группы + промпт
 
 ### Изменено

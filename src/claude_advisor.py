@@ -2170,15 +2170,16 @@ def _build_step2_prompt(facts: dict, mode: str, long: bool) -> str:
         import datetime as _dt
         age = _dt.datetime.now().year - int(f["birth_year"])
         p.append(f"- Возраст: {age} лет")
-    if f.get("rec_group_pace_start") and f.get("rec_group_pace_end"):
-        ps = f.get("rec_group_pace_start")
-        pe = f.get("rec_group_pace_end")
-        pace_line = f"- Диапазон темпов группы {f.get('group')}: {ps}–{pe} мин/км"
-        if f.get("rec_group_progression"):
-            pace_line += " (прогрессия внутри серий)"
-        p.append(pace_line)
-    elif f.get("rec_group_progression"):
-        p.append("- В группе предусмотрена прогрессия темпа внутри серий")
+    _ps   = f.get("rec_group_pace_start")
+    _pe   = f.get("rec_group_pace_end")
+    _prog = f.get("rec_group_progression")
+    if _ps and _pe and _ps != _pe:
+        p.append(f"- Диапазон темпов группы {f.get('group')}: {_ps}→{_pe} мин/км (прогрессия внутри серий)")
+    elif _ps and _pe:
+        p.append(f"- Темп группы {f.get('group')}: {_ps} мин/км")
+    elif _ps:
+        pace_note = " (прогрессия)" if _prog else ""
+        p.append(f"- Темп группы {f.get('group')}: {_ps} мин/км{pace_note}")
     if f.get("overall_purpose"):
         p.append(f"- Что развивает тренировка: {f.get('overall_purpose')}")
     if f.get("block_contrast"):
@@ -2190,7 +2191,7 @@ def _build_step2_prompt(facts: dict, mode: str, long: bool) -> str:
         what = " и эта стратегия" if long else ""
         p.append(f"Задача: объясни ПОЧЕМУ именно эта группа{what} оптимальны — в логике выше, "
                  "на данных бегуна. Тёплый тренерский тон, 2-4 предложения.")
-    if f.get("rec_group_progression"):
+    if f.get("rec_group_progression") and f.get("rec_group_pace_start") != f.get("rec_group_pace_end"):
         p.append(
             "Важно: в этой группе прогрессия темпа — обязательно упомяни "
             "это и дай короткий совет как её выполнять (когда начинать ускоряться, "
@@ -2472,16 +2473,19 @@ def format_evening_message(advice: dict, workout: dict, stats: dict | None = Non
         lines.append(sep)
 
     # Основная рекомендация
-    _rec_prog = advice.get("rec_group_progression")
-    _ps = advice.get("rec_group_pace_start")
-    _pe = advice.get("rec_group_pace_end")
-    if _rec_prog and _ps and _pe:
-        lines.append(f"🎯 <b>Группа {group} — {_html.escape(_ps)}→{_html.escape(_pe)} (прогрессия)</b>")
-    elif _rec_prog and pace:
-        lines.append(f"🎯 <b>Группа {group} — {_html.escape(pace)} (прогрессия)</b>")
+    _ps   = advice.get("rec_group_pace_start")
+    _pe   = advice.get("rec_group_pace_end")
+    _prog = advice.get("rec_group_progression")
+    if _ps and _pe and _ps != _pe:
+        group_header = f"🎯 <b>Группа {group} — {_html.escape(_ps)}→{_html.escape(_pe)} (прогрессия)</b>"
+    elif _ps and _prog:
+        group_header = f"🎯 <b>Группа {group} — {_html.escape(_ps)} (прогрессия)</b>"
+    elif _ps:
+        group_header = f"🎯 <b>Группа {group} — {_html.escape(_ps)}</b>"
     else:
         pace_str = f" — {_html.escape(pace)}" if pace else ""
-        lines.append(f"🎯 <b>Группа {group}{pace_str}</b>")
+        group_header = f"🎯 <b>Группа {group}{pace_str}</b>"
+    lines.append(group_header)
     if reason:
         lines.append(f"<i>{reason}</i>")
 
