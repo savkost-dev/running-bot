@@ -542,9 +542,9 @@ def _build_simple_workout_text(workout: dict) -> str:
         "но не могу дать рекомендаций о погоде, разминке, группе, питании и стратегии. 🤷"
     )
     lines.append(
-        "\nЧтобы получить полный анализ — заполни профиль и подключи трекер:\n"
+        "\nДля анализа заполни профиль, а для расширенного подключи один из трекеров:\n"
         "👤 /profile — VO2max и лактатный порог\n"
-        "🔗 Garmin, COROS или Polar — /connect_garmin, /connect_coros"
+        "🔗 /connect_garmin, /connect_coros, /connect_polar, /connect_strava"
     )
     return "\n".join(lines)
 
@@ -2618,10 +2618,16 @@ async def _send_recommendation(
         if live:
             simple = _build_simple_workout_text(live)
         else:
-            simple = (f"📢 Тренировка {row.get('workout_date', '')}\n\n"
-                      "Заполни профиль и подключи трекер, чтобы получить рекомендацию группы. "
-                      "Новичкам подойдёт группа здоровья (бег/ходьба).")
-        await _out(banner + simple)
+            simple = (
+                f"📢 Тренировка {row.get('workout_date', '')}\n\n"
+                "Для анализа заполни профиль, а для расширенного подключи один из трекеров."
+            )
+        no_data_markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("👤 Профиль",      callback_data="my_profile"),
+             InlineKeyboardButton("🔗 Сервисы →",    callback_data="show_services")],
+            [InlineKeyboardButton("🏠 Главное меню",  callback_data="main_menu_new")],
+        ])
+        await _out(banner + simple, markup=no_data_markup)
         return
 
     # has_data=True → персональная рекомендация из кэша
