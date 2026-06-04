@@ -1253,13 +1253,13 @@ def get_unified_data(user_id: int, max_age_hours: int = 12) -> dict | None:
 
 
 def get_users_list_for_b() -> list[dict]:
-    """Пользователи для кнопки /b."""
+    """Пользователи для кнопок /b и /a_user."""
     with get_connection() as conn:
         rows = conn.execute(
-            "SELECT id, telegram_id, COALESCE(name, username, 'user_' || id) "
+            "SELECT id, telegram_id, COALESCE(name, username, 'user_' || id), username "
             "FROM users ORDER BY id"
         ).fetchall()
-    return [{"db_user_id": r[0], "telegram_id": r[1], "name": r[2]} for r in rows]
+    return [{"db_user_id": r[0], "telegram_id": r[1], "name": r[2], "username": r[3]} for r in rows]
 
 
 if __name__ == "__main__":

@@ -3823,7 +3823,10 @@ async def b_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("Нет пользователей в базе.")
         return
     keyboard = [
-        [InlineKeyboardButton(u["name"], callback_data=f"b_user_{u['db_user_id']}")]
+        [InlineKeyboardButton(
+            u["name"] + (f" (@{u['username']})" if u.get("username") else ""),
+            callback_data=f"b_user_{u['db_user_id']}"
+        )]
         for u in users
     ]
     await update.message.reply_text(
@@ -3897,7 +3900,10 @@ async def a_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text("Нет пользователей в базе.")
         return
     keyboard = [
-        [InlineKeyboardButton(u["name"], callback_data=f"a_user_{u['db_user_id']}")]
+        [InlineKeyboardButton(
+            u["name"] + (f" (@{u['username']})" if u.get("username") else ""),
+            callback_data=f"a_user_{u['db_user_id']}"
+        )]
         for u in users
     ]
     await update.message.reply_text(
