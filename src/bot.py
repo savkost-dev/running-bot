@@ -918,7 +918,11 @@ def _build_help_text(is_admin: bool) -> str:
             "/show_analyze — показать последний Шаг 1 из базы\n"
             "/b — вариант B для себя\n"
             "/b_user — вариант B для выбранного пользователя\n"
-            "/a_user — вариант A для выбранного пользователя"
+            "/a_user — вариант A для выбранного пользователя\n"
+            "/p_b — промпт варианта B для себя\n"
+            "/p_b_user — промпт варианта B для выбранного пользователя\n"
+            "/p_a — промпт варианта A для себя\n"
+            "/p_a_user — промпт варианта A для выбранного пользователя"
         )
     return text
 
@@ -3935,6 +3939,219 @@ async def a_user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await _send_recommendation(user["telegram_id"], user["name"], context, long=False, msg=msg)
 
 
+async def _send_prompt_text(send_fn, prompt: str) -> None:
+    """Отправляет текст промпта кусками по 4096 символов."""
+    chunk_size = 4096
+    for i in range(0, max(len(prompt), 1), chunk_size):
+        await send_fn(prompt[i:i + chunk_size])
+
+
+async def _build_analysis_and_user_data(db_user_id: int):
+    """Возвращает (analysis, user_data, workout_dict, weather_line) или (None, ...) при ошибке."""
+    import json as _json
+    live = await find_next_workout()
+    cur_post = live.get("post_id") if live else None
+    cur_date = live.get("workout_date") if live else None
+    cur_edit = live.get("edit_date") if live else None
+    row, status = get_latest_workout_analysis("interval", cur_post, cur_date, cur_edit)
+    if status == "empty" or row is None:
+        return None, None, None, None
+    try:
+        analysis = _json.loads(row.get("analyzed_json") or "{}")
+    except Exception:
+        analysis = {}
+    profile = get_user_profile(db_user_id) or {}
+    user_data = {
+        "db_user_id": db_user_id,
+        "specialization": profile.get("specialization"),
+        "recovery": await _get_recovery_data(db_user_id, force_fresh=True),
+    }
+    workout_dict = dict(live) if live else {"workout_date": analysis.get("workout_date", "")}
+    workout_dict["workout_type"] = "interval"
+    workout_dict["is_past"] = (status == "past")
+    workout_dict["even_pace_available"] = analysis.get("even_pace_available")
+    weather = await get_weather_for_workout(
+        workout_dict.get("location", ""),
+        workout_dict.get("workout_date", ""),
+        workout_dict.get("schedule", ""),
+    )
+    weather_line = format_weather_for_message(weather) if weather else ""
+    return analysis, user_data, workout_dict, weather_line
+
+
+# ── /p_b — промпт варианта B для себя (admin only) ──────────────────────
+
+async def p_b_self_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+        return
+    admin_tid = update.effective_user.id
+    db_user_id = get_or_create_user(admin_tid, update.effective_user.full_name or "admin")
+    analysis, user_data, _, _ = await _build_analysis_and_user_data(db_user_id)
+    if analysis is None:
+        await update.message.reply_text("😔 Нет анонса интервальной тренировки.")
+        return
+    import zones as _z
+    zinfo = _z.get_pace_zones(db_user_id)
+    zones_map = (zinfo or {}).get("zones") or {}
+    recovery = user_data.get("recovery")
+    prompt = claude_advisor.build_ai_b_prompt(analysis, user_data, zones_map, recovery)
+    await _send_prompt_text(update.message.reply_text, prompt)
+
+
+async def p_b_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+        return
+    users = get_users_list_for_b()
+    if not users:
+        await update.message.reply_text("Нет пользователей в базе.")
+        return
+    keyboard = [
+        [InlineKeyboardButton(
+            u["name"] + (f" (@{u['username']})" if u.get("username") else ""),
+            callback_data=f"pb_user_{u['db_user_id']}"
+        )]
+        for u in users
+    ]
+    await update.message.reply_text(
+        "📋 Промпт B — выбери пользователя:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+async def pb_user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query.from_user.id not in ADMIN_TELEGRAM_IDS:
+        await query.answer("Нет доступа.")
+        return
+    await query.answer()
+    db_user_id = int(query.data.rsplit("_", 1)[-1])
+    profile = get_user_profile(db_user_id) or {}
+    user_name = profile.get("name") or profile.get("username") or f"user_{db_user_id}"
+    analysis, user_data, _, _ = await _build_analysis_and_user_data(db_user_id)
+    if analysis is None:
+        await query.edit_message_text("😔 Нет анонса интервальной тренировки.")
+        return
+    import zones as _z
+    zinfo = _z.get_pace_zones(db_user_id)
+    zones_map = (zinfo or {}).get("zones") or {}
+    recovery = user_data.get("recovery")
+    await query.edit_message_text(f"📋 Промпт B — <b>{user_name}</b>", parse_mode="HTML")
+    prompt = claude_advisor.build_ai_b_prompt(analysis, user_data, zones_map, recovery)
+    admin_tid = query.from_user.id
+    await _send_prompt_text(
+        lambda t: context.bot.send_message(admin_tid, t),
+        prompt,
+    )
+
+
+# ── /p_a — промпт варианта A для себя (admin only) ──────────────────────
+
+async def _build_step2_facts(db_user_id: int, name: str, long: bool = False):
+    """Собирает facts-dict для _build_step2_prompt, аналогично _send_recommendation."""
+    import json as _json
+    wtype = "long" if long else "interval"
+    live = await (find_next_long_run() if long else find_next_workout())
+    cur_post = live.get("post_id") if live else None
+    cur_date = live.get("workout_date") if live else None
+    cur_edit = live.get("edit_date") if live else None
+    row, status = get_latest_workout_analysis(wtype, cur_post, cur_date, cur_edit)
+    if status == "empty" or row is None:
+        return None, None, None
+    try:
+        analysis = _json.loads(row.get("analyzed_json") or "{}")
+    except Exception:
+        analysis = {}
+    user_data = {
+        "db_user_id": db_user_id,
+        "specialization": (get_user_profile(db_user_id) or {}).get("specialization"),
+        "recovery": await _get_recovery_data(db_user_id, force_fresh=True),
+    }
+    rec = (claude_advisor.recommend_long(analysis, user_data) if long
+           else claude_advisor.recommend_group(analysis, user_data))
+    if not rec or not rec.get("ok"):
+        return None, None, (rec or {}).get("note", "Не удалось собрать рекомендацию.")
+    if long:
+        advice = claude_advisor.recommendation_to_long_advice(rec, analysis, user_data["recovery"])
+    else:
+        advice = claude_advisor.recommendation_to_advice(rec, analysis, user_data["recovery"])
+    rec_mode = (get_preferences(db_user_id) or {}).get("ai_mode", "smart")
+    main = rec.get("main_group") or {}
+    facts = {
+        "group": advice.get("recommended_group"),
+        "pace": advice.get("recommended_pace") or advice.get("first_half_pace"),
+        "zone": main.get("zone_disp") or main.get("zone_label"),
+        "pct": main.get("pct"),
+        "suitability": advice.get("suitability_percentages"),
+        "specialization": rec.get("specialization_label") or user_data.get("specialization"),
+        "character": rec.get("workout_character"),
+        "recovery": claude_advisor._recovery_descriptor(user_data["recovery"]),
+        "overall_purpose": analysis.get("overall_purpose"),
+        "block_contrast": analysis.get("block_contrast"),
+        "strategy": advice.get("run_strategy"),
+        "first_half_pace": advice.get("first_half_pace"),
+        "second_half_pace": advice.get("second_half_pace"),
+        "athlete_name": name or None,
+    }
+    return facts, rec_mode, None
+
+
+async def p_a_self_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+        return
+    admin_tid = update.effective_user.id
+    name = update.effective_user.full_name or "admin"
+    db_user_id = get_or_create_user(admin_tid, name)
+    facts, rec_mode, err = await _build_step2_facts(db_user_id, name, long=False)
+    if facts is None:
+        await update.message.reply_text(err or "😔 Нет анонса интервальной тренировки.")
+        return
+    prompt = claude_advisor._build_step2_prompt(facts, rec_mode, False)
+    await _send_prompt_text(update.message.reply_text, prompt)
+
+
+async def p_a_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+        return
+    users = get_users_list_for_b()
+    if not users:
+        await update.message.reply_text("Нет пользователей в базе.")
+        return
+    keyboard = [
+        [InlineKeyboardButton(
+            u["name"] + (f" (@{u['username']})" if u.get("username") else ""),
+            callback_data=f"pa_user_{u['db_user_id']}"
+        )]
+        for u in users
+    ]
+    await update.message.reply_text(
+        "📋 Промпт A — выбери пользователя:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+async def pa_user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query.from_user.id not in ADMIN_TELEGRAM_IDS:
+        await query.answer("Нет доступа.")
+        return
+    await query.answer()
+    db_user_id = int(query.data.rsplit("_", 1)[-1])
+    profile = get_user_profile(db_user_id) or {}
+    user_name = profile.get("name") or profile.get("username") or f"user_{db_user_id}"
+    telegram_id = profile.get("telegram_id") or db_user_id
+    facts, rec_mode, err = await _build_step2_facts(db_user_id, user_name, long=False)
+    if facts is None:
+        await query.edit_message_text(err or "😔 Нет анонса интервальной тренировки.")
+        return
+    await query.edit_message_text(f"📋 Промпт A — <b>{user_name}</b>", parse_mode="HTML")
+    prompt = claude_advisor._build_step2_prompt(facts, rec_mode, False)
+    admin_tid = query.from_user.id
+    await _send_prompt_text(
+        lambda t: context.bot.send_message(admin_tid, t),
+        prompt,
+    )
+
+
 def main():
     init_db()
 
@@ -3973,8 +4190,14 @@ def main():
     app.add_handler(CommandHandler("b",         b_self_command))
     app.add_handler(CommandHandler("b_user",    b_command))
     app.add_handler(CommandHandler("a_user",    a_user_command))
-    app.add_handler(CallbackQueryHandler(b_user_callback, pattern=r"^b_user_\d+$"))
-    app.add_handler(CallbackQueryHandler(a_user_callback, pattern=r"^a_user_\d+$"))
+    app.add_handler(CommandHandler("p_b",       p_b_self_command))
+    app.add_handler(CommandHandler("p_b_user",  p_b_command))
+    app.add_handler(CommandHandler("p_a",       p_a_self_command))
+    app.add_handler(CommandHandler("p_a_user",  p_a_command))
+    app.add_handler(CallbackQueryHandler(b_user_callback,  pattern=r"^b_user_\d+$"))
+    app.add_handler(CallbackQueryHandler(a_user_callback,  pattern=r"^a_user_\d+$"))
+    app.add_handler(CallbackQueryHandler(pb_user_callback, pattern=r"^pb_user_\d+$"))
+    app.add_handler(CallbackQueryHandler(pa_user_callback, pattern=r"^pa_user_\d+$"))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     app.add_error_handler(global_error_handler)
