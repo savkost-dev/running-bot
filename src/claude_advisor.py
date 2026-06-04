@@ -2170,13 +2170,15 @@ def _build_step2_prompt(facts: dict, mode: str, long: bool) -> str:
         import datetime as _dt
         age = _dt.datetime.now().year - int(f["birth_year"])
         p.append(f"- Возраст: {age} лет")
-    if f.get("rec_group_pace_start") or f.get("rec_group_pace_end"):
-        ps = f.get("rec_group_pace_start") or "?"
-        pe = f.get("rec_group_pace_end") or "?"
+    if f.get("rec_group_pace_start") and f.get("rec_group_pace_end"):
+        ps = f.get("rec_group_pace_start")
+        pe = f.get("rec_group_pace_end")
         pace_line = f"- Диапазон темпов группы {f.get('group')}: {ps}–{pe} мин/км"
         if f.get("rec_group_progression"):
-            pace_line += ", прогрессия внутри серий"
+            pace_line += " (прогрессия внутри серий)"
         p.append(pace_line)
+    elif f.get("rec_group_progression"):
+        p.append("- В группе предусмотрена прогрессия темпа внутри серий")
     if f.get("overall_purpose"):
         p.append(f"- Что развивает тренировка: {f.get('overall_purpose')}")
     if f.get("block_contrast"):
@@ -2190,7 +2192,7 @@ def _build_step2_prompt(facts: dict, mode: str, long: bool) -> str:
                  "на данных бегуна. Тёплый тренерский тон, 2-4 предложения.")
     if f.get("rec_group_progression"):
         p.append(
-            "Важно: в этой группе предусмотрена прогрессия темпа — обязательно упомяни "
+            "Важно: в этой группе прогрессия темпа — обязательно упомяни "
             "это и дай короткий совет как её выполнять (когда начинать ускоряться, "
             "на что ориентироваться)."
         )
@@ -2470,8 +2472,16 @@ def format_evening_message(advice: dict, workout: dict, stats: dict | None = Non
         lines.append(sep)
 
     # Основная рекомендация
-    pace_str = f" — {_html.escape(pace)}" if pace else ""
-    lines.append(f"🎯 <b>Группа {group}{pace_str}</b>")
+    _rec_prog = advice.get("rec_group_progression")
+    _ps = advice.get("rec_group_pace_start")
+    _pe = advice.get("rec_group_pace_end")
+    if _rec_prog and _ps and _pe:
+        lines.append(f"🎯 <b>Группа {group} — {_html.escape(_ps)}→{_html.escape(_pe)} (прогрессия)</b>")
+    elif _rec_prog and pace:
+        lines.append(f"🎯 <b>Группа {group} — {_html.escape(pace)} (прогрессия)</b>")
+    else:
+        pace_str = f" — {_html.escape(pace)}" if pace else ""
+        lines.append(f"🎯 <b>Группа {group}{pace_str}</b>")
     if reason:
         lines.append(f"<i>{reason}</i>")
 

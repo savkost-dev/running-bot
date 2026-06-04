@@ -2678,6 +2678,16 @@ async def _send_recommendation(
     else:
         advice = claude_advisor.recommendation_to_advice(rec, analysis, user_data["recovery"])
 
+    # Поля прогрессии рекомендованной группы — для заголовка и промпта
+    _adv_grp_num = str(advice.get("recommended_group") or "")
+    _adv_grp = next(
+        (g for g in analysis.get("groups", []) if str(g.get("number", "")) == _adv_grp_num),
+        {},
+    )
+    advice["rec_group_pace_start"]  = _adv_grp.get("pace_start")
+    advice["rec_group_pace_end"]    = _adv_grp.get("pace_end")
+    advice["rec_group_progression"] = _adv_grp.get("progression")
+
     # Режим рекомендации (Шаг 2) из настроек пользователя; анализ (Шаг 1) всегда deep
     rec_mode = (get_preferences(db_user_id) or {}).get("ai_mode", "smart")
     main = rec.get("main_group") or {}
