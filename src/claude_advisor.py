@@ -1070,6 +1070,9 @@ def build_ai_b_prompt(analysis: dict, user_data: dict, zones_map: dict, recovery
         f"Восстановление: {rec_text}\n\n"
         "Дай рекомендацию строго в формате JSON:\n\n"
         f"{json_schema}\n\n"
+        "Правило эпитетов: группы с номером МЕНЬШЕ рекомендованной — быстрее и тяжелее "
+        "(амбициозно/hard/risk); группы с номером БОЛЬШЕ — медленнее и легче "
+        "(easy/careful/tooslow). Группа 1 — самая быстрая. Эпитеты строго следуют этому направлению.\n"
         "Рассмотри альтернативы: какая группа для скорости, какая для восстановления.\n"
         "Группа с максимальным percentage ДОЛЖНА совпадать с recommended_group.\n"
         "Поле 'group' в suitability_percentages — ТОЛЬКО номер (допустимо: '1','2','3','3.5','4','5').\n"
@@ -2154,6 +2157,11 @@ def _build_step2_prompt(facts: dict, mode: str, long: bool) -> str:
         sp = f", вторая половина {f.get('second_half_pace')}" if f.get("second_half_pace") else ""
         p.append(f"- Стратегия: {strat}; первая половина {f.get('first_half_pace')}{sp}")
     if f.get("suitability"):
+        p.append(
+            "Правило эпитетов: группы с номером МЕНЬШЕ рекомендованной — быстрее и тяжелее "
+            "(амбициозно/hard/risk); группы с номером БОЛЬШЕ — медленнее и легче "
+            "(easy/careful/tooslow). Группа 1 — самая быстрая. Эпитеты строго следуют этому направлению."
+        )
         p.append("Группа 1 — самая быстрая, далее по убыванию скорости.")
         p.append("- Шкала групп: " + ", ".join(
             f"гр.{s['group']} {s['percentage']}%" for s in f["suitability"][:8]))
