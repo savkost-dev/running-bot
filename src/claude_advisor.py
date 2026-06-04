@@ -2154,6 +2154,7 @@ def _build_step2_prompt(facts: dict, mode: str, long: bool) -> str:
         sp = f", вторая половина {f.get('second_half_pace')}" if f.get("second_half_pace") else ""
         p.append(f"- Стратегия: {strat}; первая половина {f.get('first_half_pace')}{sp}")
     if f.get("suitability"):
+        p.append("Группа 1 — самая быстрая, далее по убыванию скорости.")
         p.append("- Шкала групп: " + ", ".join(
             f"гр.{s['group']} {s['percentage']}%" for s in f["suitability"][:8]))
     if f.get("specialization"):
@@ -2162,6 +2163,20 @@ def _build_step2_prompt(facts: dict, mode: str, long: bool) -> str:
         p.append(f"- Характер тренировки: {f.get('character')}")
     if f.get("recovery"):
         p.append(f"- Восстановление сегодня: {f.get('recovery')}")
+    if f.get("gender"):
+        gender_str = "мужской" if f["gender"] == "male" else "женский"
+        p.append(f"- Пол: {gender_str}")
+    if f.get("birth_year"):
+        import datetime as _dt
+        age = _dt.datetime.now().year - int(f["birth_year"])
+        p.append(f"- Возраст: {age} лет")
+    if f.get("rec_group_pace_start") or f.get("rec_group_pace_end"):
+        ps = f.get("rec_group_pace_start") or "?"
+        pe = f.get("rec_group_pace_end") or "?"
+        pace_line = f"- Диапазон темпов группы {f.get('group')}: {ps}–{pe} мин/км"
+        if f.get("rec_group_progression"):
+            pace_line += ", прогрессия внутри серий"
+        p.append(pace_line)
     if f.get("overall_purpose"):
         p.append(f"- Что развивает тренировка: {f.get('overall_purpose')}")
     if f.get("block_contrast"):
@@ -2173,6 +2188,12 @@ def _build_step2_prompt(facts: dict, mode: str, long: bool) -> str:
         what = " и эта стратегия" if long else ""
         p.append(f"Задача: объясни ПОЧЕМУ именно эта группа{what} оптимальны — в логике выше, "
                  "на данных бегуна. Тёплый тренерский тон, 2-4 предложения.")
+    if f.get("rec_group_progression"):
+        p.append(
+            "Важно: в этой группе предусмотрена прогрессия темпа — обязательно упомяни "
+            "это и дай короткий совет как её выполнять (когда начинать ускоряться, "
+            "на что ориентироваться)."
+        )
     schema = '{"reason": "почему эта группа"'
     if long:
         schema += ', "strategy_reason": "почему такая стратегия"'

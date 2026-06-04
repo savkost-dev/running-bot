@@ -2681,6 +2681,12 @@ async def _send_recommendation(
     # Режим рекомендации (Шаг 2) из настроек пользователя; анализ (Шаг 1) всегда deep
     rec_mode = (get_preferences(db_user_id) or {}).get("ai_mode", "smart")
     main = rec.get("main_group") or {}
+    _profile = get_user_profile(db_user_id) or {}
+    _rec_group_num = str(advice.get("recommended_group") or "")
+    _rec_grp = next(
+        (g for g in analysis.get("groups", []) if str(g.get("number", "")) == _rec_group_num),
+        None,
+    )
     facts = {
         "group": advice.get("recommended_group"),
         "pace": advice.get("recommended_pace") or advice.get("first_half_pace"),
@@ -2696,6 +2702,11 @@ async def _send_recommendation(
         "first_half_pace": advice.get("first_half_pace"),
         "second_half_pace": advice.get("second_half_pace"),
         "athlete_name": name or None,
+        "gender":                _profile.get("gender"),
+        "birth_year":            _profile.get("birth_year"),
+        "rec_group_pace_start":  (_rec_grp or {}).get("pace_start"),
+        "rec_group_pace_end":    (_rec_grp or {}).get("pace_end"),
+        "rec_group_progression": (_rec_grp or {}).get("progression"),
     }
     import functools
     prose, stats2 = await asyncio.get_event_loop().run_in_executor(
