@@ -1,5 +1,5 @@
-VERSION = "0.24.16"
+VERSION = "0.24.17"
 BUILD_DATE = "2026-06-05"
 CHANGES = [
-    "Вариант B: _recovery_scenario (3 сценария), recovery_forecast в промпте и сообщении",
+    "_build_variant_b_prompt: единая точка сборки промпта B для /b и /p_b",
 ]

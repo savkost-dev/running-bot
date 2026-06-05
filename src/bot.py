@@ -2553,46 +2553,13 @@ async def _send_ai_variant_b(
     """
     import functools
     db_user_id = user_data.get("db_user_id")
-    import zones as _zones_mod
-    zinfo = _zones_mod.get_pace_zones(db_user_id) if db_user_id is not None else None
-    zones_map = (zinfo or {}).get("zones") or {}
-    recovery = user_data.get("recovery")
-    if db_user_id is not None:
-        unified = await _get_unified_recovery(db_user_id)
-        if unified:
-            recovery = unified
     rec_mode = (get_preferences(db_user_id) or {}).get("ai_mode", "smart")
 
-    from datetime import datetime, timezone, timedelta
-    import re as _re_b
-    MSK = timezone(timedelta(hours=3))
-    now = datetime.now(MSK)
-    schedule = (workout_dict or {}).get("schedule", "") or ""
-    workout_date = (workout_dict or {}).get("workout_date", "")
-    m = _re_b.search(r'(\d{1,2}:\d{2})', schedule)
-    start_time = m.group(1) if m else "07:00"
-    workout_dt = None
-    try:
-        workout_dt = datetime.strptime(
-            f"{workout_date} {start_time}", "%Y-%m-%d %H:%M"
-        ).replace(tzinfo=MSK)
-    except Exception:
-        pass
-    if workout_dict is not None and workout_dt:
-        # Тренировка считается прошедшей после 09:00 МСК в день тренировки
-        cutoff_dt = workout_dt.replace(hour=9, minute=0, second=0, microsecond=0)
-        workout_dict["is_past"] = now > cutoff_dt
-
-    scenario_ctx = _recovery_scenario(
-        workout_dict or {},
-        (recovery or {}).get("data_fetched_at"),
+    prompt, scenario_ctx = await _build_variant_b_prompt(
+        db_user_id, analysis, user_data, workout_dict
     )
 
     try:
-        prompt = claude_advisor.build_ai_b_prompt(
-            analysis, user_data, zones_map, recovery,
-            recovery_scenario_text=scenario_ctx["prompt_text"],
-        )
         result = await asyncio.get_event_loop().run_in_executor(
             None,
             functools.partial(claude_advisor.ask_groq, prompt, rec_mode)
@@ -3578,6 +3545,53 @@ def _recovery_scenario(workout_dict: dict, data_fetched_at: str | None) -> dict:
     }
 
 
+async def _build_variant_b_prompt(
+    db_user_id: int,
+    analysis: dict,
+    user_data: dict,
+    workout_dict: dict | None,
+) -> tuple[str, dict]:
+    """Единая точка сборки промпта варианта B.
+    Возвращает (prompt_str, scenario_ctx).
+    Используется и /b (_send_ai_variant_b) и /p_b (показ промпта).
+    """
+    import zones as _z
+    from datetime import datetime, timezone, timedelta
+    import re as _re_bvp
+
+    zinfo = _z.get_pace_zones(db_user_id) if db_user_id else None
+    zones_map = (zinfo or {}).get("zones") or {}
+    recovery = await _get_unified_recovery(db_user_id)
+
+    # is_past по реальному времени (cutoff 09:00 МСК)
+    MSK = timezone(timedelta(hours=3))
+    now = datetime.now(MSK)
+    schedule = (workout_dict or {}).get("schedule", "") or ""
+    workout_date = (workout_dict or {}).get("workout_date", "")
+    m = _re_bvp.search(r'(\d{1,2}:\d{2})', schedule)
+    start_time = m.group(1) if m else "07:00"
+    workout_dt = None
+    try:
+        workout_dt = datetime.strptime(
+            f"{workout_date} {start_time}", "%Y-%m-%d %H:%M"
+        ).replace(tzinfo=MSK)
+    except Exception:
+        pass
+    if workout_dict is not None and workout_dt:
+        cutoff_dt = workout_dt.replace(hour=9, minute=0, second=0, microsecond=0)
+        workout_dict["is_past"] = now > cutoff_dt
+
+    scenario_ctx = _recovery_scenario(
+        workout_dict or {},
+        (recovery or {}).get("data_fetched_at"),
+    )
+    prompt = claude_advisor.build_ai_b_prompt(
+        analysis, user_data, zones_map, recovery,
+        recovery_scenario_text=scenario_ctx["prompt_text"],
+    )
+    return prompt, scenario_ctx
+
+
 # ── ПРОВЕРКА НОВЫХ АНОНСОВ ───────────────────────────────────
 
 async def _notify_all(context, text: str, notify_key: str = "") -> int:
@@ -4223,15 +4237,11 @@ async def p_b_self_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
     admin_tid = update.effective_user.id
     db_user_id = get_or_create_user(admin_tid, update.effective_user.full_name or "admin")
-    analysis, user_data, _, _ = await _build_analysis_and_user_data(db_user_id)
+    analysis, user_data, workout_dict, _ = await _build_analysis_and_user_data(db_user_id)
     if analysis is None:
         await update.message.reply_text("😔 Нет анонса интервальной тренировки.")
         return
-    import zones as _z
-    zinfo = _z.get_pace_zones(db_user_id)
-    zones_map = (zinfo or {}).get("zones") or {}
-    recovery = user_data.get("recovery")
-    prompt = claude_advisor.build_ai_b_prompt(analysis, user_data, zones_map, recovery)
+    prompt, _ = await _build_variant_b_prompt(db_user_id, analysis, user_data, workout_dict)
     await _send_prompt_text(update.message.reply_text, prompt)
 
 
@@ -4264,16 +4274,12 @@ async def pb_user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     db_user_id = int(query.data.rsplit("_", 1)[-1])
     profile = get_user_profile(db_user_id) or {}
     user_name = profile.get("name") or profile.get("username") or f"user_{db_user_id}"
-    analysis, user_data, _, _ = await _build_analysis_and_user_data(db_user_id)
+    analysis, user_data, workout_dict, _ = await _build_analysis_and_user_data(db_user_id)
     if analysis is None:
         await query.edit_message_text("😔 Нет анонса интервальной тренировки.")
         return
-    import zones as _z
-    zinfo = _z.get_pace_zones(db_user_id)
-    zones_map = (zinfo or {}).get("zones") or {}
-    recovery = user_data.get("recovery")
     await query.edit_message_text(f"📋 Промпт B — <b>{user_name}</b>", parse_mode="HTML")
-    prompt = claude_advisor.build_ai_b_prompt(analysis, user_data, zones_map, recovery)
+    prompt, _ = await _build_variant_b_prompt(db_user_id, analysis, user_data, workout_dict)
     admin_tid = query.from_user.id
     await _send_prompt_text(
         lambda t: context.bot.send_message(admin_tid, t),
