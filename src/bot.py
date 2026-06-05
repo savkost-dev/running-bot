@@ -3417,28 +3417,46 @@ async def _get_recovery_data(db_user_id: int, force_fresh: bool = False) -> dict
 
 
 async def _get_unified_recovery(db_user_id: int, force_fresh: bool = True) -> dict | None:
-    """Слой 3: данные восстановления + метка времени из unified_cache."""
-    recovery = await _get_recovery_data(db_user_id, force_fresh=force_fresh)
-    if not recovery:
-        return None
-    # Метка времени синхронизации — из unified_cache
+    from database import get_unified_data
+    from data_normalizer import UnifiedUserData
+
+    if force_fresh:
+        # Будущая тренировка — свежие данные + метка времени из unified_cache
+        recovery = await _get_recovery_data(db_user_id, force_fresh=True)
+        if not recovery:
+            return None
+        try:
+            row = get_unified_data(db_user_id, max_age_hours=20)
+            if row:
+                u = UnifiedUserData.from_json(row["unified_json"])
+                dd = u.data_dates or {}
+                recovery["data_fetched_at"] = (dd.get("garmin_synced_at")
+                    or dd.get("garmin_fetched") or dd.get("coros_fetched")
+                    or dd.get("polar_fetched") or dd.get("strava_fetched")
+                    or row.get("updated_at"))
+        except Exception:
+            pass
+        return recovery
+
+    # Прошедшая тренировка — данные ИЗ unified_cache (утренний снимок)
     try:
-        from database import get_unified_data
-        from data_normalizer import UnifiedUserData
         row = get_unified_data(db_user_id, max_age_hours=20)
-        if row:
-            u = UnifiedUserData.from_json(row["unified_json"])
-            dd = u.data_dates or {}
-            data_fetched_at = (dd.get("garmin_synced_at")
-                               or dd.get("garmin_fetched")
-                               or dd.get("coros_fetched")
-                               or dd.get("polar_fetched")
-                               or dd.get("strava_fetched")
-                               or row.get("updated_at"))
-            recovery["data_fetched_at"] = data_fetched_at
+        if not row:
+            return await _get_recovery_data(db_user_id, force_fresh=False)
+        u = UnifiedUserData.from_json(row["unified_json"])
+        dd = u.data_dates or {}
+        return {
+            "source":             "unified_cache",
+            "recovery_score":     u.s3_recovery_daily,
+            "training_readiness": u.s3_training_readiness,
+            "recovery_total":     u.s3_recovery_total,
+            "data_fetched_at":    (dd.get("garmin_synced_at")
+                or dd.get("garmin_fetched") or dd.get("coros_fetched")
+                or dd.get("polar_fetched") or dd.get("strava_fetched")
+                or row.get("updated_at")),
+        }
     except Exception:
-        pass
-    return recovery
+        return await _get_recovery_data(db_user_id, force_fresh=False)
 
 
 def _recovery_scenario(workout_dict: dict, data_fetched_at: str | None) -> dict:
