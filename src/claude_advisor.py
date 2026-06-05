@@ -1010,6 +1010,44 @@ def build_ai_b_prompt(analysis: dict, user_data: dict, zones_map: dict, recovery
             rec_parts.append(f"Training Readiness: {tr['score']}/100")
     rec_text = ", ".join(rec_parts) if rec_parts else "нет данных"
 
+    # Блок времени: когда получены данные и сколько до тренировки
+    time_context = ""
+    updated_at = (recovery or {}).get("updated_at") if recovery else None
+    workout_date = analysis.get("workout_date", "")
+    schedule_raw = analysis.get("schedule", "") or ""
+    is_past = analysis.get("is_past", False)
+    if updated_at:
+        try:
+            from datetime import datetime as _dt, timezone as _tz
+            # Парсим updated_at (может быть ISO или без TZ)
+            upd = _dt.fromisoformat(str(updated_at).replace("Z", "+00:00"))
+            if upd.tzinfo is None:
+                upd = upd.replace(tzinfo=_tz.utc)
+            upd_msk = upd.utctimetuple()
+            upd_str = f"{upd_msk.tm_hour + 3:02d}:{upd_msk.tm_min:02d} МСК {upd_msk.tm_mday:02d}.{upd_msk.tm_mon:02d}"
+            if is_past:
+                time_context = "Тренировка уже состоялась — расчёт ретроспективный."
+            elif workout_date:
+                # Извлекаем час начала из schedule (формат "07:00" или "07:00–08:30")
+                import re as _re
+                m = _re.search(r'(\d{1,2}:\d{2})', schedule_raw)
+                start_time = m.group(1) if m else "07:00"
+                try:
+                    wkt_dt = _dt.strptime(f"{workout_date} {start_time}", "%Y-%m-%d %H:%M")
+                    wkt_dt = wkt_dt.replace(tzinfo=_tz.utc)
+                    hours_left = round((wkt_dt - upd).total_seconds() / 3600, 1)
+                    if hours_left > 0:
+                        time_context = (
+                            f"Данные восстановления получены: {upd_str}. "
+                            f"Тренировка: {workout_date} в {start_time}. "
+                            f"До тренировки примерно {hours_left} ч — организм продолжает восстанавливаться, "
+                            f"делай поправку на это при оценке готовности."
+                        )
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
     # Структура тренировки
     struct_lines = []
     for b in structure:
@@ -1067,8 +1105,9 @@ def build_ai_b_prompt(analysis: dict, user_data: dict, zones_map: dict, recovery
         "Зоны темпа:\n"
         f"{zones_text}\n"
         f"Специализация: {spec_label}\n"
-        f"Восстановление: {rec_text}\n\n"
-        "Дай рекомендацию строго в формате JSON:\n\n"
+        f"Восстановление: {rec_text}\n"
+        + (f"{time_context}\n" if time_context else "")
+        + "\nДай рекомендацию строго в формате JSON:\n\n"
         f"{json_schema}\n\n"
         "Порядок групп по скорости (от быстрой к медленной): "
         "1 → 2 → 3 → 3.5 → 4 → 5 → здоровье. "

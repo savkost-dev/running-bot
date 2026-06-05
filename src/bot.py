@@ -2557,6 +2557,10 @@ async def _send_ai_variant_b(
     zinfo = _zones_mod.get_pace_zones(db_user_id) if db_user_id is not None else None
     zones_map = (zinfo or {}).get("zones") or {}
     recovery = user_data.get("recovery")
+    if db_user_id is not None:
+        unified = await _get_unified_recovery(db_user_id)
+        if unified:
+            recovery = unified
     rec_mode = (get_preferences(db_user_id) or {}).get("ai_mode", "smart")
 
     try:
@@ -3416,6 +3420,28 @@ async def _get_recovery_data(db_user_id: int, force_fresh: bool = False) -> dict
     return None
 
 
+async def _get_unified_recovery(db_user_id: int) -> dict | None:
+    """Читает восстановление из unified_cache (Слой 3).
+    Возвращает dict совместимый с build_ai_b_prompt + updated_at.
+    """
+    from database import get_unified_data
+    from data_normalizer import UnifiedUserData
+    row = get_unified_data(db_user_id, max_age_hours=12)
+    if not row:
+        return await _get_recovery_data(db_user_id, force_fresh=False)
+    try:
+        u = UnifiedUserData.from_json(row["unified_json"])
+    except Exception:
+        return await _get_recovery_data(db_user_id, force_fresh=False)
+    return {
+        "source":             "unified_cache",
+        "updated_at":         row.get("updated_at"),
+        "recovery_score":     u.s3_recovery_daily,
+        "training_readiness": u.s3_training_readiness,
+        "recovery_total":     u.s3_recovery_total,
+    }
+
+
 # ── ПРОВЕРКА НОВЫХ АНОНСОВ ───────────────────────────────────
 
 async def _notify_all(context, text: str, notify_key: str = "") -> int:
@@ -3873,7 +3899,7 @@ async def b_self_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user_data = {
         "db_user_id": db_user_id,
         "specialization": (get_user_profile(db_user_id) or {}).get("specialization"),
-        "recovery": await _get_recovery_data(db_user_id, force_fresh=True),
+        "recovery": await _get_unified_recovery(db_user_id),
     }
 
     workout_dict = dict(live) if live else {"workout_date": analysis.get("workout_date", "")}
@@ -3945,7 +3971,7 @@ async def b_user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     user_data = {
         "db_user_id": db_user_id,
         "specialization": profile.get("specialization"),
-        "recovery": await _get_recovery_data(db_user_id, force_fresh=True),
+        "recovery": await _get_unified_recovery(db_user_id),
     }
 
     workout_dict = dict(live) if live else {"workout_date": analysis.get("workout_date", "")}
