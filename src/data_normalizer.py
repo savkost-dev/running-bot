@@ -48,12 +48,15 @@ class UnifiedUserData:
     s3_zones:                  dict | None  = None  # E/M/T/I/R
 
     # Восстановление
-    s3_recovery_daily:      int | None   = None  # 0–100, суточное
-    s3_recovery_total:      float | None = None  # длительное (TSB или 0–100 от TR)
-    s3_training_readiness:  dict | None  = None  # {"score": 0-100, "level": str, "factors": list}
-    s3_hrv:                 float | None = None  # мс, ночной
-    s3_hrv_baseline:        float | None = None  # 7-дневная база
-    s3_rhr:                 int | None   = None  # ЧСС покоя
+    s3_recovery_daily:          int | None   = None  # 0–100, суточное (не Garmin)
+    s3_recovery_total:          float | None = None  # длительное (TSB или TR score)
+    s3_recovery_total_at:       str | None   = None  # ISO timestamp TR/метрики
+    s3_training_readiness:      dict | None  = None  # {"score": 0-100, "level": str, "factors": list}
+    s3_training_readiness_at:   str | None   = None  # ISO timestamp TR
+    s3_hrv:                     float | None = None  # мс, ночной
+    s3_hrv_at:                  str | None   = None  # ISO timestamp HRV
+    s3_hrv_baseline:            float | None = None  # 7-дневная база
+    s3_rhr:                     int | None   = None  # ЧСС покоя
 
     # Сон
     s3_sleep_hours: float | None = None  # часов сна
@@ -217,6 +220,10 @@ def normalize_garmin(raw: dict) -> UnifiedUserData:
     if isinstance(tr, dict) and tr.get("score") is not None:
         u.s3_training_readiness = tr
         u.s3_recovery_total = float(tr["score"])
+        tr_at = raw.get("training_readiness_at")
+        if tr_at:
+            u.s3_training_readiness_at = tr_at
+            u.s3_recovery_total_at = tr_at
     # hrv
     hrv = raw.get("hrv")
     if isinstance(hrv, dict):
@@ -227,6 +234,9 @@ def normalize_garmin(raw: dict) -> UnifiedUserData:
         hrv_status = raw.get("hrv_status") or {}
         if isinstance(hrv_status, dict):
             u.s3_hrv_baseline = hrv_status.get("hrv_weekly_avg")
+    hrv_at = raw.get("hrv_at")
+    if hrv_at:
+        u.s3_hrv_at = hrv_at
     # rhr
     if raw.get("rhr"):
         u.s3_rhr = int(raw["rhr"])
@@ -452,8 +462,9 @@ def merge(parts: list[UnifiedUserData]) -> UnifiedUserData:
 
     scalar_fields = [
         "s3_vo2max", "s3_lactate_threshold_pace", "s3_lactate_threshold_hr", "s3_zones",
-        "s3_recovery_daily", "s3_recovery_total", "s3_training_readiness",
-        "s3_hrv", "s3_hrv_baseline", "s3_rhr",
+        "s3_recovery_daily", "s3_recovery_total", "s3_recovery_total_at",
+        "s3_training_readiness", "s3_training_readiness_at",
+        "s3_hrv", "s3_hrv_at", "s3_hrv_baseline", "s3_rhr",
         "s3_sleep_hours", "s3_sleep_score",
     ]
     for f in scalar_fields:
@@ -523,7 +534,7 @@ def _parse_garmin_raw(raw: dict) -> dict:
         if sync_ts:
             out["garmin_synced_at"] = str(sync_ts)
 
-    # Training Readiness
+    # Training Readiness (всегда список — берём первый элемент)
     tr_raw = raw.get("training_readiness")
     if tr_raw:
         item = tr_raw[0] if isinstance(tr_raw, list) else tr_raw
@@ -537,6 +548,10 @@ def _parse_garmin_raw(raw: dict) -> dict:
                 "level": level_map.get(level_raw, level_raw.lower() or "unknown"),
                 "factors": [],
             }
+            # timestamp самой метрики TR (UTC)
+            tr_ts = item.get("timestamp")
+            if tr_ts:
+                out["training_readiness_at"] = str(tr_ts)
 
     # HRV из hrv_data
     hrv_raw = raw.get("hrv_data")
@@ -549,6 +564,10 @@ def _parse_garmin_raw(raw: dict) -> dict:
                 "hrv_last_night": float(last_night) if last_night else None,
                 "hrv_weekly_avg": float(weekly) if weekly else None,
             }
+        # timestamp HRV если есть
+        hrv_ts = summary.get("lastNightFiveMinAvgEndTimestampGMT") or summary.get("endTimestampGMT")
+        if hrv_ts:
+            out["hrv_at"] = str(hrv_ts)
 
     # Training Load из training_status
     ts = raw.get("training_status")
