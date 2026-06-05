@@ -55,6 +55,7 @@ class UnifiedUserData:
     s3_training_readiness_at:   str | None   = None  # ISO timestamp TR
     s3_body_battery:            int | None   = None  # Garmin Body Battery, 0-100 (НЕ для промпта)
     s3_body_battery_at:         str | None   = None  # lastSyncTimestampGMT
+    s3_coros_recovery:          int | None   = None  # COROS recoveryPct, 0-100 (НЕ для промпта)
     s3_hrv:                     float | None = None  # мс, ночной
     s3_hrv_at:                  str | None   = None  # ISO timestamp HRV
     s3_hrv_baseline:            float | None = None  # 7-дневная база
@@ -320,9 +321,9 @@ def normalize_coros(raw: dict) -> UnifiedUserData:
             u.s3_zones = _zones_from_vdot(vdot)
 
     # ── Восстановление ──
-    # recovery_daily: recoveryPct (суточный, 0–100)
+    # recoveryPct — суточное, хранится отдельно, НЕ подаётся в промпт
     if raw.get("recovery_score") is not None:
-        u.s3_recovery_daily = int(raw["recovery_score"])
+        u.s3_coros_recovery = int(raw["recovery_score"])
     # recovery_total: ati/cti (когда API заработает) — пока нет
     # hrv
     if raw.get("hrv"):
@@ -479,7 +480,7 @@ def merge(parts: list[UnifiedUserData]) -> UnifiedUserData:
         "s3_vo2max", "s3_lactate_threshold_pace", "s3_lactate_threshold_hr", "s3_zones",
         "s3_recovery_daily", "s3_recovery_total", "s3_recovery_total_at",
         "s3_training_readiness", "s3_training_readiness_at",
-        "s3_body_battery", "s3_body_battery_at",
+        "s3_body_battery", "s3_body_battery_at", "s3_coros_recovery",
         "s3_hrv", "s3_hrv_at", "s3_hrv_baseline", "s3_rhr",
         "s3_sleep_hours", "s3_sleep_score",
     ]
@@ -890,8 +891,8 @@ def run_normalization(user_id: int) -> "UnifiedUserData | None":
     fitness_priority = [p for p in [u_garmin, u_coros, u_polar, u_strava] if p]
     merged = merge(fitness_priority)
 
-    # Переопределяем recovery_daily по правильному приоритету: coros → polar → garmin
-    for p in [u_coros, u_polar, u_garmin]:
+    # recovery_daily: только Polar ANS (COROS и Garmin суточные — в своих полях)
+    for p in [u_polar]:
         if p and p.s3_recovery_daily is not None:
             merged.s3_recovery_daily = p.s3_recovery_daily
             break

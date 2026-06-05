@@ -1,5 +1,5 @@
-VERSION = "0.24.24"
+VERSION = "0.24.25"
 BUILD_DATE = "2026-06-05"
 CHANGES = [
-    "Polar: sleep_hours/sleep_score/hrv_at из sleep-блока в unified_cache",
+    "COROS recoveryPct → s3_coros_recovery (не в промпт); промпт B: только TR и TSB",
 ]

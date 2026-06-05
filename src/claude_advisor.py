@@ -1019,10 +1019,7 @@ def build_ai_b_prompt(analysis: dict, user_data: dict, zones_map: dict, recovery
             rec_parts.append(
                 f"Training Readiness: {tr['score']}/100 ({tr.get('level', '?')}){tr_at_str}"
             )
-        # Recovery Score (COROS/Polar/Whoop) — Body Battery не показываем
-        rv = recovery.get("recovery_score")
-        if rv is not None:
-            rec_parts.append(f"Recovery Score: {rv}")
+        # Суточное восстановление (recoveryPct, Body Battery) — не выводим в промпт
     rec_text = ", ".join(rec_parts) if rec_parts else "нет данных"
 
     time_context = recovery_scenario_text or ""
