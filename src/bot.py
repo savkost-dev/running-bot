@@ -2563,8 +2563,16 @@ async def _send_ai_variant_b(
             recovery = unified
     rec_mode = (get_preferences(db_user_id) or {}).get("ai_mode", "smart")
 
+    scenario_ctx = _recovery_scenario(
+        workout_dict or {},
+        (recovery or {}).get("data_fetched_at"),
+    )
+
     try:
-        prompt = claude_advisor.build_ai_b_prompt(analysis, user_data, zones_map, recovery)
+        prompt = claude_advisor.build_ai_b_prompt(
+            analysis, user_data, zones_map, recovery,
+            recovery_scenario_text=scenario_ctx["prompt_text"],
+        )
         result = await asyncio.get_event_loop().run_in_executor(
             None,
             functools.partial(claude_advisor.ask_groq, prompt, rec_mode)
@@ -2607,6 +2615,7 @@ async def _send_ai_variant_b(
         msg_text = claude_advisor.format_evening_message(
             advice, workout_for_render, stats, weather_line=weather_line
         )
+        msg_text = scenario_ctx["user_text"] + "\n\n" + msg_text
         await context.bot.send_message(telegram_id, msg_text, parse_mode="HTML")
         # Второе сообщение — свободный текст от ИИ (нюансы, физиология)
         # Временно отключено
@@ -3444,6 +3453,96 @@ async def _get_unified_recovery(db_user_id: int) -> dict | None:
     except Exception:
         pass
     return recovery
+
+
+def _recovery_scenario(workout_dict: dict, data_fetched_at: str | None) -> dict:
+    """Определяет сценарий восстановления и возвращает тексты для промпта и сообщения."""
+    from datetime import datetime, timezone, timedelta
+    import re
+    MSK = timezone(timedelta(hours=3))
+    is_past = workout_dict.get("is_past", False)
+
+    if is_past:
+        return {
+            "scenario": 3,
+            "hours_until": None,
+            "workout_time_str": None,
+            "user_text": "📅 Тренировка уже состоялась — рекомендация ознакомительная.",
+            "prompt_text": "Тренировка уже состоялась — расчёт ретроспективный.",
+            "needs_forecast": False,
+        }
+
+    # Парсим время тренировки (МСК)
+    workout_date = workout_dict.get("workout_date", "")
+    schedule = workout_dict.get("schedule", "") or ""
+    m = re.search(r'(\d{1,2}:\d{2})', schedule)
+    start_time = m.group(1) if m else "07:00"
+    try:
+        workout_dt = datetime.strptime(
+            f"{workout_date} {start_time}", "%Y-%m-%d %H:%M"
+        ).replace(tzinfo=MSK)
+    except Exception:
+        workout_dt = None
+
+    workout_time_str = workout_dt.strftime("%d.%m в %H:%M") if workout_dt else workout_date
+
+    # Метка времени данных
+    sync_str = ""
+    data_dt = datetime.now(MSK)  # фолбэк если нет data_fetched_at
+    if data_fetched_at:
+        try:
+            dt = datetime.fromisoformat(data_fetched_at.replace("Z", "+00:00"))
+            data_dt = dt.astimezone(MSK)
+            sync_str = f"Данные синхронизированы: {data_dt.strftime('%H:%M МСК %d.%m')}. "
+        except Exception:
+            pass
+
+    # Разница от времени данных до старта тренировки
+    hours_until = (
+        round((workout_dt - data_dt).total_seconds() / 3600, 1)
+        if workout_dt else None
+    )
+
+    needs_forecast = True
+    if hours_until is not None and hours_until > 6:
+        user_text = (
+            f"⏱ {sync_str}"
+            f"От данных до старта ~{hours_until:.0f} ч — "
+            f"{'за ночь восстановишься, ' if hours_until > 8 else ''}"
+            f"рекомендация с учётом прогноза к {start_time} МСК."
+        )
+        prompt_text = (
+            f"{sync_str}"
+            f"Тренировка: {workout_time_str} МСК. "
+            f"От времени данных до старта ~{hours_until:.0f} ч — "
+            f"за это время восстановление продолжится. "
+            f"Давай рекомендацию из расчёта восстановления к старту, "
+            f"не из текущего момента. "
+            f"Верни в JSON поле recovery_forecast: прогноз восстановления "
+            f"к моменту тренировки (1-2 предложения)."
+        )
+    else:
+        user_text = (
+            f"⏱ {sync_str}"
+            + (f"До старта ~{hours_until:.0f} ч — данные актуальны."
+               if hours_until is not None else "Данные актуальны.")
+        )
+        prompt_text = (
+            f"{sync_str}"
+            f"Тренировка: {workout_time_str} МСК. "
+            f"Данные восстановления актуальны на момент старта. "
+            f"Верни в JSON поле recovery_forecast: краткая оценка "
+            f"восстановления к старту (1-2 предложения)."
+        )
+
+    return {
+        "scenario": 2 if (hours_until and hours_until > 9) else 1,
+        "hours_until": hours_until,
+        "workout_time_str": workout_time_str,
+        "user_text": user_text,
+        "prompt_text": prompt_text,
+        "needs_forecast": needs_forecast,
+    }
 
 
 # ── ПРОВЕРКА НОВЫХ АНОНСОВ ───────────────────────────────────

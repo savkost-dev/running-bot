@@ -980,7 +980,7 @@ def _zone_display(zone_key: str, pos: str, near: str | None) -> str:
     return f"{name} ({inner})" if inner else name
 
 
-def build_ai_b_prompt(analysis: dict, user_data: dict, zones_map: dict, recovery: dict | None) -> str:
+def build_ai_b_prompt(analysis: dict, user_data: dict, zones_map: dict, recovery: dict | None, recovery_scenario_text: str = "") -> str:
     """Промпт варианта B: ИИ видит Хшаг 1 + данные бегуна и САМ выбирает группу.
     Без формул — чистая рекомендация от ИИ.
     """
@@ -1010,49 +1010,7 @@ def build_ai_b_prompt(analysis: dict, user_data: dict, zones_map: dict, recovery
             rec_parts.append(f"Training Readiness: {tr['score']}/100")
     rec_text = ", ".join(rec_parts) if rec_parts else "нет данных"
 
-    # Блок времени: когда синхронизированы данные и сколько до тренировки
-    time_context = ""
-    data_fetched_at = (recovery or {}).get("data_fetched_at") if recovery else None
-    workout_date = analysis.get("workout_date", "")
-    schedule_raw = analysis.get("schedule", "") or ""
-    is_past = analysis.get("is_past", False)
-    if data_fetched_at:
-        try:
-            from datetime import datetime as _dt, timezone as _tz, timedelta as _td
-            import re as _re
-            # Парсим data_fetched_at (UTC, может быть ISO или без TZ)
-            raw_ts = str(data_fetched_at).replace("Z", "+00:00")
-            # Garmin отдаёт "2026-06-05T00:06:40.376" — без TZ, считаем UTC
-            upd = _dt.fromisoformat(raw_ts)
-            if upd.tzinfo is None:
-                upd = upd.replace(tzinfo=_tz.utc)
-            upd_msk = upd + _td(hours=3)
-            upd_str = f"{upd_msk.hour:02d}:{upd_msk.minute:02d} МСК {upd_msk.day:02d}.{upd_msk.month:02d}"
-            if is_past:
-                time_context = (
-                    f"Тренировка уже состоялась — расчёт ретроспективный, "
-                    f"данные синхронизированы {upd_str}."
-                )
-            elif workout_date:
-                m = _re.search(r'(\d{1,2}:\d{2})', schedule_raw)
-                start_time = m.group(1) if m else "07:00"
-                try:
-                    # Тренировка в МСК → переводим в UTC для сравнения
-                    wkt_msk = _dt.strptime(f"{workout_date} {start_time}", "%Y-%m-%d %H:%M")
-                    wkt_utc = wkt_msk.replace(tzinfo=_tz.utc) - _td(hours=3)
-                    hours_left = round((wkt_utc - upd).total_seconds() / 3600, 1)
-                    if hours_left > 0:
-                        time_context = (
-                            f"Данные синхронизированы: {upd_str}. "
-                            f"Тренировка: {workout_date} старт {start_time} МСК. "
-                            f"До тренировки ~{hours_left} ч — восстановление продолжается. "
-                            f"Рекомендацию давай из расчёта восстановления к старту, "
-                            f"не из текущего момента."
-                        )
-                except Exception:
-                    pass
-        except Exception:
-            pass
+    time_context = recovery_scenario_text or ""
 
     # Структура тренировки
     struct_lines = []
@@ -1093,7 +1051,8 @@ def build_ai_b_prompt(analysis: dict, user_data: dict, zones_map: dict, recovery
         + '"gap_note": "вывод по разрывам: небольшой (можно переходить) или большой (нужна промежуточная)", '
         + '"suitability_percentages": [{"group": "номер", "percentage": 0..100, "comment": "ТОЛЬКО одно слово без пробелов и двоеточий: optimal или good или careful или ambitious или easy или hard или risk или unload или tooslow"}], '
         + '"preparation_tips": ["совет 1"], '
-        + '"warning": "предупреждение или null"'
+        + '"warning": "предупреждение или null", '
+        + '"recovery_forecast": "прогноз восстановления к старту (1-2 предложения) или null"'
         + "}"
     )
     return (
@@ -2536,6 +2495,12 @@ def format_evening_message(advice: dict, workout: dict, stats: dict | None = Non
             lines.append(f"🟩 — по твоим силам сегодня (цель: {spec_label})")
             lines.append(f"🟦 — ценность этой зоны если бы цель была: {_html.escape(legend_alt)}")
         lines.append(sep)
+
+    # Прогноз восстановления к старту (вариант B)
+    recovery_forecast = advice.get("recovery_forecast")
+    if recovery_forecast and str(recovery_forecast).lower() not in ("null", "none", ""):
+        lines.append("⚡ <b>Восстановление к старту</b>")
+        lines.append(f"{_html.escape(str(recovery_forecast))}\n")
 
     # Основная рекомендация
     _ps   = advice.get("rec_group_pace_start")
