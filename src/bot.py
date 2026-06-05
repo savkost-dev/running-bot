@@ -4065,7 +4065,7 @@ async def _build_analysis_and_user_data(db_user_id: int):
     user_data = {
         "db_user_id": db_user_id,
         "specialization": profile.get("specialization"),
-        "recovery": await _get_recovery_data(db_user_id, force_fresh=True),
+        "recovery": await _get_unified_recovery(db_user_id),
     }
     workout_dict = dict(live) if live else {"workout_date": analysis.get("workout_date", "")}
     workout_dict["workout_type"] = "interval"
