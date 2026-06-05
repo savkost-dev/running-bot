@@ -2567,8 +2567,6 @@ async def _send_ai_variant_b(
         workout_dict or {},
         (recovery or {}).get("data_fetched_at"),
     )
-    logger.info(f"DEBUG scenario_ctx: {scenario_ctx}")
-    logger.info(f"DEBUG recovery keys: {list((recovery or {}).keys())}")
 
     try:
         prompt = claude_advisor.build_ai_b_prompt(
