@@ -48,11 +48,16 @@ class UnifiedUserData:
     s3_zones:                  dict | None  = None  # E/M/T/I/R
 
     # Восстановление
-    s3_recovery_daily: int | None   = None  # 0–100, суточное
-    s3_recovery_total: float | None = None  # длительное (TSB или 0–100 от TR)
-    s3_hrv:            float | None = None  # мс, ночной
-    s3_hrv_baseline:   float | None = None  # 7-дневная база
-    s3_rhr:            int | None   = None  # ЧСС покоя
+    s3_recovery_daily:      int | None   = None  # 0–100, суточное
+    s3_recovery_total:      float | None = None  # длительное (TSB или 0–100 от TR)
+    s3_training_readiness:  dict | None  = None  # {"score": 0-100, "level": str, "factors": list}
+    s3_hrv:                 float | None = None  # мс, ночной
+    s3_hrv_baseline:        float | None = None  # 7-дневная база
+    s3_rhr:                 int | None   = None  # ЧСС покоя
+
+    # Сон
+    s3_sleep_hours: float | None = None  # часов сна
+    s3_sleep_score: int | None   = None  # качество 0–100
 
     # Нагрузка
     s3_load_recent:  LoadRecent | None  = None
@@ -210,9 +215,10 @@ def normalize_garmin(raw: dict) -> UnifiedUserData:
     bb = raw.get("body_battery")
     if bb is not None:
         u.s3_recovery_daily = int(bb)
-    # recovery_total: Training Readiness score (прямой, 0–100)
+    # Training Readiness: полный dict в s3_training_readiness, числовой score в s3_recovery_total
     tr = raw.get("training_readiness") or {}
     if isinstance(tr, dict) and tr.get("score") is not None:
+        u.s3_training_readiness = tr
         u.s3_recovery_total = float(tr["score"])
     # hrv
     hrv = raw.get("hrv")
@@ -252,8 +258,23 @@ def normalize_garmin(raw: dict) -> UnifiedUserData:
                 ctl=ctl, atl=atl, tsb=tsb, summary=tl.get("summary", _tsb_summary(tsb))
             )
 
+    # Сон
+    sleep_h = raw.get("sleep_hours") or raw.get("sleep_duration")
+    if sleep_h is not None:
+        try:
+            u.s3_sleep_hours = round(float(sleep_h), 2)
+        except Exception:
+            pass
+    sleep_s = raw.get("sleep_score") or raw.get("sleep_quality")
+    if sleep_s is not None:
+        try:
+            u.s3_sleep_score = int(sleep_s)
+        except Exception:
+            pass
+
     logger.info(f"normalize_garmin: vo2max={u.s3_vo2max} lt={u.s3_lactate_threshold_pace} "
-                f"rec_daily={u.s3_recovery_daily} rec_total={u.s3_recovery_total} hrv={u.s3_hrv}")
+                f"rec_daily={u.s3_recovery_daily} rec_total={u.s3_recovery_total} hrv={u.s3_hrv} "
+                f"sleep_h={u.s3_sleep_hours} sleep_score={u.s3_sleep_score}")
     return u
 
 
@@ -434,7 +455,9 @@ def merge(parts: list[UnifiedUserData]) -> UnifiedUserData:
 
     scalar_fields = [
         "s3_vo2max", "s3_lactate_threshold_pace", "s3_lactate_threshold_hr", "s3_zones",
-        "s3_recovery_daily", "s3_recovery_total", "s3_hrv", "s3_hrv_baseline", "s3_rhr",
+        "s3_recovery_daily", "s3_recovery_total", "s3_training_readiness",
+        "s3_hrv", "s3_hrv_baseline", "s3_rhr",
+        "s3_sleep_hours", "s3_sleep_score",
     ]
     for f in scalar_fields:
         for p in parts:
@@ -545,6 +568,24 @@ def _parse_garmin_raw(raw: dict) -> dict:
     if isinstance(acts, list) and acts:
         total_km = round(sum((a.get("distance") or 0) for a in acts) / 1000, 1)
         out["load_48h"] = {"sessions_48h": len(acts), "total_km_48h": total_km, "km_48h": total_km}
+
+    # Сон из sleep_data (если endpoint включён в fetch_raw)
+    sleep_data = raw.get("sleep_data")
+    if isinstance(sleep_data, dict):
+        secs = sleep_data.get("sleepTimeSeconds") or sleep_data.get("sleepingSeconds")
+        if secs:
+            out["sleep_hours"] = round(int(secs) / 3600, 2)
+        score = sleep_data.get("overallSleepScore") or sleep_data.get("sleepScoreTotal")
+        if score is not None:
+            out["sleep_score"] = int(score)
+    # Fallback: сон из user_summary (Garmin иногда даёт sleepingSeconds там)
+    if "sleep_hours" not in out and isinstance(us, dict):
+        secs = us.get("sleepingSeconds") or us.get("sleepDurationSeconds")
+        if secs:
+            out["sleep_hours"] = round(int(secs) / 3600, 2)
+        score = us.get("averageSleepStress")
+        if score is not None and "sleep_score" not in out:
+            out["sleep_score"] = max(0, min(100, round(100 - float(score))))
 
     return out
 
