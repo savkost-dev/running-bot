@@ -2058,20 +2058,10 @@ def _recovery_warning(analysis: dict, main_num: str, recovery: dict | None) -> s
             break
     parts = []
     if recovery:
-        m = []
-        rv = recovery.get("recovery_score")
-        if rv is not None:
-            m.append(f"Recovery {rv}")
+        # Только Training Readiness — суточное (COROS/BB) и HRV не показываем
         tr = recovery.get("training_readiness")
         if isinstance(tr, dict) and tr.get("score") is not None:
-            m.append(f"Readiness {tr['score']}")
-        elif isinstance(tr, (int, float)):
-            m.append(f"Readiness {tr}")
-        hrv = recovery.get("hrv")
-        if hrv is not None:
-            m.append(f"HRV {hrv}")
-        if m:
-            parts.append(", ".join(m) + " — восстановление учтено")
+            parts.append(f"Training Readiness {tr['score']}/100 — восстановление учтено")
     if rec_pace:
         kind = "активное (трусцой)" if active else "полный отдых"
         parts.append(f"восстановление между отрезками ~{rec_pace}/км — {kind}")
