@@ -1226,17 +1226,24 @@ def _form_score(pace_s: float, zone_secs: dict) -> float:
 
 
 def _recovery_value(recovery: dict | None) -> float | None:
-    """Достаёт 0..100 из recovery (Recovery Score / Training Readiness)."""
+    """0..100 для математики выбора группы.
+    НЕ использует суточное (COROS recoveryPct, Garmin BB)."""
     if not recovery:
         return None
-    for k in ("recovery_score", "training_readiness", "readiness", "score", "recovery"):
-        v = recovery.get(k)
-        if isinstance(v, (int, float)):
-            return float(v)
-        if isinstance(v, dict):
-            s = v.get("score")
-            if isinstance(s, (int, float)):
-                return float(s)
+    # 1. Training Readiness (Garmin) — 0..100
+    tr = recovery.get("training_readiness")
+    if isinstance(tr, dict):
+        s = tr.get("score")
+        if isinstance(s, (int, float)):
+            return float(s)
+    if isinstance(tr, (int, float)):
+        return float(tr)
+    # 2. recovery_score — только Whoop (настоящее восстановление 0..100)
+    src = recovery.get("source", "")
+    rv = recovery.get("recovery_score")
+    if isinstance(rv, (int, float)) and "whoop" in str(src).lower():
+        return float(rv)
+    # 3. нет надёжного — None (recommend_group подставит нейтральное 70)
     return None
 
 

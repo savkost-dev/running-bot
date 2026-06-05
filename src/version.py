@@ -1,5 +1,5 @@
-VERSION = "0.24.25"
+VERSION = "0.24.26"
 BUILD_DATE = "2026-06-05"
 CHANGES = [
-    "COROS recoveryPct → s3_coros_recovery (не в промпт); промпт B: только TR и TSB",
+    "_recovery_value: убрано суточное (COROS/BB); только TR Garmin и Whoop",
 ]
