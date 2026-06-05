@@ -2589,7 +2589,6 @@ async def _send_ai_variant_b(
     )
 
     try:
-        logger.info(f"scenario_ctx prompt_text: {scenario_ctx['prompt_text'][:100]}")
         prompt = claude_advisor.build_ai_b_prompt(
             analysis, user_data, zones_map, recovery,
             recovery_scenario_text=scenario_ctx["prompt_text"],
