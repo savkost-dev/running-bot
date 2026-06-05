@@ -1,5 +1,5 @@
-VERSION = "0.24.27"
+VERSION = "0.24.28"
 BUILD_DATE = "2026-06-05"
 CHANGES = [
-    "Вариант A: _get_unified_recovery + _recovery_descriptor без суточного и HRV (как вариант B)",
+    "Вариант A: единый источник recovery, 3 сценария, шапка с временем как в B",
 ]

@@ -2229,6 +2229,8 @@ def _build_step2_prompt(facts: dict, mode: str, long: bool) -> str:
         p.append(f"- Что развивает тренировка: {f.get('overall_purpose')}")
     if f.get("block_contrast"):
         p.append(f"- Контраст блоков: {f.get('block_contrast')}")
+    if f.get("recovery_scenario"):
+        p.append(f.get("recovery_scenario"))
     if calc:
         p.append("Задача: опиши посчитанный результат понятным языком — почему эта группа "
                  "(по % и зоне), что делать. Без переусложнения, 1-3 предложения.")

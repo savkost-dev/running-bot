@@ -524,6 +524,20 @@ async def cmd_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             reply_markup=_add_main_menu_btn(None))
 
 
+def _workout_is_past(workout_date: str, schedule: str = "") -> bool:
+    """True если тренировка уже прошла (cutoff 09:00 МСК)."""
+    from datetime import datetime, timezone, timedelta
+    import re as _re
+    MSK = timezone(timedelta(hours=3))
+    m = _re.search(r'(\d{1,2}:\d{2})', schedule or "")
+    start_time = m.group(1) if m else "07:00"
+    try:
+        wdt = datetime.strptime(f"{workout_date} {start_time}", "%Y-%m-%d %H:%M").replace(tzinfo=MSK)
+        return datetime.now(MSK) > wdt.replace(hour=9, minute=0, second=0, microsecond=0)
+    except Exception:
+        return False
+
+
 def _extract_group_pace(grp: dict) -> tuple:
     """Возвращает (pace_start, pace_end, progression) для группы.
     Работает и для лонга (прямые поля) и для интервальных (через blocks).
@@ -2691,10 +2705,16 @@ async def _send_recommendation(
         analysis = _json.loads(row.get("analyzed_json") or "{}")
     except Exception:
         analysis = {}
+
+    # is_past по реальному времени ДО запроса recovery (определяет force_fresh)
+    _wd = (live or {}).get("workout_date", "") or analysis.get("workout_date", "")
+    _sched = (live or {}).get("schedule", "") or analysis.get("schedule", "") or ""
+    _is_past_rt = _workout_is_past(_wd, _sched)
+
     user_data = {
         "db_user_id": db_user_id,
         "specialization": (get_user_profile(db_user_id) or {}).get("specialization"),
-        "recovery": await _get_unified_recovery(db_user_id),
+        "recovery": await _get_unified_recovery(db_user_id, force_fresh=not _is_past_rt),
     }
     rec = (claude_advisor.recommend_long(analysis, user_data) if long
            else claude_advisor.recommend_group(analysis, user_data))
@@ -2715,8 +2735,14 @@ async def _send_recommendation(
     # Шапка/погода из live (для current/past совпадает с кэшем)
     workout_dict = dict(live) if live else {"workout_date": analysis.get("workout_date", "")}
     workout_dict["workout_type"] = "long" if long else "interval"
-    workout_dict["is_past"] = (status == "past")
+    workout_dict["is_past"] = _is_past_rt  # по реальному времени, не по status
     workout_dict["even_pace_available"] = analysis.get("even_pace_available")
+
+    # Сценарий восстановления (время данных, шапка)
+    scenario_ctx = _recovery_scenario(
+        workout_dict,
+        (user_data["recovery"] or {}).get("data_fetched_at") if user_data["recovery"] else None,
+    )
     weather = await get_weather_for_workout(
         workout_dict.get("location", ""), workout_dict.get("workout_date", ""),
         workout_dict.get("schedule", ""),
@@ -2769,6 +2795,7 @@ async def _send_recommendation(
         "rec_group_pace_start":  _rg_ps,
         "rec_group_pace_end":    _rg_pe,
         "rec_group_progression": _rg_prog,
+        "recovery_scenario":     scenario_ctx["prompt_text"],
     }
     import functools
     prose, stats2 = await asyncio.get_event_loop().run_in_executor(
@@ -2787,7 +2814,8 @@ async def _send_recommendation(
         body = claude_advisor.format_evening_message(
             advice, workout_dict, stats=stats2, weather_line=weather_line, has_tracker=has_tracker)
 
-    await _out(banner + body, final_markup, parse_mode="HTML")
+    scenario_header = scenario_ctx["user_text"] + "\n\n" if scenario_ctx.get("user_text") else ""
+    await _out(scenario_header + banner + body, final_markup, parse_mode="HTML")
 
 
 
@@ -3580,26 +3608,15 @@ async def _build_variant_b_prompt(
     zones_map = (zinfo or {}).get("zones") or {}
 
     # is_past по реальному времени (cutoff 09:00 МСК) — ДО запроса recovery
-    MSK = timezone(timedelta(hours=3))
-    now = datetime.now(MSK)
-    schedule = (workout_dict or {}).get("schedule", "") or ""
-    workout_date = (workout_dict or {}).get("workout_date", "")
-    m = _re_bvp.search(r'(\d{1,2}:\d{2})', schedule)
-    start_time = m.group(1) if m else "07:00"
-    workout_dt = None
-    try:
-        workout_dt = datetime.strptime(
-            f"{workout_date} {start_time}", "%Y-%m-%d %H:%M"
-        ).replace(tzinfo=MSK)
-    except Exception:
-        pass
-    if workout_dict is not None and workout_dt:
-        cutoff_dt = workout_dt.replace(hour=9, minute=0, second=0, microsecond=0)
-        workout_dict["is_past"] = now > cutoff_dt
+    _is_past = _workout_is_past(
+        (workout_dict or {}).get("workout_date", ""),
+        (workout_dict or {}).get("schedule", ""),
+    )
+    if workout_dict is not None:
+        workout_dict["is_past"] = _is_past
 
     # is_past → кэш, будущая → свежие данные
-    is_past = (workout_dict or {}).get("is_past", False)
-    recovery = await _get_unified_recovery(db_user_id, force_fresh=not is_past)
+    recovery = await _get_unified_recovery(db_user_id, force_fresh=not _is_past)
 
     scenario_ctx = _recovery_scenario(
         workout_dict or {},
