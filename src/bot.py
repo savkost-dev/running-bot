@@ -3424,7 +3424,7 @@ async def _get_unified_recovery(db_user_id: int) -> dict | None:
     """Читает восстановление из unified_cache (Слой 3)."""
     from database import get_unified_data
     from data_normalizer import UnifiedUserData
-    row = get_unified_data(db_user_id, max_age_hours=12)
+    row = get_unified_data(db_user_id, max_age_hours=20)
     if not row:
         return await _get_recovery_data(db_user_id, force_fresh=False)
     try:
