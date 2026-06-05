@@ -1001,12 +1001,28 @@ def build_ai_b_prompt(analysis: dict, user_data: dict, zones_map: dict, recovery
     # Восстановление
     rec_parts = []
     if recovery:
+        # Training Readiness (Garmin) — с временем измерения
+        tr = recovery.get("training_readiness")
+        if isinstance(tr, dict) and tr.get("score") is not None:
+            tr_at_raw = recovery.get("training_readiness_at")
+            tr_at_str = ""
+            if tr_at_raw:
+                try:
+                    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+                    _dt_obj = _dt.fromisoformat(str(tr_at_raw).replace("Z", "+00:00"))
+                    if _dt_obj.tzinfo is None:
+                        _dt_obj = _dt_obj.replace(tzinfo=_tz.utc)
+                    _msk = _dt_obj + _td(hours=3)
+                    tr_at_str = f", измерен {_msk.strftime('%H:%M %d.%m')}"
+                except Exception:
+                    pass
+            rec_parts.append(
+                f"Training Readiness: {tr['score']}/100 ({tr.get('level', '?')}){tr_at_str}"
+            )
+        # Recovery Score (COROS/Polar/Whoop) — Body Battery не показываем
         rv = recovery.get("recovery_score")
         if rv is not None:
             rec_parts.append(f"Recovery Score: {rv}")
-        tr = recovery.get("training_readiness")
-        if isinstance(tr, dict) and tr.get("score") is not None:
-            rec_parts.append(f"Training Readiness: {tr['score']}/100")
     rec_text = ", ".join(rec_parts) if rec_parts else "нет данных"
 
     time_context = recovery_scenario_text or ""

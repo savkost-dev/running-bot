@@ -1,5 +1,5 @@
-VERSION = "0.24.22"
+VERSION = "0.24.23"
 BUILD_DATE = "2026-06-05"
 CHANGES = [
-    "UnifiedUserData: s3_body_battery отдельно; s3_recovery_total только TSB; TR отдельно от TSB",
+    "Промпт B: TR с временем измерения (МСК), Recovery Score без BB, training_readiness_at в кэше",
 ]

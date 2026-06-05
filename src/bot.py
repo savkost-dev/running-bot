@@ -3447,11 +3447,12 @@ async def _get_unified_recovery(db_user_id: int, force_fresh: bool = True) -> di
         u = UnifiedUserData.from_json(row["unified_json"])
         dd = u.data_dates or {}
         return {
-            "source":             "unified_cache",
-            "recovery_score":     u.s3_recovery_daily,
-            "training_readiness": u.s3_training_readiness,
-            "recovery_total":     u.s3_recovery_total,
-            "data_fetched_at":    (dd.get("garmin_synced_at")
+            "source":                  "unified_cache",
+            "recovery_score":          u.s3_recovery_daily,
+            "training_readiness":      u.s3_training_readiness,
+            "training_readiness_at":   u.s3_training_readiness_at,
+            "recovery_total":          u.s3_recovery_total,
+            "data_fetched_at":         (dd.get("garmin_synced_at")
                 or dd.get("garmin_fetched") or dd.get("coros_fetched")
                 or dd.get("polar_fetched") or dd.get("strava_fetched")
                 or row.get("updated_at")),
