@@ -267,6 +267,17 @@ def get_main_keyboard(from_recommendation: bool = False) -> InlineKeyboardMarkup
     ])
 
 
+def _add_main_menu_btn(markup: InlineKeyboardMarkup | None) -> InlineKeyboardMarkup:
+    """Добавляет кнопку Главное меню если её ещё нет в markup."""
+    existing = list(markup.inline_keyboard) if markup else []
+    for row in existing:
+        for btn in row:
+            if getattr(btn, "callback_data", None) in ("main_menu", "main_menu_new"):
+                return markup  # уже есть
+    menu_row = [InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu_new")]
+    return InlineKeyboardMarkup(existing + [menu_row])
+
+
 def _merge_keyboards(*keyboards) -> InlineKeyboardMarkup:
     """Объединяет несколько InlineKeyboardMarkup в один."""
     rows = []
@@ -505,10 +516,12 @@ async def cmd_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Усталость (ATL): {load.get('atl', '—')}\n"
             f"Форма (TSB): {load.get('tsb', '—')} — {load.get('form_text', '—')}\n"
             f"Тренд: {load.get('trend_text', '—')}\n\n"
-            f"Обновлено: {updated_at}"
+            f"Обновлено: {updated_at}",
+            reply_markup=_add_main_menu_btn(None),
         )
     else:
-        await msg.edit_text("❌ Не удалось обновить данные. Попробуй позже.")
+        await msg.edit_text("❌ Не удалось обновить данные. Попробуй позже.",
+                            reply_markup=_add_main_menu_btn(None))
 
 
 def _extract_group_pace(grp: dict) -> tuple:
@@ -863,7 +876,7 @@ async def cmd_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
     current_mode = prefs.get("ai_mode", "smart") if prefs else "smart"
     await update.message.reply_text(
         _build_mode_text(current_mode),
-        reply_markup=_build_mode_keyboard(current_mode)
+        reply_markup=_add_main_menu_btn(_build_mode_keyboard(current_mode))
     )
 
 
@@ -1711,10 +1724,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         name = _svc_name(svc)
         await query.edit_message_text(
             f"Отключить {name}?\n\nДанные будут удалены из бота.",
-            reply_markup=InlineKeyboardMarkup([[
+            reply_markup=_add_main_menu_btn(InlineKeyboardMarkup([[
                 InlineKeyboardButton("✅ Да, отключить", callback_data=f"disc_yes_{svc}"),
                 InlineKeyboardButton("❌ Отмена",        callback_data="svc_cancel"),
-            ]])
+            ]]))
         )
 
     elif query.data.startswith("disc_yes_"):
@@ -1857,10 +1870,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "profile_set_gender":
         await query.edit_message_text(
             "Выбери пол:",
-            reply_markup=InlineKeyboardMarkup([
+            reply_markup=_add_main_menu_btn(InlineKeyboardMarkup([
                 [InlineKeyboardButton("👨 Мужской", callback_data="profile_gender_male"),
                  InlineKeyboardButton("👩 Женский", callback_data="profile_gender_female")],
-            ])
+            ]))
         )
 
     elif query.data in ("profile_gender_male", "profile_gender_female"):
@@ -2017,7 +2030,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         except Exception as e:
             logger.error(f"JSON generation error for {user.id}: {e}")
-            await context.bot.send_message(user.id, f"❌ Ошибка генерации JSON: {type(e).__name__}: {e}")
+            await context.bot.send_message(user.id, f"❌ Ошибка генерации JSON: {type(e).__name__}: {e}",
+                reply_markup=_add_main_menu_btn(None))
 
     elif query.data == "fit_up":
         db_user_id = get_or_create_user(user.id, user.full_name, user.username)
@@ -2049,15 +2063,18 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"✅ <b>Тренировка загружена в Garmin Connect!</b>\n\n"
                     f"📋 {name}\n\n"
                     f"Открой приложение Garmin Connect → Тренировки и планы → Тренировки.",
-                    parse_mode="HTML")
+                    parse_mode="HTML",
+                    reply_markup=_add_main_menu_btn(None))
             else:
                 await context.bot.send_message(user.id,
                     "❌ Не удалось загрузить в Garmin Connect.\n\n"
-                    "Попробуй скачать JSON кнопкой 📥 и импортировать вручную.")
+                    "Попробуй скачать JSON кнопкой 📥 и импортировать вручную.",
+                    reply_markup=_add_main_menu_btn(None))
         except Exception as e:
             logger.error(f"Garmin upload error for {user.id}: {e}")
             await context.bot.send_message(user.id,
-                f"❌ Ошибка загрузки в Garmin: {type(e).__name__}")
+                f"❌ Ошибка загрузки в Garmin: {type(e).__name__}",
+                reply_markup=_add_main_menu_btn(None))
 
     elif query.data == "help":
         back_btn = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")]])
@@ -2974,10 +2991,11 @@ async def _send_morning_check(
     workout = await (find_next_long_run() if is_long_run_day else find_next_workout())
     if not workout:
         text = "😔 Не нашёл тренировку. Отдыхай!"
+        _mm = _add_main_menu_btn(None)
         if msg:
-            await msg.edit_text(text)
+            await msg.edit_text(text, reply_markup=_mm)
         else:
-            await context.bot.send_message(telegram_id, text)
+            await context.bot.send_message(telegram_id, text, reply_markup=_mm)
         return
 
     # Данные спортсмена: Garmin → COROS → Polar → Strava
@@ -3050,10 +3068,11 @@ async def _send_morning_check(
             "• Если чувствуешь себя хорошо — иди по плану\n"
             "• Если устал — снизь темп на группу ниже"
         )
+        _mm = _add_main_menu_btn(None)
         if msg:
-            await msg.edit_text(text)
+            await msg.edit_text(text, reply_markup=_mm)
         else:
-            await context.bot.send_message(telegram_id, text)
+            await context.bot.send_message(telegram_id, text, reply_markup=_mm)
         return
 
     last_rec = get_last_recommendation(db_user_id, workout_date=workout.get("workout_date"))
@@ -3066,10 +3085,11 @@ async def _send_morning_check(
         None, functools.partial(ask_groq, prompt, ai_mode))
     if result and result.get("timeout"):
         timeout_text = "⏱ Модель думает слишком долго. Попробуй ⚡ Умный режим (/mode)"
+        _mm = _add_main_menu_btn(None)
         if msg:
-            await msg.edit_text(timeout_text)
+            await msg.edit_text(timeout_text, reply_markup=_mm)
         else:
-            await context.bot.send_message(telegram_id, timeout_text)
+            await context.bot.send_message(telegram_id, timeout_text, reply_markup=_mm)
         return
     advice = result["advice"] if result else None
     text = format_morning_message(advice, last_rec=last_rec)
