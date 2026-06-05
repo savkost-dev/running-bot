@@ -1010,38 +1010,44 @@ def build_ai_b_prompt(analysis: dict, user_data: dict, zones_map: dict, recovery
             rec_parts.append(f"Training Readiness: {tr['score']}/100")
     rec_text = ", ".join(rec_parts) if rec_parts else "нет данных"
 
-    # Блок времени: когда получены данные и сколько до тренировки
+    # Блок времени: когда синхронизированы данные и сколько до тренировки
     time_context = ""
-    updated_at = (recovery or {}).get("updated_at") if recovery else None
+    data_fetched_at = (recovery or {}).get("data_fetched_at") if recovery else None
     workout_date = analysis.get("workout_date", "")
     schedule_raw = analysis.get("schedule", "") or ""
     is_past = analysis.get("is_past", False)
-    if updated_at:
+    if data_fetched_at:
         try:
-            from datetime import datetime as _dt, timezone as _tz
-            # Парсим updated_at (может быть ISO или без TZ)
-            upd = _dt.fromisoformat(str(updated_at).replace("Z", "+00:00"))
+            from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+            import re as _re
+            # Парсим data_fetched_at (UTC, может быть ISO или без TZ)
+            raw_ts = str(data_fetched_at).replace("Z", "+00:00")
+            # Garmin отдаёт "2026-06-05T00:06:40.376" — без TZ, считаем UTC
+            upd = _dt.fromisoformat(raw_ts)
             if upd.tzinfo is None:
                 upd = upd.replace(tzinfo=_tz.utc)
-            upd_msk = upd.utctimetuple()
-            upd_str = f"{upd_msk.tm_hour + 3:02d}:{upd_msk.tm_min:02d} МСК {upd_msk.tm_mday:02d}.{upd_msk.tm_mon:02d}"
+            upd_msk = upd + _td(hours=3)
+            upd_str = f"{upd_msk.hour:02d}:{upd_msk.minute:02d} МСК {upd_msk.day:02d}.{upd_msk.month:02d}"
             if is_past:
-                time_context = "Тренировка уже состоялась — расчёт ретроспективный."
+                time_context = (
+                    f"Тренировка уже состоялась — расчёт ретроспективный, "
+                    f"данные синхронизированы {upd_str}."
+                )
             elif workout_date:
-                # Извлекаем час начала из schedule (формат "07:00" или "07:00–08:30")
-                import re as _re
                 m = _re.search(r'(\d{1,2}:\d{2})', schedule_raw)
                 start_time = m.group(1) if m else "07:00"
                 try:
-                    wkt_dt = _dt.strptime(f"{workout_date} {start_time}", "%Y-%m-%d %H:%M")
-                    wkt_dt = wkt_dt.replace(tzinfo=_tz.utc)
-                    hours_left = round((wkt_dt - upd).total_seconds() / 3600, 1)
+                    # Тренировка в МСК → переводим в UTC для сравнения
+                    wkt_msk = _dt.strptime(f"{workout_date} {start_time}", "%Y-%m-%d %H:%M")
+                    wkt_utc = wkt_msk.replace(tzinfo=_tz.utc) - _td(hours=3)
+                    hours_left = round((wkt_utc - upd).total_seconds() / 3600, 1)
                     if hours_left > 0:
                         time_context = (
-                            f"Данные восстановления получены: {upd_str}. "
-                            f"Тренировка: {workout_date} в {start_time}. "
-                            f"До тренировки примерно {hours_left} ч — организм продолжает восстанавливаться, "
-                            f"делай поправку на это при оценке готовности."
+                            f"Данные синхронизированы: {upd_str}. "
+                            f"Тренировка: {workout_date} старт {start_time} МСК. "
+                            f"До тренировки ~{hours_left} ч — восстановление продолжается. "
+                            f"Рекомендацию давай из расчёта восстановления к старту, "
+                            f"не из текущего момента."
                         )
                 except Exception:
                     pass

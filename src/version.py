@@ -1,5 +1,5 @@
-VERSION = "0.24.13"
+VERSION = "0.24.14"
 BUILD_DATE = "2026-06-05"
 CHANGES = [
-    "Вариант B: unified_cache для recovery + блок времени до тренировки в промпте",
+    "Вариант B: garmin_synced_at из lastSyncTimestampGMT, data_fetched_at в промпте",
 ]

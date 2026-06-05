@@ -513,7 +513,7 @@ def _parse_garmin_raw(raw: dict) -> dict:
             except Exception:
                 pass
 
-    # Body Battery и ЧСС покоя из user_summary
+    # Body Battery, ЧСС покоя и метка последней синхронизации из user_summary
     us = raw.get("user_summary") or {}
     if isinstance(us, dict):
         bb = us.get("bodyBatteryMostRecentValue")
@@ -522,6 +522,9 @@ def _parse_garmin_raw(raw: dict) -> dict:
         rhr = us.get("restingHeartRate")
         if rhr:
             out["rhr"] = int(rhr)
+        sync_ts = us.get("lastSyncTimestampGMT")
+        if sync_ts:
+            out["garmin_synced_at"] = str(sync_ts)
 
     # Training Readiness
     tr_raw = raw.get("training_readiness")
@@ -765,6 +768,8 @@ def run_normalization(user_id: int) -> "UnifiedUserData | None":
         try:
             parsed = _parse_garmin_raw(_json.loads(raw_g["raw_json"]))
             u_garmin = normalize_garmin(parsed)
+            if parsed.get("garmin_synced_at"):
+                data_dates["garmin_synced_at"] = parsed["garmin_synced_at"]
         except Exception as e:
             logger.warning(f"normalize_garmin error user={user_id}: {e}")
 
