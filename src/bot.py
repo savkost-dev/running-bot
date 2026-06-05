@@ -3421,31 +3421,29 @@ async def _get_recovery_data(db_user_id: int, force_fresh: bool = False) -> dict
 
 
 async def _get_unified_recovery(db_user_id: int) -> dict | None:
-    """Читает восстановление из unified_cache (Слой 3)."""
-    from database import get_unified_data
-    from data_normalizer import UnifiedUserData
-    row = get_unified_data(db_user_id, max_age_hours=20)
-    if not row:
-        return await _get_recovery_data(db_user_id, force_fresh=False)
+    """Слой 3: свежие данные восстановления + метка времени из unified_cache."""
+    # Свежие данные — как раньше
+    recovery = await _get_recovery_data(db_user_id, force_fresh=True)
+    if not recovery:
+        return None
+    # Метка времени синхронизации — из unified_cache
     try:
-        u = UnifiedUserData.from_json(row["unified_json"])
+        from database import get_unified_data
+        from data_normalizer import UnifiedUserData
+        row = get_unified_data(db_user_id, max_age_hours=20)
+        if row:
+            u = UnifiedUserData.from_json(row["unified_json"])
+            dd = u.data_dates or {}
+            data_fetched_at = (dd.get("garmin_synced_at")
+                               or dd.get("garmin_fetched")
+                               or dd.get("coros_fetched")
+                               or dd.get("polar_fetched")
+                               or dd.get("strava_fetched")
+                               or row.get("updated_at"))
+            recovery["data_fetched_at"] = data_fetched_at
     except Exception:
-        return await _get_recovery_data(db_user_id, force_fresh=False)
-    dd = u.data_dates or {}
-    # Приоритет: реальный синк часов → время запроса к сервису → время записи в БД
-    data_fetched_at = (dd.get("garmin_synced_at")
-                       or dd.get("garmin_fetched")
-                       or dd.get("coros_fetched")
-                       or dd.get("polar_fetched")
-                       or dd.get("strava_fetched")
-                       or row.get("updated_at"))
-    return {
-        "source":           "unified_cache",
-        "data_fetched_at":  data_fetched_at,
-        "recovery_score":   u.s3_recovery_daily,
-        "training_readiness": u.s3_training_readiness,
-        "recovery_total":   u.s3_recovery_total,
-    }
+        pass
+    return recovery
 
 
 # ── ПРОВЕРКА НОВЫХ АНОНСОВ ───────────────────────────────────
