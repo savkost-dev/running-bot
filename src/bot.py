@@ -2565,21 +2565,23 @@ async def _send_ai_variant_b(
 
     from datetime import datetime, timezone, timedelta
     import re as _re_b
-    if "is_past" not in (workout_dict or {}):
-        MSK = timezone(timedelta(hours=3))
-        now = datetime.now(MSK)
-        schedule = (workout_dict or {}).get("schedule", "") or ""
-        workout_date = (workout_dict or {}).get("workout_date", "")
-        m = _re_b.search(r'(\d{1,2}:\d{2})', schedule)
-        start_time = m.group(1) if m else "07:00"
-        try:
-            workout_dt = datetime.strptime(
-                f"{workout_date} {start_time}", "%Y-%m-%d %H:%M"
-            ).replace(tzinfo=MSK)
-            if workout_dict:
-                workout_dict["is_past"] = workout_dt < now
-        except Exception:
-            pass
+    MSK = timezone(timedelta(hours=3))
+    now = datetime.now(MSK)
+    schedule = (workout_dict or {}).get("schedule", "") or ""
+    workout_date = (workout_dict or {}).get("workout_date", "")
+    m = _re_b.search(r'(\d{1,2}:\d{2})', schedule)
+    start_time = m.group(1) if m else "07:00"
+    workout_dt = None
+    try:
+        workout_dt = datetime.strptime(
+            f"{workout_date} {start_time}", "%Y-%m-%d %H:%M"
+        ).replace(tzinfo=MSK)
+    except Exception:
+        pass
+    if workout_dict is not None and workout_dt:
+        # Тренировка считается прошедшей после 09:00 МСК в день тренировки
+        cutoff_dt = workout_dt.replace(hour=9, minute=0, second=0, microsecond=0)
+        workout_dict["is_past"] = now > cutoff_dt
 
     scenario_ctx = _recovery_scenario(
         workout_dict or {},
