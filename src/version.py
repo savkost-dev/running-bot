@@ -1,5 +1,5 @@
-VERSION = "0.24.17"
+VERSION = "0.24.18"
 BUILD_DATE = "2026-06-05"
 CHANGES = [
-    "_build_variant_b_prompt: единая точка сборки промпта B для /b и /p_b",
+    "Вариант B: фикс повтора 'данные' в сценарии 3; force_fresh=False для прошедших тренировок",
 ]

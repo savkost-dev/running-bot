@@ -3416,10 +3416,9 @@ async def _get_recovery_data(db_user_id: int, force_fresh: bool = False) -> dict
     return None
 
 
-async def _get_unified_recovery(db_user_id: int) -> dict | None:
-    """Слой 3: свежие данные восстановления + метка времени из unified_cache."""
-    # Свежие данные — как раньше
-    recovery = await _get_recovery_data(db_user_id, force_fresh=True)
+async def _get_unified_recovery(db_user_id: int, force_fresh: bool = True) -> dict | None:
+    """Слой 3: данные восстановления + метка времени из unified_cache."""
+    recovery = await _get_recovery_data(db_user_id, force_fresh=force_fresh)
     if not recovery:
         return None
     # Метка времени синхронизации — из unified_cache
@@ -3450,25 +3449,23 @@ def _recovery_scenario(workout_dict: dict, data_fetched_at: str | None) -> dict:
     is_past = workout_dict.get("is_past", False)
 
     if is_past:
-        sync_str = ""
+        time_str = ""
         if data_fetched_at:
             try:
                 from datetime import datetime, timezone, timedelta
                 MSK = timezone(timedelta(hours=3))
                 dt = datetime.fromisoformat(data_fetched_at.replace("Z", "+00:00"))
                 dt_msk = dt.astimezone(MSK)
-                sync_str = f", данные кэша {dt_msk.strftime('%H:%M МСК %d.%m')}"
+                time_str = dt_msk.strftime("%H:%M МСК %d.%m")
             except Exception:
                 pass
+        cache_note = f" Данные восстановления из кэша на {time_str}." if time_str else ""
         return {
             "scenario": 3,
             "hours_until": None,
             "workout_time_str": None,
-            "user_text": f"📅 Тренировка уже состоялась — рекомендация ознакомительная{sync_str}.",
-            "prompt_text": (
-                "Тренировка уже состоялась — расчёт ретроспективный, "
-                f"данные восстановления из утреннего кэша{sync_str}."
-            ),
+            "user_text": f"📅 Тренировка уже состоялась — рекомендация ознакомительная.{cache_note}",
+            "prompt_text": f"Тренировка уже состоялась — расчёт ретроспективный.{cache_note}",
             "needs_forecast": False,
         }
 
@@ -3561,9 +3558,8 @@ async def _build_variant_b_prompt(
 
     zinfo = _z.get_pace_zones(db_user_id) if db_user_id else None
     zones_map = (zinfo or {}).get("zones") or {}
-    recovery = await _get_unified_recovery(db_user_id)
 
-    # is_past по реальному времени (cutoff 09:00 МСК)
+    # is_past по реальному времени (cutoff 09:00 МСК) — ДО запроса recovery
     MSK = timezone(timedelta(hours=3))
     now = datetime.now(MSK)
     schedule = (workout_dict or {}).get("schedule", "") or ""
@@ -3580,6 +3576,10 @@ async def _build_variant_b_prompt(
     if workout_dict is not None and workout_dt:
         cutoff_dt = workout_dt.replace(hour=9, minute=0, second=0, microsecond=0)
         workout_dict["is_past"] = now > cutoff_dt
+
+    # is_past → кэш, будущая → свежие данные
+    is_past = (workout_dict or {}).get("is_past", False)
+    recovery = await _get_unified_recovery(db_user_id, force_fresh=not is_past)
 
     scenario_ctx = _recovery_scenario(
         workout_dict or {},
