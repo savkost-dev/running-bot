@@ -1,5 +1,5 @@
-VERSION = "0.24.21"
+VERSION = "0.24.22"
 BUILD_DATE = "2026-06-05"
 CHANGES = [
-    "Garmin: s3_recovery_daily не заполняется (BB); careful→easy во всех промптах и формулах",
+    "UnifiedUserData: s3_body_battery отдельно; s3_recovery_total только TSB; TR отдельно от TSB",
 ]

@@ -48,11 +48,13 @@ class UnifiedUserData:
     s3_zones:                  dict | None  = None  # E/M/T/I/R
 
     # Восстановление
-    s3_recovery_daily:          int | None   = None  # 0–100, суточное (не Garmin)
-    s3_recovery_total:          float | None = None  # длительное (TSB или TR score)
-    s3_recovery_total_at:       str | None   = None  # ISO timestamp TR/метрики
+    s3_recovery_daily:          int | None   = None  # 0–100, суточное (COROS/Polar/Whoop, не Garmin)
+    s3_recovery_total:          float | None = None  # TSB Strava (форма ±), не TR
+    s3_recovery_total_at:       str | None   = None  # ISO timestamp TSB
     s3_training_readiness:      dict | None  = None  # {"score": 0-100, "level": str, "factors": list}
     s3_training_readiness_at:   str | None   = None  # ISO timestamp TR
+    s3_body_battery:            int | None   = None  # Garmin Body Battery, 0-100 (НЕ для промпта)
+    s3_body_battery_at:         str | None   = None  # lastSyncTimestampGMT
     s3_hrv:                     float | None = None  # мс, ночной
     s3_hrv_at:                  str | None   = None  # ISO timestamp HRV
     s3_hrv_baseline:            float | None = None  # 7-дневная база
@@ -214,16 +216,20 @@ def normalize_garmin(raw: dict) -> UnifiedUserData:
             u.s3_zones = _zones_from_vdot(u.s3_vo2max)
 
     # ── Восстановление ──
-    # recovery_daily из Garmin не используется (Body Battery не попадает в промпт)
-    # Training Readiness: полный dict в s3_training_readiness, числовой score в s3_recovery_total
+    # Body Battery — хранится отдельно, НЕ используется в промпте рекомендации
+    bb = raw.get("body_battery")
+    if bb is not None:
+        u.s3_body_battery = int(bb)
+    bb_at = raw.get("garmin_synced_at")
+    if bb_at:
+        u.s3_body_battery_at = bb_at
+    # Training Readiness — только в своё поле, НЕ в recovery_total (TSB ≠ TR)
     tr = raw.get("training_readiness") or {}
     if isinstance(tr, dict) and tr.get("score") is not None:
         u.s3_training_readiness = tr
-        u.s3_recovery_total = float(tr["score"])
         tr_at = raw.get("training_readiness_at")
         if tr_at:
             u.s3_training_readiness_at = tr_at
-            u.s3_recovery_total_at = tr_at
     # hrv
     hrv = raw.get("hrv")
     if isinstance(hrv, dict):
@@ -464,6 +470,7 @@ def merge(parts: list[UnifiedUserData]) -> UnifiedUserData:
         "s3_vo2max", "s3_lactate_threshold_pace", "s3_lactate_threshold_hr", "s3_zones",
         "s3_recovery_daily", "s3_recovery_total", "s3_recovery_total_at",
         "s3_training_readiness", "s3_training_readiness_at",
+        "s3_body_battery", "s3_body_battery_at",
         "s3_hrv", "s3_hrv_at", "s3_hrv_baseline", "s3_rhr",
         "s3_sleep_hours", "s3_sleep_score",
     ]
@@ -846,11 +853,9 @@ def run_normalization(user_id: int) -> "UnifiedUserData | None":
             merged.s3_recovery_daily = p.s3_recovery_daily
             break
 
-    # recovery_total: Strava TSB как эталон
+    # recovery_total: только Strava TSB (форма ±), TR отдельно в s3_training_readiness
     if u_strava and u_strava.s3_recovery_total is not None:
         merged.s3_recovery_total = u_strava.s3_recovery_total
-    elif u_garmin and u_garmin.s3_recovery_total is not None:
-        merged.s3_recovery_total = u_garmin.s3_recovery_total
 
     # load_recent: strava → garmin → coros
     for p in [u_strava, u_garmin, u_coros]:
