@@ -25,7 +25,6 @@ _MODE_LABELS = {"deep": "🧠 Глубокий (ИИ)", "smart": "⚡ Быстр
 _SUIT_EPITHET_MAP = {
     "optimal":   "оптимально",
     "good":      "хорошо",
-    "careful":   "щадяще",
     "ambitious": "амбициозно",
     "easy":      "легко",
     "hard":      "тяжело",
@@ -356,7 +355,7 @@ def build_evening_prompt(workout: dict, fitness: dict, recovery: dict | None = N
   "if_tired": "что делать если устал — группа ниже или промежуточный темп X.5 с цифрами",
   "gap_note": "вывод по разрывам: небольшой (можно переходить) или большой (нужна промежуточная)",
   "suitability_percentages": [
-    {"group": "номер группы", "percentage": число_от_0_до_100, "comment": "ОДИН ключ из списка: optimal/good/careful/ambitious/easy/hard/risk/unload/tooslow"}
+    {"group": "номер группы", "percentage": число_от_0_до_100, "comment": "ОДИН ключ из списка: optimal/good/ambitious/easy/hard/risk/unload/tooslow"}
   ],
   "preparation_tips": ["совет 1", "совет 2"],
   "warning": "предупреждение или null",
@@ -1049,7 +1048,7 @@ def build_ai_b_prompt(analysis: dict, user_data: dict, zones_map: dict, recovery
         + '"if_feeling_good": "что делать если ноги бегут легко на разминке — группа выше с темпом", '
         + '"if_tired": "что делать если тяжело — группа ниже или промежуточный темп X.5 с цифрами", '
         + '"gap_note": "вывод по разрывам: небольшой (можно переходить) или большой (нужна промежуточная)", '
-        + '"suitability_percentages": [{"group": "номер", "percentage": 0..100, "comment": "ТОЛЬКО одно слово без пробелов и двоеточий: optimal или good или careful или ambitious или easy или hard или risk или unload или tooslow"}], '
+        + '"suitability_percentages": [{"group": "номер", "percentage": 0..100, "comment": "ТОЛЬКО одно слово без пробелов и двоеточий: optimal или good или ambitious или easy или hard или risk или unload или tooslow"}], '
         + '"preparation_tips": ["совет 1"], '
         + '"warning": "предупреждение или null", '
         + '"recovery_forecast": "прогноз восстановления к старту (1-2 предложения) или null"'
@@ -1080,7 +1079,7 @@ def build_ai_b_prompt(analysis: dict, user_data: dict, zones_map: dict, recovery
         "Группа 1 — самая быстрая. Группы с меньшим номером всегда быстрее групп с большим номером.\n"
         "Правило эпитетов: группы с номером МЕНЬШЕ рекомендованной — быстрее и тяжелее "
         "(амбициозно/hard/risk); группы с номером БОЛЬШЕ — медленнее и легче "
-        "(easy/careful/tooslow). Эпитеты строго следуют этому направлению.\n"
+        "(easy/tooslow). Эпитеты строго следуют этому направлению.\n"
         "Рассмотри альтернативы: какая группа для скорости, какая для восстановления.\n"
         "Группа с максимальным percentage ДОЛЖНА совпадать с recommended_group.\n"
         "ВАЖНО: верни suitability_percentages для всех ЧИСЛОВЫХ групп (1, 2, 3, 3.5, 4, 5), "
@@ -1596,7 +1595,7 @@ def recommend_long(analysis_json: dict, user_data: dict) -> dict | None:
         elif d < 0:
             pct, comment = max(5, 92 - 22 * abs(d)), ("ambitious" if d == -1 else "hard")
         else:
-            pct, comment = max(5, 92 - 14 * d), ("careful" if d == 1 else "tooslow")
+            pct, comment = max(5, 92 - 14 * d), ("easy" if d == 1 else "tooslow")
         groups_markup.append({"number": p["number"], "pace": p["pace"], "pct": pct, "comment": comment})
     if health:
         groups_markup.append({"number": health.get("number", "здоровье"), "pace": None,
@@ -2024,7 +2023,7 @@ def _suit_comment(g: dict, main_num: str) -> str:
     if "низкий" in tag:
         return "easy"
     pct = g.get("pct") or 0
-    return "good" if pct >= 60 else "careful"
+    return "good" if pct >= 60 else "easy"
 
 
 def _recovery_warning(analysis: dict, main_num: str, recovery: dict | None) -> str:
@@ -2173,7 +2172,7 @@ def _build_step2_prompt(facts: dict, mode: str, long: bool) -> str:
         p.append(
             "Правило эпитетов: группы с номером МЕНЬШЕ рекомендованной — быстрее и тяжелее "
             "(амбициозно/hard/risk); группы с номером БОЛЬШЕ — медленнее и легче "
-            "(easy/careful/tooslow). Группа 1 — самая быстрая. Эпитеты строго следуют этому направлению."
+            "(easy/tooslow). Группа 1 — самая быстрая. Эпитеты строго следуют этому направлению."
         )
         p.append(
             "Порядок групп по скорости (от быстрой к медленной):\n"
@@ -2768,7 +2767,7 @@ def build_long_run_prompt(workout: dict, fitness: dict, recovery: dict | None = 
   "second_half_pace": "X:XX или null если ровный темп",
   "strategy_reason": "1-2 предложения НА РУССКОМ — почему именно эта группа и стратегия",
   "suitability_percentages": [ВСЕ группы из раздела ГРУППЫ, каждая обязательна:
-    {"group": "только номер группы", "percentage": число_от_0_до_100, "comment": "ОДИН ключ из списка: optimal/good/careful/ambitious/easy/hard/risk/unload/tooslow"}
+    {"group": "только номер группы", "percentage": число_от_0_до_100, "comment": "ОДИН ключ из списка: optimal/good/ambitious/easy/hard/risk/unload/tooslow"}
   ],
   "if_feeling_good": "НА РУССКОМ — что делать если на разминке легко (например: перейди в группу 3)",
   "if_tired": "НА РУССКОМ — что делать если на разминке тяжело (например: останься в группе 4, не прогрессируй)",

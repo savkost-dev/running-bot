@@ -2585,7 +2585,7 @@ async def _send_ai_variant_b(
         _suit_groups = {str(s.get("group", "")) for s in _suit}
         for g in (analysis.get("groups") or []):
             gnum = claude_advisor._sanitize_group_name(str(g.get("number", "")))
-            if gnum and gnum not in _suit_groups and not any(c.isalpha() for c in gnum):
+            if gnum and gnum not in _suit_groups and any(c.isdigit() for c in gnum):
                 _suit.append({"group": gnum, "percentage": 0, "comment": "risk"})
         advice["suitability_percentages"] = _suit
         # Шапка/работа/погода — те же, что у варианта A (полный workout_dict).

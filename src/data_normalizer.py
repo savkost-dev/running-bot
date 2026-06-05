@@ -211,10 +211,7 @@ def normalize_garmin(raw: dict) -> UnifiedUserData:
             u.s3_zones = _zones_from_vdot(u.s3_vo2max)
 
     # ── Восстановление ──
-    # recovery_daily: body_battery (прямой, но в промпте отключён)
-    bb = raw.get("body_battery")
-    if bb is not None:
-        u.s3_recovery_daily = int(bb)
+    # recovery_daily из Garmin не используется (Body Battery не попадает в промпт)
     # Training Readiness: полный dict в s3_training_readiness, числовой score в s3_recovery_total
     tr = raw.get("training_readiness") or {}
     if isinstance(tr, dict) and tr.get("score") is not None:
