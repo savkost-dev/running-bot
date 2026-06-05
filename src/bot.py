@@ -3483,12 +3483,25 @@ def _recovery_scenario(workout_dict: dict, data_fetched_at: str | None) -> dict:
     is_past = workout_dict.get("is_past", False)
 
     if is_past:
+        sync_str = ""
+        if data_fetched_at:
+            try:
+                from datetime import datetime, timezone, timedelta
+                MSK = timezone(timedelta(hours=3))
+                dt = datetime.fromisoformat(data_fetched_at.replace("Z", "+00:00"))
+                dt_msk = dt.astimezone(MSK)
+                sync_str = f", данные кэша {dt_msk.strftime('%H:%M МСК %d.%m')}"
+            except Exception:
+                pass
         return {
             "scenario": 3,
             "hours_until": None,
             "workout_time_str": None,
-            "user_text": "📅 Тренировка уже состоялась — рекомендация ознакомительная.",
-            "prompt_text": "Тренировка уже состоялась — расчёт ретроспективный.",
+            "user_text": f"📅 Тренировка уже состоялась — рекомендация ознакомительная{sync_str}.",
+            "prompt_text": (
+                "Тренировка уже состоялась — расчёт ретроспективный, "
+                f"данные восстановления из утреннего кэша{sync_str}."
+            ),
             "needs_forecast": False,
         }
 
