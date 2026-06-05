@@ -2311,25 +2311,34 @@ def _sec_to_pace(sec: float) -> str:
 
 
 def _recovery_descriptor(recovery: dict | None) -> str:
-    """Словесное описание восстановления (Whoop/Garmin Readiness/HRV/сон) для long-обоснования."""
+    """Словесное описание восстановления для промпта A.
+    Формат как в варианте B: TR с временем, Whoop Recovery Score.
+    НЕ выводит суточное (COROS/BB) и HRV."""
     if not recovery:
-        return ""
+        return "восстановление: нет свежих данных"
     parts = []
-    rv = recovery.get("recovery_score")
-    if rv is not None:
-        parts.append(f"Recovery {rv}")
+    # Training Readiness (Garmin) — с временем
     tr = recovery.get("training_readiness")
     if isinstance(tr, dict) and tr.get("score") is not None:
-        parts.append(f"Readiness {tr['score']}")
-    elif isinstance(tr, (int, float)):
-        parts.append(f"Readiness {tr}")
-    hrv = recovery.get("hrv")
-    if hrv is not None:
-        parts.append(f"HRV {hrv}")
-    sleep = recovery.get("sleep_hours") or recovery.get("sleep")
-    if sleep is not None:
-        parts.append(f"сон {sleep}")
-    return ", ".join(parts)
+        tr_at_raw = recovery.get("training_readiness_at")
+        tr_at_str = ""
+        if tr_at_raw:
+            try:
+                from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+                _dt_obj = _dt.fromisoformat(str(tr_at_raw).replace("Z", "+00:00"))
+                if _dt_obj.tzinfo is None:
+                    _dt_obj = _dt_obj.replace(tzinfo=_tz.utc)
+                _msk = _dt_obj + _td(hours=3)
+                tr_at_str = f", измерен {_msk.strftime('%H:%M %d.%m')}"
+            except Exception:
+                pass
+        parts.append(f"Training Readiness: {tr['score']}/100 ({tr.get('level', '?')}){tr_at_str}")
+    # Recovery Score — только Whoop
+    src = recovery.get("source", "")
+    rv = recovery.get("recovery_score")
+    if isinstance(rv, (int, float)) and "whoop" in str(src).lower():
+        parts.append(f"Recovery Score: {rv}")
+    return ", ".join(parts) if parts else "восстановление: нет свежих данных"
 
 
 def recommendation_to_long_advice(rec: dict, analysis: dict, recovery: dict | None) -> dict:

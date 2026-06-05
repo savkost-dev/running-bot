@@ -2694,7 +2694,7 @@ async def _send_recommendation(
     user_data = {
         "db_user_id": db_user_id,
         "specialization": (get_user_profile(db_user_id) or {}).get("specialization"),
-        "recovery": await _get_recovery_data(db_user_id, force_fresh=True),
+        "recovery": await _get_unified_recovery(db_user_id),
     }
     rec = (claude_advisor.recommend_long(analysis, user_data) if long
            else claude_advisor.recommend_group(analysis, user_data))
