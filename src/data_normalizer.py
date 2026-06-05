@@ -384,13 +384,22 @@ def normalize_polar(raw: dict) -> UnifiedUserData:
     elif raw.get("recovery_score") is not None:
         u.s3_recovery_daily = int(raw["recovery_score"])
 
-    # hrv, rhr
+    # hrv, rhr, hrv_at
     if raw.get("hrv"):
         u.s3_hrv = float(raw["hrv"])
     if raw.get("hr_avg"):
         u.s3_rhr = int(raw["hr_avg"])
+    if raw.get("hrv_at"):
+        u.s3_hrv_at = raw["hrv_at"]
 
-    logger.info(f"normalize_polar: vo2max={u.s3_vo2max} rec_daily={u.s3_recovery_daily} hrv={u.s3_hrv}")
+    # сон
+    if raw.get("sleep_hours") is not None:
+        u.s3_sleep_hours = float(raw["sleep_hours"])
+    if raw.get("sleep_score") is not None:
+        u.s3_sleep_score = int(raw["sleep_score"])
+
+    logger.info(f"normalize_polar: vo2max={u.s3_vo2max} rec_daily={u.s3_recovery_daily} "
+                f"hrv={u.s3_hrv} sleep_h={u.s3_sleep_hours} sleep_score={u.s3_sleep_score}")
     return u
 
 
@@ -716,6 +725,40 @@ def _parse_polar_raw(raw: dict) -> dict:
         hr_avg = last.get("heart_rate_avg")
         if hr_avg is not None:
             out["hr_avg"] = int(float(hr_avg))
+
+    # Сон из sleep-блока
+    sleep_raw = raw.get("sleep")
+    nights: list = []
+    if isinstance(sleep_raw, list):
+        nights = sleep_raw
+    elif isinstance(sleep_raw, dict):
+        nights = sleep_raw.get("nights") or sleep_raw.get("items") or []
+    nights = [x for x in nights if isinstance(x, dict)]
+    if nights:
+        nights.sort(key=lambda x: x.get("date", ""))
+        last_night = nights[-1]
+        # sleep_end_time → hrv_at (метка ночных метрик)
+        sleep_end = last_night.get("sleep_end_time")
+        if sleep_end:
+            out["hrv_at"] = str(sleep_end)
+        # sleep_score
+        score = last_night.get("sleep_score")
+        if score is not None:
+            out["sleep_score"] = int(score)
+        # sleep_hours из start/end timestamps
+        start = last_night.get("sleep_start_time")
+        if start and sleep_end:
+            try:
+                from datetime import datetime as _dt
+                _fmt = "%Y-%m-%dT%H:%M:%S.%f%z"
+                def _parse_ts(s):
+                    # Polar даёт tz как +03:00 — fromisoformat справляется
+                    return _dt.fromisoformat(s)
+                dur_h = round((_parse_ts(sleep_end) - _parse_ts(start)).total_seconds() / 3600, 2)
+                if 0 < dur_h < 24:
+                    out["sleep_hours"] = dur_h
+            except Exception:
+                pass
 
     return out
 
