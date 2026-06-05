@@ -2563,6 +2563,24 @@ async def _send_ai_variant_b(
             recovery = unified
     rec_mode = (get_preferences(db_user_id) or {}).get("ai_mode", "smart")
 
+    from datetime import datetime, timezone, timedelta
+    import re as _re_b
+    if "is_past" not in (workout_dict or {}):
+        MSK = timezone(timedelta(hours=3))
+        now = datetime.now(MSK)
+        schedule = (workout_dict or {}).get("schedule", "") or ""
+        workout_date = (workout_dict or {}).get("workout_date", "")
+        m = _re_b.search(r'(\d{1,2}:\d{2})', schedule)
+        start_time = m.group(1) if m else "07:00"
+        try:
+            workout_dt = datetime.strptime(
+                f"{workout_date} {start_time}", "%Y-%m-%d %H:%M"
+            ).replace(tzinfo=MSK)
+            if workout_dict:
+                workout_dict["is_past"] = workout_dt < now
+        except Exception:
+            pass
+
     scenario_ctx = _recovery_scenario(
         workout_dict or {},
         (recovery or {}).get("data_fetched_at"),
