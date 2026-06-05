@@ -2581,6 +2581,11 @@ async def _send_ai_variant_b(
         except Exception:
             pass
 
+    logger.info(f"DEBUG is_past: workout_date={workout_dict.get('workout_date') if workout_dict else None} "
+                f"schedule={workout_dict.get('schedule') if workout_dict else None} "
+                f"is_past={workout_dict.get('is_past') if workout_dict else None} "
+                f"data_fetched_at={(recovery or {}).get('data_fetched_at')}")
+
     scenario_ctx = _recovery_scenario(
         workout_dict or {},
         (recovery or {}).get("data_fetched_at"),
