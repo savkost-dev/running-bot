@@ -766,14 +766,32 @@ def analyze_workout(raw_text: str, comments_text: str = "", mode: str = "deep") 
 
             msg = response.choices[0].message
             reasoning = getattr(msg, "reasoning_content", None)
-            raw = (msg.content or "").strip()
+            content_raw = (msg.content or "").strip()
 
-            # Fallback: пустой content → ищем JSON в reasoning_content
+            def _try_json(text: str) -> str:
+                """Ищет {…}-блок в тексте, убирая markdown-обёртку. Возвращает строку или ''."""
+                if not text:
+                    return ""
+                t = text.replace("```json", "").replace("```", "").strip()
+                m = _re.search(r'\{[\s\S]*\}', t)
+                return m.group(0) if m else ""
+
+            # 1. content без <think>…</think>
+            content_clean = _re.sub(r"<think>.*?</think>", "", content_raw, flags=_re.DOTALL).strip()
+            raw = _try_json(content_clean)
+            json_source = "content" if raw else ""
+
+            # 2. reasoning_content
             if not raw and reasoning:
-                m = _re.search(r'\{[\s\S]*\}', reasoning)
-                if m:
-                    raw = m.group(0)
-                    logger.info("analyze_workout: JSON извлечён из reasoning_content")
+                raw = _try_json(reasoning)
+                if raw:
+                    json_source = "reasoning_content"
+
+            # 3. content целиком (JSON внутри <think>)
+            if not raw and content_raw:
+                raw = _try_json(content_raw)
+                if raw:
+                    json_source = "content+think"
 
             if not raw:
                 if attempt == 0:
@@ -782,6 +800,8 @@ def analyze_workout(raw_text: str, comments_text: str = "", mode: str = "deep") 
                     continue
                 logger.error("analyze_workout: пустой ответ (попытка 2)")
                 return None
+
+            logger.info(f"analyze_workout: JSON из {json_source}")
             break
 
         except Exception as e:
@@ -799,25 +819,13 @@ def analyze_workout(raw_text: str, comments_text: str = "", mode: str = "deep") 
     elapsed = round(_time.time() - t0, 1)
 
     # ── Парсинг JSON ──────────────────────────────────────────
-    raw = _re.sub(r"<think>.*?</think>", "", raw, flags=_re.DOTALL).strip()
-    raw = raw.replace("```json", "").replace("```", "").strip()
-
+    # raw уже содержит {…}-блок без markdown и без <think> (из _try_json)
     parsed = None
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as e:
-        logger.warning(f"analyze_workout: полный JSON невалиден ({e}), пробую вырезать {{...}}")
-        m = _re.search(r'\{[\s\S]*\}', raw)
-        if m:
-            try:
-                parsed = json.loads(m.group(0))
-                logger.info("analyze_workout: JSON извлечён regex-ом")
-            except json.JSONDecodeError as e2:
-                logger.error(f"analyze_workout: regex JSON тоже невалиден: {e2} | raw[:300]={raw[:300]!r}")
-                return None
-        else:
-            logger.error(f"analyze_workout: JSON не найден | raw[:300]={raw[:300]!r}")
-            return None
+        logger.error(f"analyze_workout: JSON невалиден: {e} | raw[:300]={raw[:300]!r}")
+        return None
 
     if not isinstance(parsed, dict):
         logger.error(f"analyze_workout: результат не dict: {type(parsed).__name__}")
