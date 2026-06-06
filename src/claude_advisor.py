@@ -1640,18 +1640,27 @@ def recommend_long(analysis_json: dict, user_data: dict) -> dict | None:
     zone_secs = {z: _pace_sec(p) for z, p in zones_map.items()}
     easy_s = zone_secs.get("easy")
     mar_s = zone_secs.get("marathon")
-    # Комфортная база на 100 мин ≈ между марафонским и лёгким темпом
-    if easy_s and mar_s:
-        target = (easy_s + mar_s) / 2
-    else:
-        target = easy_s or mar_s
+    # Длительная = аэробный объём в зоне EASY. Ориентир — лёгкий темп
+    # (НЕ среднее с марафонским — оно завышало и уводило в быстрые группы).
+    target = easy_s or ((mar_s + 40) if mar_s else None)
 
     with_pace = [p for p in paced if p["pace_sec"]]
     with_pace.sort(key=lambda p: p["pace_sec"])  # быстрые → медленные
 
-    # базовая = ближайшая к комфортному ориентиру
-    base_idx = min(range(len(with_pace)),
-                   key=lambda i: abs(with_pace[i]["pace_sec"] - target))
+    # Жёсткий потолок: базовая не быстрее марафонского (длительная не темповая).
+    eligible = [i for i, p in enumerate(with_pace)
+                if not (mar_s and p["pace_sec"] < mar_s)]
+    pool = eligible or list(range(len(with_pace)))
+
+    # базовая = ближайшая к EASY-ориентиру среди допустимых
+    base_idx = (min(pool, key=lambda i: abs(with_pace[i]["pace_sec"] - target))
+                if target else pool[len(pool) // 2])
+
+    # Восстановление сдвигает базовую к более медленной группе
+    rv = _recovery_value(user_data.get("recovery"))
+    if rv is not None and rv < 50:
+        shift = 2 if rv < 35 else 1
+        base_idx = min(base_idx + shift, len(with_pace) - 1)
     base = with_pace[base_idx]
     step_up = with_pace[base_idx - 1] if base_idx > 0 else None          # быстрее
     step_down = with_pace[base_idx + 1] if base_idx + 1 < len(with_pace) else None  # медленнее

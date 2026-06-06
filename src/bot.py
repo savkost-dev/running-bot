@@ -972,6 +972,7 @@ def _build_help_text(is_admin: bool) -> str:
             "/b_user — вариант B для выбранного пользователя\n"
             "/a_user — вариант A для выбранного пользователя\n"
             "/w_user — реальный путь пользователя (его ai_mode: B или A)\n"
+            "/l_user — лонг для выбранного пользователя\n"
             "/p_b — промпт варианта B для себя\n"
             "/p_b_user — промпт варианта B для выбранного пользователя\n"
             "/p_a — промпт варианта A для себя\n"
@@ -4475,6 +4476,51 @@ async def w_user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await _send_recommendation(user["telegram_id"], user["name"], context, long=False, msg=msg)
 
 
+# ── /l_user — реальный путь ЛОНГА выбранного пользователя (admin only) ──
+
+async def l_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+        return
+    users = get_users_list_for_b()
+    if not users:
+        await update.message.reply_text("Нет пользователей в базе.")
+        return
+    keyboard = [
+        [InlineKeyboardButton(
+            u["name"] + (f" (@{u['username']})" if u.get("username") else ""),
+            callback_data=f"l_user_{u['db_user_id']}"
+        )]
+        for u in users
+    ]
+    await update.message.reply_text(
+        "🕐 Лонг — выбери пользователя:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+async def l_user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query.from_user.id not in ADMIN_TELEGRAM_IDS:
+        await query.answer("Нет доступа.")
+        return
+    await query.answer()
+
+    db_user_id = int(query.data.rsplit("_", 1)[-1])
+    users = get_users_list_for_b()
+    user = next((u for u in users if u["db_user_id"] == db_user_id), None)
+    if not user:
+        await query.edit_message_text("Пользователь не найден.")
+        return
+
+    msg = await query.edit_message_text(
+        f"🕐 Лонг — <b>{user['name']}</b>\nЗапускаю...",
+        parse_mode="HTML",
+    )
+    # long=True → _send_recommendation идёт формульным путём (recommend_long).
+    # Результат в чате админа через msg.
+    await _send_recommendation(user["telegram_id"], user["name"], context, long=True, msg=msg)
+
+
 async def _send_prompt_text(send_fn, prompt: str) -> None:
     """Отправляет текст промпта кусками по 4096 символов."""
     chunk_size = 4096
@@ -4769,6 +4815,7 @@ def main():
     app.add_handler(CommandHandler("b_user",    b_command))
     app.add_handler(CommandHandler("a_user",    a_user_command))
     app.add_handler(CommandHandler("w_user",    w_user_command))
+    app.add_handler(CommandHandler("l_user",    l_user_command))
     app.add_handler(CommandHandler("p_b",       p_b_self_command))
     app.add_handler(CommandHandler("p_b_user",  p_b_command))
     app.add_handler(CommandHandler("p_a",       p_a_self_command))
@@ -4777,6 +4824,7 @@ def main():
     app.add_handler(CallbackQueryHandler(b_user_callback,   pattern=r"^b_user_\d+$"))
     app.add_handler(CallbackQueryHandler(a_user_callback,   pattern=r"^a_user_\d+$"))
     app.add_handler(CallbackQueryHandler(w_user_callback,   pattern=r"^w_user_\d+$"))
+    app.add_handler(CallbackQueryHandler(l_user_callback,   pattern=r"^l_user_\d+$"))
     app.add_handler(CallbackQueryHandler(pb_user_callback,  pattern=r"^pb_user_\d+$"))
     app.add_handler(CallbackQueryHandler(pa_user_callback,  pattern=r"^pa_user_\d+$"))
     app.add_handler(CallbackQueryHandler(panalyze_callback, pattern=r"^panalyze_(interval|long)$"))
