@@ -205,6 +205,36 @@ async def get_body_battery(db_user_id: int) -> int | None:
         return None
 
 
+async def get_body_battery_with_sync(db_user_id: int) -> tuple[int | None, str | None]:
+    """Returns (body_battery, synced_at_utc_iso) from get_user_summary.
+
+    synced_at_utc_iso is lastSyncTimestampGMT as UTC ISO string with +00:00 suffix,
+    e.g. '2026-06-06T13:12:30.383+00:00'. Returns (None, None) on error.
+    """
+    client = await _client(db_user_id)
+    if not client:
+        return None, None
+
+    def _fetch():
+        today = date.today().isoformat()
+        data = client.get_user_summary(today)
+        if not data:
+            return None, None
+        val = data.get("bodyBatteryMostRecentValue")
+        bb = int(val) if val is not None else None
+        raw_sync = data.get("lastSyncTimestampGMT")
+        synced_at = None
+        if raw_sync and isinstance(raw_sync, str):
+            synced_at = raw_sync.rstrip("Z") + "+00:00"
+        return bb, synced_at
+
+    try:
+        return await asyncio.to_thread(_fetch)
+    except Exception as e:
+        print(f"Garmin get_body_battery_with_sync error: {e}")
+        return None, None
+
+
 async def get_hrv_status(db_user_id: int) -> dict | None:
     client = await _client(db_user_id)
     if not client:

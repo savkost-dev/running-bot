@@ -3496,18 +3496,22 @@ def _update_garmin_recovery_from_raw(db_user_id: int, raw: dict) -> None:
 
 async def _fetch_garmin_recovery(db_user_id: int) -> dict | None:
     """Запрашивает данные восстановления из Garmin API и сохраняет в кэш."""
-    from garmin import get_body_battery, get_hrv_status, get_training_readiness
+    from garmin import get_body_battery_with_sync, get_hrv_status, get_training_readiness
     try:
-        body_battery, hrv_data, readiness = await asyncio.gather(
-            get_body_battery(db_user_id),
+        bb_result, hrv_data, readiness = await asyncio.gather(
+            get_body_battery_with_sync(db_user_id),
             get_hrv_status(db_user_id),
             get_training_readiness(db_user_id),
             return_exceptions=True,
         )
         result = {"source": "garmin"}
-        if not isinstance(body_battery, Exception) and body_battery is not None:
-            result["body_battery"] = body_battery
-            result["recovery_score"] = body_battery
+        if not isinstance(bb_result, Exception) and bb_result is not None:
+            body_battery, synced_at = bb_result
+            if body_battery is not None:
+                result["body_battery"] = body_battery
+                result["recovery_score"] = body_battery
+            if synced_at:
+                result["synced_at"] = synced_at
         if not isinstance(hrv_data, Exception) and hrv_data:
             result["hrv"] = hrv_data.get("hrv_last_night")
             result["hrv_weekly_avg"] = hrv_data.get("hrv_weekly_avg")
@@ -3596,21 +3600,28 @@ async def _get_unified_recovery(db_user_id: int, force_fresh: bool = True) -> di
     from data_normalizer import UnifiedUserData
 
     if force_fresh:
-        # Будущая тренировка — свежие данные + метка времени из unified_cache
+        # Будущая тренировка — свежие данные, метка из живого запроса
         recovery = await _get_recovery_data(db_user_id, force_fresh=True)
         if not recovery:
             return None
-        try:
-            row = get_unified_data(db_user_id, max_age_hours=20)
-            if row:
-                u = UnifiedUserData.from_json(row["unified_json"])
-                dd = u.data_dates or {}
-                recovery["data_fetched_at"] = (dd.get("garmin_synced_at")
-                    or dd.get("garmin_fetched") or dd.get("coros_fetched")
-                    or dd.get("polar_fetched") or dd.get("strava_fetched")
-                    or row.get("updated_at"))
-        except Exception:
-            pass
+        # data_fetched_at: берём lastSyncTimestampGMT из свежего запроса Garmin
+        # (сохранён в synced_at в _fetch_garmin_recovery).
+        # Если нет (Whoop, COROS, Polar) — фолбэк на unified_cache как раньше.
+        synced_at = recovery.pop("synced_at", None)
+        if synced_at:
+            recovery["data_fetched_at"] = synced_at
+        else:
+            try:
+                row = get_unified_data(db_user_id, max_age_hours=20)
+                if row:
+                    u = UnifiedUserData.from_json(row["unified_json"])
+                    dd = u.data_dates or {}
+                    recovery["data_fetched_at"] = (dd.get("garmin_synced_at")
+                        or dd.get("garmin_fetched") or dd.get("coros_fetched")
+                        or dd.get("polar_fetched") or dd.get("strava_fetched")
+                        or row.get("updated_at"))
+            except Exception:
+                pass
         return recovery
 
     # Прошедшая тренировка — данные ИЗ unified_cache (утренний снимок)

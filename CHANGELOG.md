@@ -5,6 +5,17 @@
 
 ---
 
+## [0.24.49] 2026-06-06 — фикс метки времени data_fetched_at (lastSyncTimestampGMT)
+
+### Исправлено
+- **garmin.py `get_body_battery_with_sync`**: новая функция, возвращает `(body_battery, synced_at_utc_iso)`. `synced_at` = `lastSyncTimestampGMT` из `get_user_summary` — UTC ISO строка с суффиксом `+00:00`.
+- **bot.py `_fetch_garmin_recovery`**: переключён на `get_body_battery_with_sync`; `synced_at` сохраняется в результате и попадает в `garmin_recovery_cache`.
+- **bot.py `_get_unified_recovery(force_fresh=True)`**: `data_fetched_at` теперь берётся из `recovery["synced_at"]` (реальное время последнего синка Garmin) вместо `unified_cache.garmin_synced_at` (утренний снимок). Фолбэк на unified_cache остаётся для Whoop/COROS/Polar.
+
+**Причина**: рассылка 20:00 МСК показывала `data_fetched_at = 02:43 МСК` (время ночного кэша), хотя значения TR/BB были свежими (TR=50 соответствовал Garmin Connect 17:45 МСК).
+
+---
+
 ## [0.24.48] 2026-06-06 — Garmin экспорт в варианте B: топ-3 групп + skipLastRestStep
 
 ### Добавлено
