@@ -997,28 +997,7 @@ def _zone_display(zone_key: str, pos: str, near: str | None) -> str:
     return f"{name} ({inner})" if inner else name
 
 
-def _sprint_ceiling(zones_map: dict) -> str | None:
-    """Потолок финишного темпа для скоростной работы 150м.
-    MSS150 = repetition * k, где k зависит от профиля (разница threshold−rep).
-    Рабочий потолок = 95% MSS150 (технически держимый последний повтор).
-    """
-    rep = _pace_sec(zones_map.get("repetition"))
-    thr = _pace_sec(zones_map.get("threshold"))
-    if not rep:
-        return None
-    if thr:
-        gap = thr - rep   # сек/км, всегда > 0 (threshold медленнее repetition)
-        if gap > 30:      k = 0.75   # скоростной профиль
-        elif gap >= 15:   k = 0.80   # универсал
-        else:             k = 0.85   # выносливостный
-    else:
-        k = 0.80
-    mss150 = rep * k
-    ceiling = int(mss150 / 0.95)
-    return _sec_to_pace(ceiling)
-
-
-def build_ai_b_prompt(analysis: dict, user_data: dict, zones_map: dict, recovery: dict | None, recovery_scenario_text: str = "") -> str:
+def build_ai_b_prompt(analysis: dict, user_data: dict, zones_map: dict, recovery: dict | None, recovery_scenario_text: str = "", sprint_ceiling: str | None = None) -> str:
     """Промпт варианта B: ИИ видит Хшаг 1 + данные бегуна и САМ выбирает группу.
     Без формул — чистая рекомендация от ИИ.
     """
@@ -1036,9 +1015,6 @@ def build_ai_b_prompt(analysis: dict, user_data: dict, zones_map: dict, recovery
     for z, p in (zones_map or {}).items():
         zone_lines.append(f"  {z}: {p} мин/км")
     zones_text = "\n".join(zone_lines) if zone_lines else "  нет данных"
-
-    # Потолок финишного темпа для скоростной работы
-    sprint_ceiling = _sprint_ceiling(zones_map)
 
     # Восстановление
     rec_parts = []
@@ -1128,10 +1104,8 @@ def build_ai_b_prompt(analysis: dict, user_data: dict, zones_map: dict, recovery
         f"Восстановление: {rec_text}\n"
         + (f"{time_context}\n" if time_context else "")
         + (
-            f"\nПОТОЛОК СКОРОСТИ (физический предел бегуна): {sprint_ceiling}/км.\n"
-            f"Это расчётный максимум на коротком отрезке (150м) исходя из зон бегуна.\n"
-            f"Группу где финишный (самый быстрый) темп быстрее {sprint_ceiling}/км — "
-            "ставь risk/hard с % ≤ 10, НЕ рекомендуй как оптимум.\n"
+            f"\nПотолок финишного темпа: {sprint_ceiling}/км (физический предел на 150м). "
+            f"Группу с финишным темпом быстрее — risk/hard, % ≤ 10, не оптимум.\n"
             if sprint_ceiling else ""
         )
         + "\nСВЯЗЬ ТИПА РАБОТЫ С ЗОНАМИ — критично для выбора группы:\n"

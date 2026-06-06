@@ -1,5 +1,5 @@
-VERSION = "0.24.43"
+VERSION = "0.24.44"
 BUILD_DATE = "2026-06-06"
 CHANGES = [
-    "_sprint_ceiling: потолок финишного темпа в промпте B (MSS150 по зонам бегуна); исключает физически нереальные группы",
+    "sprint_ceiling перенесён в zones.py (_compute_sprint_ceiling); get_pace_zones возвращает sprint_ceiling + runner_profile",
 ]

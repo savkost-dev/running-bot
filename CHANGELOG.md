@@ -5,6 +5,16 @@
 
 ---
 
+## [0.24.44] 2026-06-06 — sprint_ceiling перенесён в zones.py как единая точка истины
+
+### Изменено
+- **zones.py `_compute_sprint_ceiling`**: новая функция (из `claude_advisor._sprint_ceiling`); логика k по gap threshold−rep, возвращает `(ceiling, runner_profile)`.
+- **zones.py `get_pace_zones`**: теперь включает `sprint_ceiling` и `runner_profile` в результат; все потребители получают их автоматически.
+- **claude_advisor.py `build_ai_b_prompt`**: добавлен параметр `sprint_ceiling: str | None = None`; inline-вычисление убрано; текст потолка сокращён до одной строки.
+- **bot.py `_build_variant_b_prompt`**: передаёт `zinfo.get("sprint_ceiling")` в `build_ai_b_prompt`.
+
+---
+
 ## [0.24.43] 2026-06-06 — _sprint_ceiling: потолок финишного темпа в промпте B
 
 ### Добавлено

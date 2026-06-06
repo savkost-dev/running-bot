@@ -176,17 +176,44 @@ def recalculate_and_save(db_user_id: int) -> dict | None:
     return result
 
 
+def _compute_sprint_ceiling(zones: dict) -> tuple[str | None, str | None]:
+    """MSS150 и профиль бегуна из зон.
+    Возвращает (sprint_ceiling, runner_profile) — оба могут быть None.
+    MSS150 = repetition * k, где k зависит от gap threshold−rep.
+    Рабочий потолок = 95% MSS150 (держимый последний повтор без срыва техники).
+    """
+    rep = _pace_to_sec_per_km(zones.get("repetition"))
+    thr = _pace_to_sec_per_km(zones.get("threshold"))
+    if not rep:
+        return None, None
+    if thr:
+        gap = thr - rep   # сек/км, > 0 (threshold медленнее repetition)
+        if gap > 30:
+            k, profile = 0.75, "скоростной"
+        elif gap >= 15:
+            k, profile = 0.80, "универсал"
+        else:
+            k, profile = 0.85, "выносливостный"
+    else:
+        k, profile = 0.80, "универсал"
+    ceiling = int(rep * k / 0.95)
+    return _sec_per_km_to_pace(ceiling), profile
+
+
 def get_pace_zones(db_user_id: int) -> dict | None:
     """Достаёт готовые зоны из athlete_cache.
     Если зон нет (новый пользователь) — считает на лету и сохраняет.
-    Возвращает {"zones": dict, "source": str, "updated_at": str} или None.
+    Возвращает {"zones": dict, "source": str, "updated_at": str,
+                "sprint_ceiling": str|None, "runner_profile": str|None} или None.
     """
     import database as _db
     cached = _db.get_pace_zones_raw(db_user_id)
+    if not cached:
+        result = recalculate_and_save(db_user_id)
+        if result:
+            cached = _db.get_pace_zones_raw(db_user_id)
     if cached:
-        return cached
-
-    result = recalculate_and_save(db_user_id)
-    if result:
-        return _db.get_pace_zones_raw(db_user_id)
-    return None
+        ceiling, profile = _compute_sprint_ceiling(cached.get("zones") or {})
+        cached["sprint_ceiling"] = ceiling
+        cached["runner_profile"] = profile
+    return cached

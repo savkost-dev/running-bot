@@ -3704,6 +3704,7 @@ async def _build_variant_b_prompt(
     prompt = claude_advisor.build_ai_b_prompt(
         analysis, user_data, zones_map, recovery,
         recovery_scenario_text=scenario_ctx["prompt_text"],
+        sprint_ceiling=(zinfo or {}).get("sprint_ceiling"),
     )
     return prompt, scenario_ctx
 
