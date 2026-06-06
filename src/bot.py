@@ -974,7 +974,8 @@ def _build_help_text(is_admin: bool) -> str:
             "/p_b — промпт варианта B для себя\n"
             "/p_b_user — промпт варианта B для выбранного пользователя\n"
             "/p_a — промпт варианта A для себя\n"
-            "/p_a_user — промпт варианта A для выбранного пользователя"
+            "/p_a_user — промпт варианта A для выбранного пользователя\n"
+            "/p_analyze — промпт Шага 1 (анализ анонса)"
         )
     return text
 
@@ -4443,6 +4444,56 @@ async def pa_user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     )
 
 
+# ── /p_analyze — промпт Шага 1 (анализ анонса, admin only) ─────────────
+
+async def p_analyze_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+        return
+    await update.message.reply_text(
+        "📋 Промпт Шага 1 — выбери тип:",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("⚡ Интервальная", callback_data="panalyze_interval"),
+            InlineKeyboardButton("🕐 Long Run",     callback_data="panalyze_long"),
+        ]])
+    )
+
+
+async def panalyze_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query.from_user.id not in ADMIN_TELEGRAM_IDS:
+        await query.answer("Нет доступа.")
+        return
+    await query.answer()
+
+    wtype = "long" if query.data == "panalyze_long" else "interval"
+    row, status = get_latest_workout_analysis(wtype)
+    if status == "empty" or row is None:
+        await query.edit_message_text(f"😔 Нет анализа {wtype} в базе.")
+        return
+
+    raw_text = row.get("raw_text") or ""
+    if not raw_text:
+        await query.edit_message_text("😔 raw_text не сохранён в базе.")
+        return
+
+    # comments_text не хранится в БД — пробуем live с проверкой post_id
+    comments_text = "(нет комментариев)"
+    try:
+        live = await (find_next_long_run() if wtype == "long" else find_next_workout())
+        if live and live.get("post_id") == row.get("post_id"):
+            comments_text = live.get("comments_text") or "(нет комментариев)"
+    except Exception:
+        pass
+
+    prompt = claude_advisor._build_analyze_prompt(raw_text, comments_text)
+    await query.edit_message_text(f"📋 Промпт Шага 1 — {wtype}")
+    admin_tid = query.from_user.id
+    await _send_prompt_text(
+        lambda t: context.bot.send_message(admin_tid, t),
+        prompt,
+    )
+
+
 def main():
     init_db()
 
@@ -4485,10 +4536,12 @@ def main():
     app.add_handler(CommandHandler("p_b_user",  p_b_command))
     app.add_handler(CommandHandler("p_a",       p_a_self_command))
     app.add_handler(CommandHandler("p_a_user",  p_a_command))
-    app.add_handler(CallbackQueryHandler(b_user_callback,  pattern=r"^b_user_\d+$"))
-    app.add_handler(CallbackQueryHandler(a_user_callback,  pattern=r"^a_user_\d+$"))
-    app.add_handler(CallbackQueryHandler(pb_user_callback, pattern=r"^pb_user_\d+$"))
-    app.add_handler(CallbackQueryHandler(pa_user_callback, pattern=r"^pa_user_\d+$"))
+    app.add_handler(CommandHandler("p_analyze", p_analyze_command))
+    app.add_handler(CallbackQueryHandler(b_user_callback,   pattern=r"^b_user_\d+$"))
+    app.add_handler(CallbackQueryHandler(a_user_callback,   pattern=r"^a_user_\d+$"))
+    app.add_handler(CallbackQueryHandler(pb_user_callback,  pattern=r"^pb_user_\d+$"))
+    app.add_handler(CallbackQueryHandler(pa_user_callback,  pattern=r"^pa_user_\d+$"))
+    app.add_handler(CallbackQueryHandler(panalyze_callback, pattern=r"^panalyze_(interval|long)$"))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     app.add_error_handler(global_error_handler)
