@@ -1,6 +1,6 @@
-VERSION = "0.24.36"
+VERSION = "0.24.37"
 BUILD_DATE = "2026-06-06"
 CHANGES = [
-    "_build_analyze_prompt: рамка вместо абсолютизма для коротких отрезков — степень восстановления модель определяет сама",
-    "build_ai_b_prompt: якорь repetition с диапазоном (начало ≤ rep, конец ≥ rep) вместо 'и БЫСТРЕЕ'",
+    "_send_recommendation: interval deep/fast/smart → путь B (ИИ выбирает группу); calc → A (формулы). Лонг всегда A.",
+    "_send_ai_variant_b: рейтинг-кнопка + _rating_data (как у A); теперь основной путь для пользователей.",
 ]

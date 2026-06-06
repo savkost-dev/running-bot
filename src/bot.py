@@ -2563,8 +2563,9 @@ async def _send_ai_variant_b(
     workout_dict: dict | None = None,
     weather_line: str = "",
 ) -> None:
-    """Вариант B: чистая ИИ-рекомендация для админа.
-    Запускается асинхронно после основного сообщения.
+    """Вариант B: ИИ сам выбирает группу.
+    Для deep/fast/smart — основной путь рекомендации (вместо A).
+    Для /b и /test_workout — вызывается через create_task (админ).
     """
     import functools
     db_user_id = user_data.get("db_user_id")
@@ -2619,7 +2620,15 @@ async def _send_ai_variant_b(
             advice, workout_for_render, stats, weather_line=weather_line
         )
         msg_text = scenario_ctx["user_text"] + "\n\n" + msg_text
-        await context.bot.send_message(telegram_id, msg_text, parse_mode="HTML")
+        _rating_data[telegram_id] = {
+            "workout_date": analysis.get("workout_date", ""),
+            "ai_mode": rec_mode,
+        }
+        rating_markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton("⭐ Оценить рекомендацию", callback_data="rate_show"),
+        ]])
+        final_b_markup = _merge_keyboards(rating_markup, get_main_keyboard(from_recommendation=True))
+        await context.bot.send_message(telegram_id, msg_text, parse_mode="HTML", reply_markup=final_b_markup)
         # Второе сообщение — свободный текст от ИИ (нюансы, физиология)
         # Временно отключено
         # extra = await asyncio.get_event_loop().run_in_executor(
@@ -2717,6 +2726,25 @@ async def _send_recommendation(
         "specialization": (get_user_profile(db_user_id) or {}).get("specialization"),
         "recovery": await _get_unified_recovery(db_user_id, force_fresh=not _is_past_rt),
     }
+
+    rec_mode = (get_preferences(db_user_id) or {}).get("ai_mode", "smart")
+    if rec_mode != "calc" and not long:
+        # Путь B — ИИ выбирает группу (deep/smart/fast)
+        workout_dict_b = dict(live) if live else {"workout_date": analysis.get("workout_date", "")}
+        workout_dict_b["workout_type"] = "interval"
+        workout_dict_b["is_past"] = _is_past_rt
+        workout_dict_b["even_pace_available"] = analysis.get("even_pace_available")
+        weather_b = await get_weather_for_workout(
+            workout_dict_b.get("location", ""), workout_dict_b.get("workout_date", ""),
+            workout_dict_b.get("schedule", ""),
+        )
+        weather_line_b = format_weather_for_message(weather_b) if weather_b else ""
+        if msg:
+            await msg.delete()
+        await _send_ai_variant_b(telegram_id, analysis, user_data, context,
+                                 workout_dict=workout_dict_b, weather_line=weather_line_b)
+        return
+
     rec = (claude_advisor.recommend_long(analysis, user_data) if long
            else claude_advisor.recommend_group(analysis, user_data))
     if not rec or not rec.get("ok"):
