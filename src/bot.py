@@ -2562,6 +2562,7 @@ async def _send_ai_variant_b(
     context: ContextTypes.DEFAULT_TYPE,
     workout_dict: dict | None = None,
     weather_line: str = "",
+    msg=None,
 ) -> None:
     """Вариант B: ИИ сам выбирает группу.
     Для deep/fast/smart — основной путь рекомендации (вместо A).
@@ -2628,7 +2629,13 @@ async def _send_ai_variant_b(
             InlineKeyboardButton("⭐ Оценить рекомендацию", callback_data="rate_show"),
         ]])
         final_b_markup = _merge_keyboards(rating_markup, get_main_keyboard(from_recommendation=True))
-        await context.bot.send_message(telegram_id, msg_text, parse_mode="HTML", reply_markup=final_b_markup)
+        if msg:
+            try:
+                await msg.edit_text(msg_text, parse_mode="HTML", reply_markup=final_b_markup)
+            except Exception:
+                await context.bot.send_message(telegram_id, msg_text, parse_mode="HTML", reply_markup=final_b_markup)
+        else:
+            await context.bot.send_message(telegram_id, msg_text, parse_mode="HTML", reply_markup=final_b_markup)
         # Второе сообщение — свободный текст от ИИ (нюансы, физиология)
         # Временно отключено
         # extra = await asyncio.get_event_loop().run_in_executor(
@@ -2740,9 +2747,12 @@ async def _send_recommendation(
         )
         weather_line_b = format_weather_for_message(weather_b) if weather_b else ""
         if msg:
-            await msg.delete()
+            try:
+                await msg.edit_text("🧪 ИИ анализирует тренировку и подбирает группу... (до 1-2 мин)")
+            except Exception:
+                pass
         await _send_ai_variant_b(telegram_id, analysis, user_data, context,
-                                 workout_dict=workout_dict_b, weather_line=weather_line_b)
+                                 workout_dict=workout_dict_b, weather_line=weather_line_b, msg=msg)
         return
 
     rec = (claude_advisor.recommend_long(analysis, user_data) if long
