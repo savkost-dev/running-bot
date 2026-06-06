@@ -176,11 +176,13 @@ def recalculate_and_save(db_user_id: int) -> dict | None:
     return result
 
 
-def _compute_sprint_ceiling(zones: dict) -> tuple[str | None, str | None]:
-    """MSS150 и профиль бегуна из зон.
-    Возвращает (sprint_ceiling, runner_profile) — оба могут быть None.
-    MSS150 = repetition * k, где k зависит от gap threshold−rep.
-    Рабочий потолок = 95% MSS150 (держимый последний повтор без срыва техники).
+def _compute_speed_passport(zones: dict) -> tuple[float | None, str | None]:
+    """Скоростной паспорт бегуна из зон.
+    Возвращает (k100, runner_profile).
+    k100 — коэффициент скорости на 100м относительно repetition-зоны:
+      gap threshold−repetition > 30 сек → 0.55 (скоростной)
+      gap 15−30 сек             → 0.64 (универсал)
+      gap < 15 сек              → 0.73 (выносливостный)
     """
     rep = _pace_to_sec_per_km(zones.get("repetition"))
     thr = _pace_to_sec_per_km(zones.get("threshold"))
@@ -189,22 +191,35 @@ def _compute_sprint_ceiling(zones: dict) -> tuple[str | None, str | None]:
     if thr:
         gap = thr - rep   # сек/км, > 0 (threshold медленнее repetition)
         if gap > 30:
-            k, profile = 0.75, "скоростной"
+            return 0.55, "скоростной"
         elif gap >= 15:
-            k, profile = 0.80, "универсал"
+            return 0.64, "универсал"
         else:
-            k, profile = 0.85, "выносливостный"
-    else:
-        k, profile = 0.80, "универсал"
-    ceiling = int(rep * k / 0.95)
-    return _sec_per_km_to_pace(ceiling), profile
+            return 0.73, "выносливостный"
+    return 0.64, "универсал"
+
+
+def speed_ceiling_for_distance(repetition_pace: str, k100: float, distance_m: int) -> str | None:
+    """Потолок финишного темпа для скоростного отрезка заданной дистанции (100–400м).
+    Формула критической скорости:
+      k(d) = 1 - (1 - k100) × (400 - d) / (3 × d)
+      MSS(d) = repetition_sec × k(d)
+      ceiling = MSS(d) / 0.94   (целевой темп ≤ 94% MSS — держимый без срыва техники)
+    """
+    rep_sec = _pace_to_sec_per_km(repetition_pace)
+    if not rep_sec or not k100:
+        return None
+    d = max(100, min(400, distance_m))
+    k = 1 - (1 - k100) * (400 - d) / (3 * d)
+    ceiling_sec = int(rep_sec * k / 0.94)
+    return _sec_per_km_to_pace(ceiling_sec)
 
 
 def get_pace_zones(db_user_id: int) -> dict | None:
     """Достаёт готовые зоны из athlete_cache.
     Если зон нет (новый пользователь) — считает на лету и сохраняет.
     Возвращает {"zones": dict, "source": str, "updated_at": str,
-                "sprint_ceiling": str|None, "runner_profile": str|None} или None.
+                "speed_k100": float|None, "runner_profile": str|None} или None.
     """
     import database as _db
     cached = _db.get_pace_zones_raw(db_user_id)
@@ -213,7 +228,7 @@ def get_pace_zones(db_user_id: int) -> dict | None:
         if result:
             cached = _db.get_pace_zones_raw(db_user_id)
     if cached:
-        ceiling, profile = _compute_sprint_ceiling(cached.get("zones") or {})
-        cached["sprint_ceiling"] = ceiling
+        k100, profile = _compute_speed_passport(cached.get("zones") or {})
+        cached["speed_k100"] = k100
         cached["runner_profile"] = profile
     return cached

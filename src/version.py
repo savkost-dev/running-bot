@@ -1,5 +1,5 @@
-VERSION = "0.24.44"
+VERSION = "0.24.45"
 BUILD_DATE = "2026-06-06"
 CHANGES = [
-    "sprint_ceiling перенесён в zones.py (_compute_sprint_ceiling); get_pace_zones возвращает sprint_ceiling + runner_profile",
+    "скоростной паспорт k100 (модель критической скорости): speed_ceiling_for_distance по формуле k(d); мультиблоки в промпте B",
 ]

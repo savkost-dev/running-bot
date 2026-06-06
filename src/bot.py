@@ -3701,10 +3701,32 @@ async def _build_variant_b_prompt(
         workout_dict or {},
         (recovery or {}).get("data_fetched_at"),
     )
+    # Потолки скорости по скоростным блокам (≤200м, recovery > work или цель — скорость)
+    _speed_ceilings = []
+    _rep_pace = zones_map.get("repetition")
+    _k100 = (zinfo or {}).get("speed_k100")
+    if _rep_pace and _k100 is not None:
+        _seen_dist: set[int] = set()
+        for _b in (analysis.get("structure") or []):
+            if _b.get("type") != "repeat":
+                continue
+            _d = _b.get("work_distance_m") or 0
+            _rec = _b.get("recovery_distance_m") or 0
+            _purpose = (_b.get("purpose") or "").lower()
+            _is_speed = (
+                50 <= _d <= 200 and
+                (_rec > _d or any(kw in _purpose for kw in ["скорост", "нейромышечн", "нейромышц"]))
+            )
+            if _is_speed and _d not in _seen_dist:
+                _seen_dist.add(_d)
+                _c = _z.speed_ceiling_for_distance(_rep_pace, _k100, _d)
+                if _c:
+                    _speed_ceilings.append({"distance_m": _d, "ceiling": _c})
+
     prompt = claude_advisor.build_ai_b_prompt(
         analysis, user_data, zones_map, recovery,
         recovery_scenario_text=scenario_ctx["prompt_text"],
-        sprint_ceiling=(zinfo or {}).get("sprint_ceiling"),
+        speed_ceilings=_speed_ceilings or None,
     )
     return prompt, scenario_ctx
 

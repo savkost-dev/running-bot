@@ -5,6 +5,17 @@
 
 ---
 
+## [0.24.45] 2026-06-06 — скоростной паспорт k100, формула критической скорости
+
+### Изменено
+- **zones.py `_compute_speed_passport`**: заменил `_compute_sprint_ceiling`. Возвращает `(k100, runner_profile)`: gap>30→0.55 скоростной, 15-30→0.64 универсал, <15→0.73 выносливостный.
+- **zones.py `speed_ceiling_for_distance`**: новая публичная функция. Формула: `k(d)=1-(1-k100)×(400-d)/(3×d)`, `ceiling=MSS(d)/0.94`. Работает для 100-400м.
+- **zones.py `get_pace_zones`**: теперь возвращает `speed_k100` и `runner_profile` (вместо `sprint_ceiling`).
+- **bot.py `_build_variant_b_prompt`**: из `analysis.structure` собирает скоростные блоки (≤200м, recovery>work или purpose содержит "скорост"/"нейромышечн"). Для каждой уникальной дистанции вычисляет потолок через `zones.speed_ceiling_for_distance`.
+- **claude_advisor.py `build_ai_b_prompt`**: параметр `speed_ceilings: list|None`. Один блок → краткая строка; несколько — перечень по блокам с правилом "каждый не превышает свой потолок".
+
+---
+
 ## [0.24.44] 2026-06-06 — sprint_ceiling перенесён в zones.py как единая точка истины
 
 ### Изменено

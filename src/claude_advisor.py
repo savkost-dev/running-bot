@@ -997,7 +997,7 @@ def _zone_display(zone_key: str, pos: str, near: str | None) -> str:
     return f"{name} ({inner})" if inner else name
 
 
-def build_ai_b_prompt(analysis: dict, user_data: dict, zones_map: dict, recovery: dict | None, recovery_scenario_text: str = "", sprint_ceiling: str | None = None) -> str:
+def build_ai_b_prompt(analysis: dict, user_data: dict, zones_map: dict, recovery: dict | None, recovery_scenario_text: str = "", speed_ceilings: list | None = None) -> str:
     """Промпт варианта B: ИИ видит Хшаг 1 + данные бегуна и САМ выбирает группу.
     Без формул — чистая рекомендация от ИИ.
     """
@@ -1104,9 +1104,16 @@ def build_ai_b_prompt(analysis: dict, user_data: dict, zones_map: dict, recovery
         f"Восстановление: {rec_text}\n"
         + (f"{time_context}\n" if time_context else "")
         + (
-            f"\nПотолок финишного темпа: {sprint_ceiling}/км (физический предел на 150м). "
-            f"Группу с финишным темпом быстрее — risk/hard, % ≤ 10, не оптимум.\n"
-            if sprint_ceiling else ""
+            (
+                f"\nПотолок финишного темпа (отрезок {speed_ceilings[0]['distance_m']}м): "
+                f"{speed_ceilings[0]['ceiling']}/км. "
+                "Группу с финишем быстрее — risk, % ≤ 10.\n"
+            ) if speed_ceilings and len(speed_ceilings) == 1 else (
+                "\nПотолки по блокам: " +
+                ", ".join(f"{sc['distance_m']}м → {sc['ceiling']}/км" for sc in speed_ceilings) +
+                ". Группа подходит ТОЛЬКО если КАЖДЫЙ блок не превышает свой потолок."
+                " Хоть один блок быстрее — risk/hard, % ≤ 10.\n"
+            ) if speed_ceilings else ""
         )
         + "\nСВЯЗЬ ТИПА РАБОТЫ С ЗОНАМИ — критично для выбора группы:\n"
         "Смотри на СУТЬ тренировки (выше) и выбирай ориентир по зонам:\n"
