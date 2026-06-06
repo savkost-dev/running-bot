@@ -5,6 +5,16 @@
 
 ---
 
+## [0.24.39] 2026-06-06 — Сохранение вечерней рассылки для утренней рекомендации
+
+### Изменено
+- **database.py `init_db`**: `ALTER TABLE last_recommendation ADD COLUMN ai_mode TEXT` (безопасно, try/except).
+- **database.py `save_last_recommendation`**: добавлен параметр `ai_mode: str = ""`, сохраняется в новую колонку.
+- **bot.py `_send_ai_variant_b`**: при `msg is None` (рассылка) → `save_last_recommendation` с `ai_mode=rec_mode`. Ручной `/workout` (msg передан) — не сохраняет.
+- **bot.py `_send_recommendation`** (путь A): аналогично — сохранение только при `msg is None`.
+
+---
+
 ## [0.24.38] 2026-06-06 — UX: статус ожидания вместо пустоты при B-режиме
 
 ### Изменено

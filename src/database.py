@@ -240,6 +240,11 @@ def init_db():
             conn.execute("ALTER TABLE workout_analysis ADD COLUMN edit_date TEXT")
         except Exception:
             pass
+    with get_connection() as conn:
+        try:
+            conn.execute("ALTER TABLE last_recommendation ADD COLUMN ai_mode TEXT")
+        except Exception:
+            pass
 
     # Дефолт глобальной настройки режима анализа тренировок
     with get_connection() as conn:
@@ -812,15 +817,15 @@ def get_user_profile(user_id: int) -> dict | None:
 
 # ── Последняя рекомендация ────────────────────────────────────
 
-def save_last_recommendation(user_id: int, advice: dict, workout: dict):
+def save_last_recommendation(user_id: int, advice: dict, workout: dict, ai_mode: str = ""):
     """Сохраняет вечернюю рекомендацию для использования утром."""
     with get_connection() as conn:
         conn.execute("""
             INSERT INTO last_recommendation
                 (user_id, recommended_group, recommended_pace, reason,
                  if_feeling_good, if_tired, workout_date, workout_title,
-                 groups_raw, extra_groups_raw, saved_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                 groups_raw, extra_groups_raw, ai_mode, saved_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
             ON CONFLICT(user_id) DO UPDATE SET
                 recommended_group = excluded.recommended_group,
                 recommended_pace = excluded.recommended_pace,
@@ -831,6 +836,7 @@ def save_last_recommendation(user_id: int, advice: dict, workout: dict):
                 workout_title = excluded.workout_title,
                 groups_raw = excluded.groups_raw,
                 extra_groups_raw = excluded.extra_groups_raw,
+                ai_mode = excluded.ai_mode,
                 saved_at = excluded.saved_at
         """, (
             user_id,
@@ -843,6 +849,7 @@ def save_last_recommendation(user_id: int, advice: dict, workout: dict):
             workout.get("location", ""),
             workout.get("groups_raw", ""),
             _json.dumps(workout.get("extra_groups_raw", []), ensure_ascii=False),
+            ai_mode,
         ))
 
 

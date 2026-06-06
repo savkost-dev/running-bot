@@ -2629,6 +2629,12 @@ async def _send_ai_variant_b(
             InlineKeyboardButton("⭐ Оценить рекомендацию", callback_data="rate_show"),
         ]])
         final_b_markup = _merge_keyboards(rating_markup, get_main_keyboard(from_recommendation=True))
+        # Сохранять для утренней — только при рассылке (msg is None), не при ручном /workout
+        if msg is None:
+            try:
+                save_last_recommendation(db_user_id, advice, workout_for_render, ai_mode=rec_mode)
+            except Exception as _e:
+                logger.error(f"save_last_recommendation (B): {_e}")
         if msg:
             try:
                 await msg.edit_text(msg_text, parse_mode="HTML", reply_markup=final_b_markup)
@@ -2853,6 +2859,12 @@ async def _send_recommendation(
         body = claude_advisor.format_evening_message(
             advice, workout_dict, stats=stats2, weather_line=weather_line, has_tracker=has_tracker)
 
+    # Сохранять для утренней — только при рассылке (msg is None), не при ручном /workout
+    if msg is None:
+        try:
+            save_last_recommendation(db_user_id, advice, workout_dict, ai_mode=rec_mode)
+        except Exception as _e:
+            logger.error(f"save_last_recommendation (A): {_e}")
     scenario_header = scenario_ctx["user_text"] + "\n\n" if scenario_ctx.get("user_text") else ""
     await _out(scenario_header + banner + body, final_markup, parse_mode="HTML")
 

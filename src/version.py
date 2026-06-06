@@ -1,5 +1,6 @@
-VERSION = "0.24.38"
+VERSION = "0.24.39"
 BUILD_DATE = "2026-06-06"
 CHANGES = [
-    "_send_ai_variant_b: параметр msg — статус 'ИИ анализирует...' заменяется готовой рекомендацией (без зависания)",
+    "save_last_recommendation: добавлен ai_mode; сохранение только при рассылке (msg is None) в путях A и B",
+    "database: ALTER TABLE last_recommendation ADD COLUMN ai_mode TEXT",
 ]
