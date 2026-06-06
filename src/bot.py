@@ -971,6 +971,7 @@ def _build_help_text(is_admin: bool) -> str:
             "/b — вариант B для себя\n"
             "/b_user — вариант B для выбранного пользователя\n"
             "/a_user — вариант A для выбранного пользователя\n"
+            "/w_user — реальный путь пользователя (его ai_mode: B или A)\n"
             "/p_b — промпт варианта B для себя\n"
             "/p_b_user — промпт варианта B для выбранного пользователя\n"
             "/p_a — промпт варианта A для себя\n"
@@ -4289,6 +4290,54 @@ async def a_user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await _send_recommendation(user["telegram_id"], user["name"], context, long=False, msg=msg)
 
 
+# ── /w_user — реальный путь пользователя (admin only) ───────────────────
+
+async def w_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+        return
+    users = get_users_list_for_b()
+    if not users:
+        await update.message.reply_text("Нет пользователей в базе.")
+        return
+    keyboard = [
+        [InlineKeyboardButton(
+            u["name"] + (f" (@{u['username']})" if u.get("username") else ""),
+            callback_data=f"w_user_{u['db_user_id']}"
+        )]
+        for u in users
+    ]
+    await update.message.reply_text(
+        "🔍 Реальный путь — выбери пользователя:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+async def w_user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query.from_user.id not in ADMIN_TELEGRAM_IDS:
+        await query.answer("Нет доступа.")
+        return
+    await query.answer()
+
+    db_user_id = int(query.data.rsplit("_", 1)[-1])
+    users = get_users_list_for_b()
+    user = next((u for u in users if u["db_user_id"] == db_user_id), None)
+    if not user:
+        await query.edit_message_text("Пользователь не найден.")
+        return
+
+    prefs = get_preferences(db_user_id) or {}
+    user_mode = prefs.get("ai_mode", "smart")
+    route = "B (ИИ)" if user_mode != "calc" else "A (формулы)"
+    msg = await query.edit_message_text(
+        f"🔍 Реальный путь — <b>{user['name']}</b>\nРежим: {user_mode} → {route}\nЗапускаю...",
+        parse_mode="HTML",
+    )
+    # _send_recommendation читает ai_mode выбранного пользователя из БД →
+    # deep/smart/fast → B, calc → A. Результат в чате админа через msg.
+    await _send_recommendation(user["telegram_id"], user["name"], context, long=False, msg=msg)
+
+
 async def _send_prompt_text(send_fn, prompt: str) -> None:
     """Отправляет текст промпта кусками по 4096 символов."""
     chunk_size = 4096
@@ -4582,6 +4631,7 @@ def main():
     app.add_handler(CommandHandler("b",         b_self_command))
     app.add_handler(CommandHandler("b_user",    b_command))
     app.add_handler(CommandHandler("a_user",    a_user_command))
+    app.add_handler(CommandHandler("w_user",    w_user_command))
     app.add_handler(CommandHandler("p_b",       p_b_self_command))
     app.add_handler(CommandHandler("p_b_user",  p_b_command))
     app.add_handler(CommandHandler("p_a",       p_a_self_command))
@@ -4589,6 +4639,7 @@ def main():
     app.add_handler(CommandHandler("p_analyze", p_analyze_command))
     app.add_handler(CallbackQueryHandler(b_user_callback,   pattern=r"^b_user_\d+$"))
     app.add_handler(CallbackQueryHandler(a_user_callback,   pattern=r"^a_user_\d+$"))
+    app.add_handler(CallbackQueryHandler(w_user_callback,   pattern=r"^w_user_\d+$"))
     app.add_handler(CallbackQueryHandler(pb_user_callback,  pattern=r"^pb_user_\d+$"))
     app.add_handler(CallbackQueryHandler(pa_user_callback,  pattern=r"^pa_user_\d+$"))
     app.add_handler(CallbackQueryHandler(panalyze_callback, pattern=r"^panalyze_(interval|long)$"))
