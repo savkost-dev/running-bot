@@ -1,5 +1,5 @@
-VERSION = "0.24.46"
+VERSION = "0.24.47"
 BUILD_DATE = "2026-06-06"
 CHANGES = [
-    "фикс варианта B: убран stats[mode]='b_ai', footer теперь показывает реальный режим (deep/smart/fast) и реальное время",
+    "режим fast переключён на deepseek-chat (~7с вместо ~48с у flash)",
 ]

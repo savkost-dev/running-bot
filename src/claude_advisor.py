@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 MODEL_DEEP  = "deepseek-v4-pro"    # thinking=True  — 🧠 Глубокое
 MODEL_SMART = "deepseek-v4-flash"  # thinking=True  — ⚡ Умное
-MODEL_FAST  = "deepseek-v4-flash"  # thinking=False — 🔥 Быстрое
+MODEL_FAST  = "deepseek-chat"      # thinking=False — 🔥 Быстрое (~7s)
 
 _MODE_LABELS = {"deep": "🧠 Глубокий (ИИ)", "smart": "⚡ Быстрый (ИИ)",
                 "fast": "🪶 Лёгкий (ИИ)", "calc": "📊 Расчётный",
@@ -1728,7 +1728,7 @@ def ask_groq(prompt: str, mode: str = "smart") -> dict | None:
 
     mode="deep"  → deepseek-v4-pro,   max_tokens=16000, timeout=300s  (~2-3 мин)
     mode="smart" → deepseek-v4-flash, max_tokens=12000, timeout=180s  (~1-2 мин)
-    mode="fast"  → deepseek-v4-flash, max_tokens=8000,  timeout=60s   (~30 сек)
+    mode="fast"  → deepseek-chat,     max_tokens=8000,  timeout=60s   (~7 сек)
     """
     global last_prompt
     last_prompt = prompt

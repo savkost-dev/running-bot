@@ -5,6 +5,14 @@
 
 ---
 
+## [0.24.47] 2026-06-06 — fast режим переключён на deepseek-chat (не-reasoning, ~7с)
+
+### Изменено
+- **claude_advisor.py `MODEL_FAST`**: `deepseek-v4-flash` → `deepseek-chat`. Тест: deepseek-chat 7.6с/0 thinking/valid JSON vs flash 48.3с/10k tokens thinking. 6× быстрее, без reasoning overhead.
+- **ask_groq docstring**: обновлён timeout/описание для fast режима.
+
+---
+
 ## [0.24.46] 2026-06-06 — фикс footer варианта B: реальный режим вместо "b_ai"
 
 ### Исправлено
