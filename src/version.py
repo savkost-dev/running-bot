@@ -1,5 +1,6 @@
-VERSION = "0.24.35"
+VERSION = "0.24.36"
 BUILD_DATE = "2026-06-06"
 CHANGES = [
-    "build_ai_b_prompt: инструкция СВЯЗЬ ТИПА РАБОТЫ С ЗОНАМИ — скоростная→repetition+, МПК→interval, ПАНО→threshold",
+    "_build_analyze_prompt: рамка вместо абсолютизма для коротких отрезков — степень восстановления модель определяет сама",
+    "build_ai_b_prompt: якорь repetition с диапазоном (начало ≤ rep, конец ≥ rep) вместо 'и БЫСТРЕЕ'",
 ]
