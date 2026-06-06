@@ -1,5 +1,5 @@
-VERSION = "0.24.34"
+VERSION = "0.24.35"
 BUILD_DATE = "2026-06-06"
 CHANGES = [
-    "analyze_workout: max_tokens 8000→24000 (deep) / 12000 (smart) — фикс length finish_reason",
+    "build_ai_b_prompt: инструкция СВЯЗЬ ТИПА РАБОТЫ С ЗОНАМИ — скоростная→repetition+, МПК→interval, ПАНО→threshold",
 ]
