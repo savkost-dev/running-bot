@@ -5,6 +5,15 @@
 
 ---
 
+## [0.24.41] 2026-06-06 — is_broadcast: сохранение только из scheduled_evening
+
+### Изменено
+- **bot.py `_send_recommendation`**: добавлен параметр `is_broadcast: bool = False`; `save_last_recommendation` вызывается только при `is_broadcast=True` (вместо `msg is None`).
+- **bot.py `_send_ai_variant_b`**: аналогично — `is_broadcast` пробрасывается из `_send_recommendation`; сохранение только при `is_broadcast=True`.
+- **bot.py `scheduled_evening`**: передаёт `is_broadcast=True`. Все остальные вызовы (`/workout`, `/long`, `/a_user`, `/w_user`) используют дефолт `False`.
+
+---
+
 ## [0.24.40] 2026-06-06 — /w_user: реальный путь пользователя для админа
 
 ### Добавлено

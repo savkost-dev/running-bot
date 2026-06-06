@@ -2564,6 +2564,7 @@ async def _send_ai_variant_b(
     workout_dict: dict | None = None,
     weather_line: str = "",
     msg=None,
+    is_broadcast: bool = False,
 ) -> None:
     """Вариант B: ИИ сам выбирает группу.
     Для deep/fast/smart — основной путь рекомендации (вместо A).
@@ -2630,8 +2631,8 @@ async def _send_ai_variant_b(
             InlineKeyboardButton("⭐ Оценить рекомендацию", callback_data="rate_show"),
         ]])
         final_b_markup = _merge_keyboards(rating_markup, get_main_keyboard(from_recommendation=True))
-        # Сохранять для утренней — только при рассылке (msg is None), не при ручном /workout
-        if msg is None:
+        # Сохранять для утренней — только при плановой рассылке (is_broadcast=True)
+        if is_broadcast:
             try:
                 save_last_recommendation(db_user_id, advice, workout_for_render, ai_mode=rec_mode)
             except Exception as _e:
@@ -2669,6 +2670,7 @@ async def _send_recommendation(
     long: bool = False,
     msg=None,
     live: dict | None = None,
+    is_broadcast: bool = False,
 ):
     """И3: рекомендация из кэша workout_analysis + recommend_group/recommend_long.
     find_next_* используется ТОЛЬКО для детекта свежести анонса (post_id/edit_date) и
@@ -2759,7 +2761,8 @@ async def _send_recommendation(
             except Exception:
                 pass
         await _send_ai_variant_b(telegram_id, analysis, user_data, context,
-                                 workout_dict=workout_dict_b, weather_line=weather_line_b, msg=msg)
+                                 workout_dict=workout_dict_b, weather_line=weather_line_b,
+                                 msg=msg, is_broadcast=is_broadcast)
         return
 
     rec = (claude_advisor.recommend_long(analysis, user_data) if long
@@ -2860,8 +2863,8 @@ async def _send_recommendation(
         body = claude_advisor.format_evening_message(
             advice, workout_dict, stats=stats2, weather_line=weather_line, has_tracker=has_tracker)
 
-    # Сохранять для утренней — только при рассылке (msg is None), не при ручном /workout
-    if msg is None:
+    # Сохранять для утренней — только при плановой рассылке (is_broadcast=True)
+    if is_broadcast:
         try:
             save_last_recommendation(db_user_id, advice, workout_dict, ai_mode=rec_mode)
         except Exception as _e:
@@ -3872,7 +3875,7 @@ async def scheduled_evening(context: ContextTypes.DEFAULT_TYPE):
     count = 0
     for telegram_id, name, _un, _has in users:
         try:
-            await _send_recommendation(telegram_id, name, context, long=is_long, live=live)
+            await _send_recommendation(telegram_id, name, context, long=is_long, live=live, is_broadcast=True)
             count += 1
             await asyncio.sleep(0.5)
         except Forbidden:
