@@ -2588,7 +2588,6 @@ async def _send_ai_variant_b(
             return
         advice = result["advice"]
         stats = result.get("stats", {})
-        stats["mode"] = "b_ai"
         # Поля из анализа (Шаг 1) — подставляем в коде, ИИ не дублирует
         spec = (get_preferences(db_user_id) or {}).get("specialization") or "half_marathon"
         advice["overall_purpose"] = analysis.get("overall_purpose", "")
