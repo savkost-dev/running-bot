@@ -2634,7 +2634,14 @@ async def _send_ai_variant_b(
         # Сохранять для утренней — только при плановой рассылке (is_broadcast=True)
         if is_broadcast:
             try:
-                save_last_recommendation(db_user_id, advice, workout_for_render, ai_mode=rec_mode)
+                _eve_rec = claude_advisor._recovery_value(user_data.get("recovery"))
+                _eve_rs = int(_eve_rec) if _eve_rec is not None else None
+                _lowered = bool(advice.get("lowered_by_recovery"))
+                save_last_recommendation(
+                    db_user_id, advice, workout_for_render, ai_mode=rec_mode,
+                    evening_recovery_score=_eve_rs,
+                    lowered_by_recovery=_lowered,
+                )
             except Exception as _e:
                 logger.error(f"save_last_recommendation (B): {_e}")
         if msg:
@@ -2866,7 +2873,13 @@ async def _send_recommendation(
     # Сохранять для утренней — только при плановой рассылке (is_broadcast=True)
     if is_broadcast:
         try:
-            save_last_recommendation(db_user_id, advice, workout_dict, ai_mode=rec_mode)
+            _eve_rec = claude_advisor._recovery_value(user_data.get("recovery"))
+            _eve_rs = int(_eve_rec) if _eve_rec is not None else None
+            save_last_recommendation(
+                db_user_id, advice, workout_dict, ai_mode=rec_mode,
+                evening_recovery_score=_eve_rs,
+                lowered_by_recovery=False,
+            )
         except Exception as _e:
             logger.error(f"save_last_recommendation (A): {_e}")
     scenario_header = scenario_ctx["user_text"] + "\n\n" if scenario_ctx.get("user_text") else ""

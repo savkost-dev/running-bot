@@ -1082,7 +1082,8 @@ def build_ai_b_prompt(analysis: dict, user_data: dict, zones_map: dict, recovery
         + '"suitability_percentages": [{"group": "номер", "percentage": 0..100, "comment": "ТОЛЬКО одно слово без пробелов и двоеточий: optimal или good или ambitious или easy или hard или risk или unload или tooslow"}], '
         + '"preparation_tips": ["совет 1"], '
         + '"warning": "предупреждение или null", '
-        + '"recovery_forecast": "прогноз восстановления к старту (1-2 предложения) или null"'
+        + '"recovery_forecast": "прогноз восстановления к старту (1-2 предложения) или null", '
+        + '"lowered_by_recovery": false'
         + "}"
     )
     return (
@@ -1139,6 +1140,10 @@ def build_ai_b_prompt(analysis: dict, user_data: dict, zones_map: dict, recovery
         "Если recovery_pace быстрее 5:30 мин/км — напиши ТОЧНО: "
         "'восстановление между отрезками ~X:XX/км — активное (трусцой)' (вставь реальный темп). "
         "Если recovery_pace >= 5:30 или нет — null. НИКАКОГО другого текста в warning.\n"
+        "Поле lowered_by_recovery: true если ты выбрал группу МЕДЛЕННЕЕ чем дал бы при хорошем восстановлении — "
+        "именно из-за низкого TR/Recovery Score (не из-за темпов, специализации или структуры тренировки). "
+        "Если восстановление нормальное или не повлияло на выбор — false. "
+        "Если поставил true — упомяни это в reason.\n"
         "Отвечай только JSON, без лишнего текста."
     )
 

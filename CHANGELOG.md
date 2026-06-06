@@ -5,6 +5,17 @@
 
 ---
 
+## [0.24.42] 2026-06-06 — last_recommendation: evening_recovery_score + lowered_by_recovery
+
+### Изменено
+- **database.py `init_db`**: миграции `ALTER TABLE last_recommendation ADD COLUMN evening_recovery_score INTEGER` и `lowered_by_recovery INTEGER`.
+- **database.py `save_last_recommendation`**: новые параметры `evening_recovery_score` и `lowered_by_recovery`; сохраняются в БД.
+- **database.py `get_last_recommendation`**: SELECT расширен — теперь возвращает `ai_mode`, `evening_recovery_score`, `lowered_by_recovery`.
+- **claude_advisor.py `build_ai_b_prompt`**: в JSON-схему добавлено поле `lowered_by_recovery` (bool); инструкция: true если ИИ снизил группу именно из-за низкого TR/RS.
+- **bot.py**: оба пути `is_broadcast` вычисляют `_recovery_value(user_data["recovery"])` и передают в `save_last_recommendation`; путь B дополнительно передаёт `lowered_by_recovery` из `advice`.
+
+---
+
 ## [0.24.41] 2026-06-06 — is_broadcast: сохранение только из scheduled_evening
 
 ### Изменено

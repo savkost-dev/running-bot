@@ -245,6 +245,16 @@ def init_db():
             conn.execute("ALTER TABLE last_recommendation ADD COLUMN ai_mode TEXT")
         except Exception:
             pass
+    with get_connection() as conn:
+        try:
+            conn.execute("ALTER TABLE last_recommendation ADD COLUMN evening_recovery_score INTEGER")
+        except Exception:
+            pass
+    with get_connection() as conn:
+        try:
+            conn.execute("ALTER TABLE last_recommendation ADD COLUMN lowered_by_recovery INTEGER DEFAULT 0")
+        except Exception:
+            pass
 
     # Дефолт глобальной настройки режима анализа тренировок
     with get_connection() as conn:
@@ -817,15 +827,20 @@ def get_user_profile(user_id: int) -> dict | None:
 
 # ── Последняя рекомендация ────────────────────────────────────
 
-def save_last_recommendation(user_id: int, advice: dict, workout: dict, ai_mode: str = ""):
+def save_last_recommendation(
+    user_id: int, advice: dict, workout: dict, ai_mode: str = "",
+    evening_recovery_score: int | None = None,
+    lowered_by_recovery: bool = False,
+):
     """Сохраняет вечернюю рекомендацию для использования утром."""
     with get_connection() as conn:
         conn.execute("""
             INSERT INTO last_recommendation
                 (user_id, recommended_group, recommended_pace, reason,
                  if_feeling_good, if_tired, workout_date, workout_title,
-                 groups_raw, extra_groups_raw, ai_mode, saved_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                 groups_raw, extra_groups_raw, ai_mode,
+                 evening_recovery_score, lowered_by_recovery, saved_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
             ON CONFLICT(user_id) DO UPDATE SET
                 recommended_group = excluded.recommended_group,
                 recommended_pace = excluded.recommended_pace,
@@ -837,6 +852,8 @@ def save_last_recommendation(user_id: int, advice: dict, workout: dict, ai_mode:
                 groups_raw = excluded.groups_raw,
                 extra_groups_raw = excluded.extra_groups_raw,
                 ai_mode = excluded.ai_mode,
+                evening_recovery_score = excluded.evening_recovery_score,
+                lowered_by_recovery = excluded.lowered_by_recovery,
                 saved_at = excluded.saved_at
         """, (
             user_id,
@@ -850,6 +867,8 @@ def save_last_recommendation(user_id: int, advice: dict, workout: dict, ai_mode:
             workout.get("groups_raw", ""),
             _json.dumps(workout.get("extra_groups_raw", []), ensure_ascii=False),
             ai_mode,
+            int(evening_recovery_score) if evening_recovery_score is not None else None,
+            1 if lowered_by_recovery else 0,
         ))
 
 
@@ -861,14 +880,16 @@ def get_last_recommendation(user_id: int, workout_date: str | None = None) -> di
             row = conn.execute("""
                 SELECT recommended_group, recommended_pace, reason,
                        if_feeling_good, if_tired, workout_date, workout_title,
-                       groups_raw, extra_groups_raw, saved_at
+                       groups_raw, extra_groups_raw, saved_at,
+                       ai_mode, evening_recovery_score, lowered_by_recovery
                 FROM last_recommendation WHERE user_id = ? AND workout_date = ?
             """, (user_id, workout_date)).fetchone()
         else:
             row = conn.execute("""
                 SELECT recommended_group, recommended_pace, reason,
                        if_feeling_good, if_tired, workout_date, workout_title,
-                       groups_raw, extra_groups_raw, saved_at
+                       groups_raw, extra_groups_raw, saved_at,
+                       ai_mode, evening_recovery_score, lowered_by_recovery
                 FROM last_recommendation WHERE user_id = ?
             """, (user_id,)).fetchone()
 
@@ -894,6 +915,9 @@ def get_last_recommendation(user_id: int, workout_date: str | None = None) -> di
         "groups_raw": row[7],
         "extra_groups_raw": _json.loads(row[8]) if row[8] else [],
         "saved_at": row[9],
+        "ai_mode": row[10],
+        "evening_recovery_score": row[11],
+        "lowered_by_recovery": bool(row[12]) if row[12] is not None else False,
     }
 
 

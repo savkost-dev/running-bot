@@ -1,5 +1,5 @@
-VERSION = "0.24.41"
+VERSION = "0.24.42"
 BUILD_DATE = "2026-06-06"
 CHANGES = [
-    "is_broadcast: save_last_recommendation только из scheduled_evening; ручные /workout, /a_user, /w_user — не сохраняют",
+    "last_recommendation: evening_recovery_score + lowered_by_recovery (флаг ИИ); get_last_recommendation возвращает ai_mode",
 ]
