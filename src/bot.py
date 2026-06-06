@@ -3390,8 +3390,17 @@ async def _send_long_run_recommendation(
     if msg:
         await msg.edit_text(wait_msg)
 
+    _zones_map = None
+    try:
+        import zones as _zones_mod
+        _zinfo = _zones_mod.get_pace_zones(db_user_id)
+        _zones_map = (_zinfo or {}).get("zones")
+    except Exception as _e:
+        logger.warning(f"long: не удалось получить зоны user={db_user_id}: {_e}")
+
     prompt = build_long_run_prompt(workout, fitness, recovery, weather_prompt=weather_prompt,
-                                   recovery_scenario_text=scenario_ctx["prompt_text"])
+                                   recovery_scenario_text=scenario_ctx["prompt_text"],
+                                   zones_map=_zones_map)
     import functools
     result = await asyncio.get_event_loop().run_in_executor(
         None, functools.partial(ask_groq, prompt, ai_mode))

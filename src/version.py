@@ -1,5 +1,8 @@
-VERSION = "0.24.50"
+VERSION = "0.24.51"
 BUILD_DATE = "2026-06-06"
 CHANGES = [
-    "фикс data_fetched_at для Whoop+Garmin: параллельный get_body_battery_with_sync даёт свежий synced_at",
+    "лонг: выбор группы привязан к зоне EASY (не по VO2max), жёсткий потолок = марафонский темп, "
+    "восстановление влияет на выбор группы (TR<50 → группа медленнее+ровно, TR<35 → самый спокойный), "
+    "прокинуты зоны (easy/marathon) в build_long_run_prompt; по умолчанию ровный easy, прогрессия — исключение",
+    "лонг: убрана утечка суточного Body Battery в strategy_hints (recovery_score только для Whoop)",
 ]

@@ -2689,7 +2689,7 @@ def _add_sec_to_pace(pace: str, seconds: int) -> str:
         return "—"
 
 
-def build_long_run_prompt(workout: dict, fitness: dict, recovery: dict | None = None, weather_prompt: str = "", recovery_scenario_text: str = "") -> str:
+def build_long_run_prompt(workout: dict, fitness: dict, recovery: dict | None = None, weather_prompt: str = "", recovery_scenario_text: str = "", zones_map: dict | None = None) -> str:
     groups = workout.get("groups") or []
     groups_lines = []
     for g in groups:
@@ -2714,19 +2714,19 @@ def build_long_run_prompt(workout: dict, fitness: dict, recovery: dict | None = 
     vo2max, vo2max_source = _estimate_vo2max(fitness, recovery)
     vo2max_line = f"VO2max: {vo2max} мл/кг/мин [{vo2max_source}]" if vo2max else "VO2max: нет данных"
 
+    _zones = zones_map or {}
+    easy_pace = _zones.get("easy")
+    marathon_pace = _zones.get("marathon")
+
     lt_pace = fitness.get("lactate_threshold_pace")
     lt_hr = fitness.get("lactate_threshold_hr")
     lt_line = ""
     if lt_pace:
-        try:
-            lt_slow = _add_sec_to_pace(lt_pace, 60)
-            lt_very_slow = _add_sec_to_pace(lt_pace, 90)
-            lt_range = f"При пороге {lt_pace} — целевой темп длительной {lt_slow}-{lt_very_slow} мин/км"
-        except Exception:
-            lt_range = "Темп первой половины должен быть на 60-90 сек/км медленнее порога"
+        easy_ref = easy_pace or _add_sec_to_pace(lt_pace, 60)
         lt_line = (f"Лактатный порог: {lt_pace} мин/км"
                    + (f" при ЧСС {lt_hr}" if lt_hr else "")
-                   + f"\n{lt_range}. Прогрессия: вторая половина на 30 сек/км быстрее первой."
+                   + f"\nДлительная бежится в зоне EASY (~{easy_ref}/км). "
+                   + (f"Марафонский темп {marathon_pace}/км — это ПОТОЛОК, быстрее нельзя." if marathon_pace else "")
                    + f"\nВАЖНО: first_half_pace = точный pace_start выбранной группы")
 
     load = fitness.get("training_load", {})
@@ -2777,7 +2777,7 @@ def build_long_run_prompt(workout: dict, fitness: dict, recovery: dict | None = 
                    "Пол: женский (нормы VO2max ниже на ~10%)" if gender == "female" else "")
 
     hints = []
-    if recovery_score is not None:
+    if recovery_source == "whoop" and recovery_score is not None:
         hints.append(f"Recovery: {recovery_score}% — {'≥67%, прогрессия возможна' if recovery_score >= 67 else '<67%, ровный темп предпочтительнее'}")
     if training_readiness and training_readiness.get("score") is not None:
         tr = training_readiness["score"]
@@ -2835,13 +2835,23 @@ def build_long_run_prompt(workout: dict, fitness: dict, recovery: dict | None = 
            "- Дождь или ветер >8 м/с: ровный темп, прогрессия рискованна",
            "- Жара + TSB < -20: обязательно ровный темп, снизить на группу",
            ""] if weather_prompt else []),
-        "ПРАВИЛА:",
-        "- Темп первой половины: на 60-90 сек МЕДЛЕННЕЕ лактатного порога (аэробная база)",
-        "- Прогрессия рекомендуется: recovery ≥ 67% (или TR ≥ 70), TSB > -15, сон ≥ 7ч",
-        "- Ровный темп: recovery < 67%, TSB ≤ -15 или восстановление после соревнования",
-        "- При прогрессии: первые 50 мин = pace_start группы, вторые 50 мин = pace_end (на 30 сек/км быстрее)",
-        "- ВАЖНО: first_half_pace = точный pace_start выбранной группы (не рассчитывай новый темп)",
-        "- second_half_pace = pace_end выбранной группы (или null при ровном темпе)",
+        "КАК ВЫБРАТЬ ГРУППУ (главное правило):",
+        "- Длительная сегодня = аэробный объём в зоне EASY. Это НЕ тест силы и НЕ темповая работа.",
+        (f"- Ориентир первой половины — темп EASY бегуна ({easy_pace}/км). " if easy_pace
+         else "- Ориентир первой половины — темп на 60-90 сек/км медленнее порога (зона EASY). ")
+        + "Выбирай группу, чей СТАРТОВЫЙ темп (pace_start) БЛИЖЕ ВСЕГО к этому ориентиру.",
+        "- НЕ выбирай группу по уровню/VO2max бегуна. Сильный бегун на длительной бежит МЕДЛЕННО — это норма.",
+        (f"- ЖЁСТКИЙ ПОТОЛОК: ни в один момент длительной темп НЕ быстрее марафонского ({marathon_pace}/км). " if marathon_pace
+         else "- ЖЁСТКИЙ ПОТОЛОК: ни в один момент длительной темп не быстрее марафонского. ")
+        + "Если прогрессия выбранной группы уходит быстрее марафонского — ставь run_strategy='even' (ровный темп) ЛИБО выбери группу медленнее.",
+        "- При сомнении между двумя группами — выбирай БОЛЕЕ МЕДЛЕННУЮ (на длительной перебег хуже недобега).",
+        "ВОССТАНОВЛЕНИЕ → ВЫБОР ГРУППЫ:",
+        "- TR < 50 (или Whoop Recovery < 50): сдвинь выбор на ОДНУ группу медленнее и поставь ровный темп.",
+        "- TR < 35 (или Recovery < 35): выбери самый спокойный разумный вариант, только ровный темп.",
+        "ТЕМП В ОТВЕТЕ:",
+        "- first_half_pace = точный pace_start выбранной группы (не рассчитывай новый темп).",
+        "- second_half_pace = pace_end выбранной группы при прогрессии, либо null при ровном темпе.",
+        "- Прогрессия допустима ТОЛЬКО если pace_end не быстрее марафонского И восстановление хорошее (TR ≥ 70 / Recovery ≥ 67). По умолчанию для длительной — ровный easy.",
         "",
         "В suitability_percentages включи КАЖДУЮ группу из раздела ГРУППЫ (все без исключения).",
         "ВАЖНО: поле 'group' — ТОЛЬКО номер группы. Допустимо: '1', '2', '3', '3.5', '4', '5'.",
