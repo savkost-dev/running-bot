@@ -3550,14 +3550,25 @@ async def _get_recovery_data(db_user_id: int, force_fresh: bool = False) -> dict
         if use_garmin and has_garmin:
             try:
                 tr = None
+                synced_at = None
                 if not force_fresh:
                     cached = get_garmin_recovery_cache(db_user_id)
                     tr = cached.get("training_readiness") if cached else None
                 if not tr:
-                    from garmin import get_training_readiness
-                    tr = await get_training_readiness(db_user_id)
+                    from garmin import get_training_readiness, get_body_battery_with_sync
+                    if force_fresh:
+                        tr, bb_result = await asyncio.gather(
+                            get_training_readiness(db_user_id),
+                            get_body_battery_with_sync(db_user_id),
+                        )
+                        if bb_result and not isinstance(bb_result, Exception):
+                            _, synced_at = bb_result
+                    else:
+                        tr = await get_training_readiness(db_user_id)
                 if tr:
                     whoop_data["training_readiness"] = tr
+                if synced_at:
+                    whoop_data["synced_at"] = synced_at
             except Exception as e:
                 logger.error(f"Garmin TR error for user {db_user_id}: {e}")
         return whoop_data
