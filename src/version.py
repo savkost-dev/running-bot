@@ -1,5 +1,5 @@
-VERSION = "0.24.31"
+VERSION = "0.24.32"
 BUILD_DATE = "2026-06-06"
 CHANGES = [
-    "/p_analyze: показ промпта Шага 1 (анализ анонса) — raw_text из БД, comments_text из live",
+    "_build_analyze_prompt: критерий работа/отдых в purpose; примеры JSON отражают контраст",
 ]
