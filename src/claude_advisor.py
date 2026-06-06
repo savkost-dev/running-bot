@@ -2638,7 +2638,7 @@ def _add_sec_to_pace(pace: str, seconds: int) -> str:
         return "—"
 
 
-def build_long_run_prompt(workout: dict, fitness: dict, recovery: dict | None = None, weather_prompt: str = "") -> str:
+def build_long_run_prompt(workout: dict, fitness: dict, recovery: dict | None = None, weather_prompt: str = "", recovery_scenario_text: str = "") -> str:
     groups = workout.get("groups") or []
     groups_lines = []
     for g in groups:
@@ -2690,9 +2690,27 @@ def build_long_run_prompt(workout: dict, fitness: dict, recovery: dict | None = 
     body_battery = (recovery or {}).get("body_battery")
     training_readiness = (recovery or {}).get("training_readiness")
 
-    recovery_block = _build_recovery_block(
-        recovery_source, recovery_score, hrv, sleep_score, sleep_hours, body_battery, training_readiness
-    ) if recovery else "Нет данных о восстановлении."
+    _rec_parts = []
+    if recovery:
+        if isinstance(training_readiness, dict) and training_readiness.get("score") is not None:
+            _tr_at_raw = recovery.get("training_readiness_at")
+            _tr_at_str = ""
+            if _tr_at_raw:
+                try:
+                    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+                    _dt_obj = _dt.fromisoformat(str(_tr_at_raw).replace("Z", "+00:00"))
+                    if _dt_obj.tzinfo is None:
+                        _dt_obj = _dt_obj.replace(tzinfo=_tz.utc)
+                    _msk = _dt_obj + _td(hours=3)
+                    _tr_at_str = f", измерен {_msk.strftime('%H:%M %d.%m')}"
+                except Exception:
+                    pass
+            _rec_parts.append(
+                f"Training Readiness: {training_readiness['score']}/100 ({training_readiness.get('level', '?')}){_tr_at_str}"
+            )
+        if recovery_source == "whoop" and recovery_score is not None:
+            _rec_parts.append(f"Recovery Score: {recovery_score}%")
+    recovery_text = "\n".join(f"- {r}" for r in _rec_parts) if _rec_parts else "- Нет данных о восстановлении."
 
     last_race = fitness.get("last_race")
     race_text = ""
@@ -2754,7 +2772,7 @@ def build_long_run_prompt(workout: dict, fitness: dict, recovery: dict | None = 
     parts += [
         "",
         f"ДАННЫЕ ВОССТАНОВЛЕНИЯ (источник: {recovery_source.upper() if recovery_source else 'НЕТ'}):",
-        recovery_block,
+        recovery_text,
         "",
         "АНАЛИЗ ДЛЯ ВЫБОРА СТРАТЕГИИ:",
         strategy_hints,
@@ -2780,6 +2798,7 @@ def build_long_run_prompt(workout: dict, fitness: dict, recovery: dict | None = 
         "",
         "ЯЗЫК: все текстовые поля ТОЛЬКО на русском языке. Не используй английский.",
         "",
+        *(([recovery_scenario_text, ""] if recovery_scenario_text else [])),
         "Дай ответ строго в формате JSON:",
         """{
   "recommended_group": "только номер группы (число, например 4)",

@@ -3225,8 +3225,17 @@ async def _send_long_run_recommendation(
         if profile.get("gender"):
             fitness["gender"] = profile["gender"]
 
-    # Данные восстановления — всегда свежие для /long
-    recovery = await _get_recovery_data(db_user_id, force_fresh=True)
+    # is_past ДО запроса recovery (определяет force_fresh)
+    _is_past = _workout_is_past(workout.get("workout_date", ""), workout.get("schedule", ""))
+    workout["is_past"] = _is_past
+
+    # Данные восстановления
+    recovery = await _get_unified_recovery(db_user_id, force_fresh=not _is_past)
+
+    scenario_ctx = _recovery_scenario(
+        workout,
+        (recovery or {}).get("data_fetched_at"),
+    )
 
     # Погода
     weather = await get_weather_for_workout(
@@ -3246,7 +3255,8 @@ async def _send_long_run_recommendation(
     if msg:
         await msg.edit_text(wait_msg)
 
-    prompt = build_long_run_prompt(workout, fitness, recovery, weather_prompt=weather_prompt)
+    prompt = build_long_run_prompt(workout, fitness, recovery, weather_prompt=weather_prompt,
+                                   recovery_scenario_text=scenario_ctx["prompt_text"])
     import functools
     result = await asyncio.get_event_loop().run_in_executor(
         None, functools.partial(ask_groq, prompt, ai_mode))
@@ -3295,11 +3305,12 @@ async def _send_long_run_recommendation(
             InlineKeyboardButton("⭐ Оценить рекомендацию", callback_data="rate_show"),
         ]])
 
+    scenario_header = scenario_ctx["user_text"] + "\n\n" if scenario_ctx.get("user_text") else ""
     final_markup = _merge_keyboards(fit_markup, rating_markup, get_main_keyboard(from_recommendation=True))
     if msg:
-        await msg.edit_text(text, parse_mode="HTML", reply_markup=final_markup)
+        await msg.edit_text(scenario_header + text, parse_mode="HTML", reply_markup=final_markup)
     else:
-        await context.bot.send_message(telegram_id, text, parse_mode="HTML",
+        await context.bot.send_message(telegram_id, scenario_header + text, parse_mode="HTML",
                                        reply_markup=get_main_keyboard(from_recommendation=True))
 
 

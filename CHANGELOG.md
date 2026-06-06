@@ -5,6 +5,14 @@
 
 ---
 
+## [0.24.30] 2026-06-06 — Лонг: паритет с интервалами по восстановлению
+
+### Изменено
+- **bot.py `_send_long_run_recommendation`**: `is_past` через `_workout_is_past` ДО запроса recovery; `_get_unified_recovery(force_fresh=not is_past)` вместо `_get_recovery_data(force_fresh=True)`; `scenario_ctx` + шапка `user_text` в начало сообщения; `prompt_text` передаётся в `build_long_run_prompt`
+- **claude_advisor.py `build_long_run_prompt`**: новый параметр `recovery_scenario_text`; блок восстановления строится инлайн (Training Readiness с временем, Recovery Score только для Whoop; без body_battery, hrv, суточного COROS); `recovery_scenario_text` вставляется перед «Дай ответ»
+
+---
+
 ## [0.24.8] 2026-06-04 — _extract_group_pace: темпы через blocks[] для интервальных
 
 ### Добавлено / Изменено
