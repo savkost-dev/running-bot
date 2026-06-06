@@ -5,6 +5,13 @@
 
 ---
 
+## [0.24.34] 2026-06-06 — analyze_workout: фикс обрезки по токенам
+
+### Исправлено
+- **claude_advisor.py `analyze_workout`**: `max_tokens` 8000 → 24000 (deep) / 12000 (smart). Диагностика показала: с реальными комментариями reasoning_content DeepSeek-v4-pro разрастается до ~22k символов, суммарный лимит 8000 токенов не оставлял места для content JSON → `finish_reason=length` → обрезанный/пустой ответ.
+
+---
+
 ## [0.24.33] 2026-06-06 — analyze_workout: надёжное извлечение JSON
 
 ### Исправлено

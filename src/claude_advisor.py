@@ -746,7 +746,7 @@ def analyze_workout(raw_text: str, comments_text: str = "", mode: str = "deep") 
         model, api_timeout = MODEL_DEEP, 300
     else:
         model, api_timeout = MODEL_SMART, 180
-    max_tok = 8000
+    max_tok = 24000 if mode == "deep" else 12000
 
     t0 = _time.time()
     raw = ""
