@@ -1,5 +1,5 @@
-VERSION = "0.24.47"
+VERSION = "0.24.48"
 BUILD_DATE = "2026-06-06"
 CHANGES = [
-    "режим fast переключён на deepseek-chat (~7с вместо ~48с у flash)",
+    "Garmin экспорт в варианте B: топ-3 группы на выбор, skipLastRestStep, build_garmin_from_analysis",
 ]

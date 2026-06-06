@@ -2092,6 +2092,44 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"❌ Ошибка загрузки в Garmin: {type(e).__name__}",
                 reply_markup=_add_main_menu_btn(None))
 
+    elif query.data.startswith("garmin_grp_"):
+        group_num = query.data[len("garmin_grp_"):]
+        data = _fit_data.get(user.id)
+        if not data:
+            await context.bot.send_message(
+                user.id,
+                "⏱ Данные устарели. Запроси рекомендацию заново (/workout).",
+                reply_markup=_add_main_menu_btn(None),
+            )
+            return
+        try:
+            from fit_generator import build_garmin_from_analysis, workout_filename
+            analysis_d = data.get("analysis") or {}
+            wdate = analysis_d.get("workout_date", "")
+            wkt = build_garmin_from_analysis(analysis_d, group_num)
+            fname = workout_filename(wdate, group_num)
+            _fit_data[user.id] = {
+                **data,
+                "recommended_group": group_num,
+                "garmin_json": wkt,
+            }
+            await context.bot.send_message(
+                user.id,
+                f"⌚ <b>{fname}</b>\n\nСкачай JSON или загрузи напрямую в Garmin Connect:",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("📥 Скачать JSON", callback_data="fit_dl"),
+                    InlineKeyboardButton("⌚ Загрузить в Garmin", callback_data="fit_up"),
+                ]]),
+            )
+        except Exception as e:
+            logger.error(f"garmin_grp_{group_num} error for {user.id}: {e}", exc_info=True)
+            await context.bot.send_message(
+                user.id,
+                f"❌ Ошибка генерации тренировки: {type(e).__name__}: {e}",
+                reply_markup=_add_main_menu_btn(None),
+            )
+
     elif query.data == "help":
         back_btn = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")]])
         await query.edit_message_text(_build_help_text(user.id in ADMIN_TELEGRAM_IDS), reply_markup=back_btn)
@@ -2650,6 +2688,36 @@ async def _send_ai_variant_b(
                 await context.bot.send_message(telegram_id, msg_text, parse_mode="HTML", reply_markup=final_b_markup)
         else:
             await context.bot.send_message(telegram_id, msg_text, parse_mode="HTML", reply_markup=final_b_markup)
+
+        # Garmin export — топ-3 группы для выбора
+        _suit_all = advice.get("suitability_percentages") or []
+        _top3 = sorted(
+            [s for s in _suit_all
+             if s.get("percentage", 0) > 0
+             and any(c.isdigit() for c in str(s.get("group", "")))],
+            key=lambda x: x.get("percentage", 0),
+            reverse=True,
+        )[:3]
+        if _top3:
+            _fit_data[telegram_id] = {
+                "type": "b_interval",
+                "analysis": analysis,
+                "workout": workout_for_render,
+                "recommended_group": str(advice.get("recommended_group", "")),
+            }
+            _garmin_btns = [
+                InlineKeyboardButton(
+                    f"⌚ Гр.{s['group']} ({s['percentage']}%)",
+                    callback_data=f"garmin_grp_{s['group']}",
+                )
+                for s in _top3
+            ]
+            await context.bot.send_message(
+                telegram_id,
+                "🏃 Загрузить тренировку в Garmin — выбери группу:",
+                reply_markup=InlineKeyboardMarkup([_garmin_btns]),
+            )
+
         # Второе сообщение — свободный текст от ИИ (нюансы, физиология)
         # Временно отключено
         # extra = await asyncio.get_event_loop().run_in_executor(

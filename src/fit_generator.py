@@ -235,7 +235,8 @@ def _step(order: int, dist_m: float | None = None, time_s: float | None = None,
     }
 
 
-def _repeat_group(order: int, iterations: int, inner_steps: list) -> dict:
+def _repeat_group(order: int, iterations: int, inner_steps: list,
+                  skip_last_rest: bool = False) -> dict:
     """Build a RepeatGroupDTO."""
     return {
         'type': 'RepeatGroupDTO',
@@ -253,7 +254,7 @@ def _repeat_group(order: int, iterations: int, inner_steps: list) -> dict:
         'endConditionValue': float(iterations),
         'preferredEndConditionUnit': None,
         'endConditionCompare': None,
-        'skipLastRestStep': False,
+        'skipLastRestStep': skip_last_rest,
         'smartRepeat': False,
     }
 
@@ -399,6 +400,71 @@ async def upload_to_garmin(workout_json: dict, db_user_id: int) -> bool:
     """Upload workout JSON to Garmin Connect. Returns True on success."""
     from garmin import upload_workout
     return await upload_workout(db_user_id, workout_json)
+
+
+# ── Structured analysis builder (variant B) ──────────────────
+
+def build_garmin_from_analysis(analysis: dict, group_num: str) -> dict:
+    """Build Garmin workout JSON from structured analysis (structure[] + groups[]).
+
+    Reads structure[].{reps, work_distance_m, recovery_distance_m} and
+    groups[number==group_num].blocks[].{work_pace_start, work_pace_end, recovery_pace}.
+    No regex — all data is pre-parsed by Step 1.
+    skipLastRestStep=True removes the trailing recovery after the last repetition.
+    """
+    group_num = str(group_num)
+    date = analysis.get('workout_date', datetime.now().strftime('%Y-%m-%d'))
+
+    # Index group blocks by block number
+    group_blocks: dict[int, dict] = {}
+    for g in (analysis.get('groups') or []):
+        if str(g.get('number', '')) == group_num:
+            for b in (g.get('blocks') or []):
+                group_blocks[int(b.get('block', 1))] = b
+            break
+
+    repeat_structs = [b for b in (analysis.get('structure') or [])
+                      if b.get('type') == 'repeat']
+    if not repeat_structs:
+        raise ValueError(f"No repeat blocks in analysis for group {group_num}")
+
+    steps = []
+    top_order = 1
+
+    for struct in repeat_structs:
+        block_num = int(struct.get('block', 1))
+        reps = int(struct.get('reps') or 1)
+        work_m = float(struct.get('work_distance_m') or 0)
+        rec_m = float(struct.get('recovery_distance_m') or 0)
+
+        bdata = group_blocks.get(block_num, {})
+        # work_pace_end = fastest (end of progression), work_pace_start = slowest
+        v_fast = _pace_to_ms(bdata.get('work_pace_end') or '')
+        v_slow = _pace_to_ms(bdata.get('work_pace_start') or '')
+        v_rec  = _pace_to_ms(bdata.get('recovery_pace') or '')
+
+        # Single-pace fallback
+        if v_fast > 0 and v_slow == 0.0:
+            v_slow = v_fast
+        elif v_slow > 0 and v_fast == 0.0:
+            v_fast = v_slow
+
+        inner = []
+        if work_m > 0:
+            inner.append(_step(1, dist_m=work_m,
+                               v_fast=v_fast or None, v_slow=v_slow or None,
+                               child_id=1))
+        if rec_m > 0:
+            inner.append(_step(2, dist_m=rec_m, stype='recovery',
+                               v_fast=v_rec or None, v_slow=v_rec or None,
+                               child_id=1))
+
+        steps.append(_repeat_group(top_order, reps, inner,
+                                   skip_last_rest=(rec_m > 0)))
+        top_order += 1
+
+    d = date.replace('-', '')
+    return _workout_json(f'DD_{d}-{group_num}_lvl', steps)
 
 
 # ── Backward compatibility aliases ───────────────────────────

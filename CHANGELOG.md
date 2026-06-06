@@ -5,6 +5,16 @@
 
 ---
 
+## [0.24.48] 2026-06-06 — Garmin экспорт в варианте B: топ-3 групп + skipLastRestStep
+
+### Добавлено
+- **fit_generator.py `build_garmin_from_analysis`**: новая функция для variant B — читает `analysis.structure[]` (reps/расстояния) и `analysis.groups[].blocks` (темпы) напрямую, без regex. Один RepeatGroupDTO на каждый структурный блок.
+- **fit_generator.py `_repeat_group`**: параметр `skip_last_rest=False`; при наличии recovery шага передаётся `True` → Garmin не добавляет лишний отдых после последнего повтора.
+- **bot.py `_send_ai_variant_b`**: после отправки рекомендации — топ-3 группы по `suitability_percentages` → кнопки `⌚ Гр.N (X%)` + сохранение `analysis`/`workout` в `_fit_data`.
+- **bot.py `button_handler`**: новый callback `garmin_grp_{group}` — строит JSON через `build_garmin_from_analysis`, обновляет `_fit_data`, показывает кнопки `📥 JSON` / `⌚ Garmin`. Существующие `fit_dl`/`fit_up` используют pre-built `garmin_json` без изменений.
+
+---
+
 ## [0.24.47] 2026-06-06 — fast режим переключён на deepseek-chat (не-reasoning, ~7с)
 
 ### Изменено
