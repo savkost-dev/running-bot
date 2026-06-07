@@ -4271,6 +4271,18 @@ def _collect_morning_snapshot(db_user_id: int) -> dict:
     return snap
 
 
+def _normalize_after_catch(db_user_id: int) -> None:
+    """После поимки ночи — перенормализация unified_cache на свежесинканутом сырье.
+    Чтобы s3_* (TR/суточное/HRV) стали актуальными сразу, не ждали 06:45.
+    Снимок (morning_*) не затирается — save_unified_data обновляет только unified_json/sources/updated_at.
+    """
+    try:
+        from data_normalizer import run_normalization
+        run_normalization(db_user_id)
+    except Exception as e:
+        logger.warning(f"normalize after catch error for uid={db_user_id}: {e}")
+
+
 async def scheduled_wakeup_poll(context: ContextTypes.DEFAULT_TYPE):
     """Опросник пробуждения: 06:00–09:00 МСК каждые 15 мин.
     Для юзеров с ночным сервисом, у кого сегодня ночь ещё не поймана (morning_caught≠сегодня):
@@ -4299,6 +4311,7 @@ async def scheduled_wakeup_poll(context: ContextTypes.DEFAULT_TYPE):
         # ночь уже готова по текущему сырью?
         if _night_ready(db_user_id, today):
             set_morning_caught(db_user_id, today, snapshot=_collect_morning_snapshot(db_user_id))
+            _normalize_after_catch(db_user_id)
             caught_now += 1
             continue
         # не готова — синкаем свежее сырьё и перепроверяем
@@ -4309,6 +4322,7 @@ async def scheduled_wakeup_poll(context: ContextTypes.DEFAULT_TYPE):
             logger.warning(f"wakeup_poll sync error for {telegram_id}: {e}")
         if _night_ready(db_user_id, today):
             set_morning_caught(db_user_id, today, snapshot=_collect_morning_snapshot(db_user_id))
+            _normalize_after_catch(db_user_id)
             caught_now += 1
         await asyncio.sleep(1)
 
