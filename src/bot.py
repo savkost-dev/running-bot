@@ -2620,18 +2620,13 @@ async def _send_admin_data_block(
             )
         else:
             _lines.append("\n<b>Снимок на утро</b>: нет (ночь не поймана)")
-        if _rec.get("source") == "unified_cache":
-            _lines.append(
-                f"\n<b>Сейчас</b> (из кэша, тренировка прошла):\n"
-                f"TR {_tr_cur} | BB {_rec.get('body_battery')} | HRV {_rec.get('hrv')} | "
-                f"RHR {_rec.get('rhr')} | recovery {_rec.get('recovery_score')} | total {_rec.get('recovery_total')}"
-            )
-        else:
-            _lines.append(
-                f"\n<b>Сейчас</b> (источник {_rec.get('source') or '—'}):\n"
-                f"TR {_tr_cur} | BB {_rec.get('body_battery')} | HRV {_rec.get('hrv')} | "
-                f"RHR {_rec.get('resting_hr')} | recovery {_rec.get('recovery_score')}"
-            )
+        _dt_cur = (_rec.get("data_fetched_at") or "")[:16].replace("T", " ")
+        _bb_cur = (_rec.get("recovery_score") if _rec.get("source") == "unified_cache"
+                   else _rec.get("body_battery"))
+        _lines.append(
+            f"\n<b>Сейчас</b> ({_dt_cur or '—'}):\n"
+            f"TR {_tr_cur} | BB {_bb_cur}"
+        )
         await context.bot.send_message(telegram_id, "\n".join(_lines), parse_mode="HTML")
     except Exception as _e:
         logger.warning(f"admin snapshot block: {_e}")
