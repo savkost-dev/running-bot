@@ -4055,6 +4055,108 @@ async def _sync_night_services(db_user_id: int) -> None:
         await _w.fetch_raw(db_user_id)
 
 
+def _collect_morning_snapshot(db_user_id: int) -> dict:
+    """Собирает снимок «на утро» из сырья ночных сервисов + garmin_recovery_cache.
+    Возвращает {tr, bb, hrv, rhr, sleep_h, wake_at, snapshot_at}. Любое поле может быть None.
+    Источники по приоритету (первый не-None): garmin → whoop → polar → coros.
+    """
+    import json as _json
+    from datetime import datetime, timezone
+    from database import get_raw_service_data, get_garmin_recovery_cache
+
+    def _raw(svc):
+        row = get_raw_service_data(db_user_id, svc)
+        if not row:
+            return None
+        try:
+            return _json.loads(row["raw_json"])
+        except Exception:
+            return None
+
+    snap = {"tr": None, "bb": None, "hrv": None, "rhr": None,
+            "sleep_h": None, "wake_at": None,
+            "snapshot_at": datetime.now(timezone.utc).isoformat()}
+
+    # ── Garmin ──
+    if get_token(db_user_id, "garmin"):
+        us = (_raw("garmin") or {}).get("user_summary") or {}
+        bb = us.get("bodyBatteryAtWakeTime")
+        if bb is not None:
+            snap["bb"] = int(bb)
+        secs = us.get("sleepingSeconds")
+        if secs:
+            snap["sleep_h"] = round(int(secs) / 3600, 2)
+        rhr = us.get("restingHeartRate")
+        if rhr:
+            snap["rhr"] = int(rhr)
+        wake = us.get("wellnessEndTimeLocal")
+        if wake:
+            snap["wake_at"] = str(wake)
+        # TR и HRV — из garmin_recovery_cache (надёжнее, чем сырьё)
+        grc = get_garmin_recovery_cache(db_user_id)
+        if grc:
+            tr = grc.get("training_readiness")
+            tr_score = tr.get("score") if isinstance(tr, dict) else None
+            if tr_score is not None:
+                snap["tr"] = int(tr_score)
+            if grc.get("hrv") is not None:
+                snap["hrv"] = float(grc["hrv"])
+
+    # ── Whoop (HRV/RHR/сон/wake — если ещё не заполнены) ──
+    if get_token(db_user_id, "whoop"):
+        w = _raw("whoop") or {}
+        rec = (w.get("recovery") or {}).get("records") or []
+        if rec:
+            sc = rec[0].get("score") or {}
+            if snap["hrv"] is None and sc.get("hrv_rmssd_milli") is not None:
+                snap["hrv"] = round(float(sc["hrv_rmssd_milli"]), 1)
+            if snap["rhr"] is None and sc.get("resting_heart_rate") is not None:
+                snap["rhr"] = int(round(float(sc["resting_heart_rate"])))
+        slp = (w.get("sleep") or {}).get("records") or []
+        if slp:
+            s0 = slp[0]
+            if snap["wake_at"] is None and s0.get("end"):
+                snap["wake_at"] = str(s0["end"])  # UTC, с Z
+            stage = (s0.get("score") or {}).get("stage_summary") or {}
+            total_ms = ((stage.get("total_light_sleep_time_milli") or 0) +
+                        (stage.get("total_slow_wave_sleep_time_milli") or 0) +
+                        (stage.get("total_rem_sleep_time_milli") or 0))
+            if snap["sleep_h"] is None and total_ms:
+                snap["sleep_h"] = round(total_ms / 3_600_000, 2)
+
+    # ── Polar ──
+    if get_token(db_user_id, "polar"):
+        p = _raw("polar") or {}
+        nr = p.get("nightly_recharge")
+        items = nr if isinstance(nr, list) else ((nr or {}).get("recharges") or (nr or {}).get("items") or [])
+        items = [x for x in items if isinstance(x, dict)]
+        if items:
+            last = items[-1]
+            if snap["hrv"] is None and last.get("heart_rate_variability_avg") is not None:
+                snap["hrv"] = round(float(last["heart_rate_variability_avg"]), 1)
+            if snap["rhr"] is None and last.get("heart_rate_avg") is not None:
+                snap["rhr"] = int(float(last["heart_rate_avg"]))
+        sl = p.get("sleep")
+        nights = sl if isinstance(sl, list) else ((sl or {}).get("nights") or (sl or {}).get("items") or [])
+        nights = [x for x in nights if isinstance(x, dict)]
+        if nights:
+            n = nights[-1]
+            if snap["wake_at"] is None and n.get("sleep_end_time"):
+                snap["wake_at"] = str(n["sleep_end_time"])
+
+    # ── COROS (только HRV; времени пробуждения нет) ──
+    if get_token(db_user_id, "coros"):
+        info = (((_raw("coros") or {}).get("dashboard") or {}).get("data") or {}).get("summaryInfo") or {}
+        hrv = (info.get("sleepHrvData") or {}).get("avgSleepHrv")
+        if snap["hrv"] is None and hrv and float(hrv) > 0:
+            snap["hrv"] = float(hrv)
+        rhr = info.get("rhr")
+        if snap["rhr"] is None and rhr and int(rhr) > 0:
+            snap["rhr"] = int(rhr)
+
+    return snap
+
+
 async def scheduled_wakeup_poll(context: ContextTypes.DEFAULT_TYPE):
     """Опросник пробуждения: 06:00–09:00 МСК каждые 15 мин.
     Для юзеров с ночным сервисом, у кого сегодня ночь ещё не поймана (morning_caught≠сегодня):
@@ -4082,7 +4184,7 @@ async def scheduled_wakeup_poll(context: ContextTypes.DEFAULT_TYPE):
             continue
         # ночь уже готова по текущему сырью?
         if _night_ready(db_user_id, today):
-            set_morning_caught(db_user_id, today)
+            set_morning_caught(db_user_id, today, snapshot=_collect_morning_snapshot(db_user_id))
             caught_now += 1
             continue
         # не готова — синкаем свежее сырьё и перепроверяем
@@ -4092,7 +4194,7 @@ async def scheduled_wakeup_poll(context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.warning(f"wakeup_poll sync error for {telegram_id}: {e}")
         if _night_ready(db_user_id, today):
-            set_morning_caught(db_user_id, today)
+            set_morning_caught(db_user_id, today, snapshot=_collect_morning_snapshot(db_user_id))
             caught_now += 1
         await asyncio.sleep(1)
 

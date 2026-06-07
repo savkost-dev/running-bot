@@ -264,6 +264,20 @@ def init_db():
             except Exception:
                 pass
 
+    # Снимок "на утро" (замораживается при поимке ночи, день не перетирает)
+    for col in ("morning_tr INTEGER",          # Training Readiness score
+                "morning_bb INTEGER",          # Body Battery на пробуждении
+                "morning_hrv REAL",            # ночной HRV
+                "morning_rhr INTEGER",         # ЧСС покоя
+                "morning_sleep_h REAL",        # длина сна, ч
+                "morning_wake_at TEXT",        # время пробуждения (локальное ISO)
+                "morning_snapshot_at TEXT"):   # когда снят снимок (UTC ISO)
+        with get_connection() as conn:
+            try:
+                conn.execute(f"ALTER TABLE unified_cache ADD COLUMN {col}")
+            except Exception:
+                pass
+
     # Дефолт глобальной настройки режима анализа тренировок
     with get_connection() as conn:
         conn.execute(
@@ -1291,36 +1305,53 @@ def get_unified_data(user_id: int, max_age_hours: int = 12) -> dict | None:
     return {"unified_json": row[0], "sources": row[1], "updated_at": row[2]}
 
 
-def set_morning_caught(user_id: int, date_msk: str) -> None:
-    """Слой 3 (детектор пробуждения): помечает, что ночь поймана за date_msk.
+def set_morning_caught(user_id: int, date_msk: str, snapshot: dict | None = None) -> None:
+    """Слой 3 (детектор пробуждения): помечает, что ночь поймана за date_msk,
+    и замораживает снимок "на утро".
 
+    snapshot — dict с ключами: tr, bb, hrv, rhr, sleep_h, wake_at, snapshot_at (любые могут отсутствовать).
     Пишет в unified_cache. Строка юзера уже должна существовать (создаётся нормализацией);
-    если её нет — создаёт минимальную запись только с флагом.
+    если её нет — создаёт минимальную запись.
     """
+    s = snapshot or {}
     with get_connection() as conn:
         cur = conn.execute(
-            "UPDATE unified_cache SET morning_caught = 1, morning_date = ? WHERE user_id = ?",
-            (date_msk, user_id)
+            "UPDATE unified_cache SET morning_caught = 1, morning_date = ?, "
+            "morning_tr = ?, morning_bb = ?, morning_hrv = ?, morning_rhr = ?, "
+            "morning_sleep_h = ?, morning_wake_at = ?, morning_snapshot_at = ? "
+            "WHERE user_id = ?",
+            (date_msk, s.get("tr"), s.get("bb"), s.get("hrv"), s.get("rhr"),
+             s.get("sleep_h"), s.get("wake_at"), s.get("snapshot_at"), user_id)
         )
         if cur.rowcount == 0:
             conn.execute(
                 "INSERT INTO unified_cache (user_id, unified_json, sources, updated_at, "
-                "morning_caught, morning_date) VALUES (?, '', '', datetime('now'), 1, ?)",
-                (user_id, date_msk)
+                "morning_caught, morning_date, morning_tr, morning_bb, morning_hrv, "
+                "morning_rhr, morning_sleep_h, morning_wake_at, morning_snapshot_at) "
+                "VALUES (?, '', '', datetime('now'), 1, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (user_id, date_msk, s.get("tr"), s.get("bb"), s.get("hrv"),
+                 s.get("rhr"), s.get("sleep_h"), s.get("wake_at"), s.get("snapshot_at"))
             )
-    _db_logger.info(f"morning_caught: user={user_id} date={date_msk}")
+    _db_logger.info(f"morning_caught: user={user_id} date={date_msk} snap={bool(snapshot)}")
 
 
 def get_morning_caught(user_id: int) -> dict | None:
-    """Слой 3: читает флаг пойманной ночи. Возвращает {caught, date} или None."""
+    """Слой 3: читает флаг пойманной ночи и снимок на утро.
+    Возвращает {caught, date, tr, bb, hrv, rhr, sleep_h, wake_at, snapshot_at} или None."""
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT morning_caught, morning_date FROM unified_cache WHERE user_id = ?",
+            "SELECT morning_caught, morning_date, morning_tr, morning_bb, morning_hrv, "
+            "morning_rhr, morning_sleep_h, morning_wake_at, morning_snapshot_at "
+            "FROM unified_cache WHERE user_id = ?",
             (user_id,)
         ).fetchone()
     if not row:
         return None
-    return {"caught": bool(row[0]), "date": row[1]}
+    return {
+        "caught": bool(row[0]), "date": row[1],
+        "tr": row[2], "bb": row[3], "hrv": row[4], "rhr": row[5],
+        "sleep_h": row[6], "wake_at": row[7], "snapshot_at": row[8],
+    }
 
 
 def get_users_list_for_b() -> list[dict]:
