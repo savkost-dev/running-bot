@@ -1,7 +1,7 @@
 # DoDick Bot — Контекст проекта
 
 > Файл-шпаргалка для старта нового чата. Скидывать в начале сессии, чтобы не пересказывать проект заново.
-> Последнее обновление: 07.06.2026 (версия 0.24.66, сессия пайплайна обновлений: wakeup_poll + cache_refresh, фикс COROS bb в снимке).
+> Последнее обновление: 07.06.2026 (версия <ВЕРСИЯ>, сессия разбивки bot.py: вынесены recovery.py и fitness.py).
 
 ## Что это
 Telegram бот @DD_adviser_bot (имя: DoDick) для бегового клуба Dusty Dumbbells.
@@ -67,7 +67,9 @@ ssh -i $env:USERPROFILE\.ssh\digitalocean root@167.172.185.88 "systemctl restart
 ## Структура проекта
 ```
 src/
-  bot.py            — главный файл, все команды и хендлеры
+  bot.py            — главный файл, все команды и хендлеры (4724 стр, было 5237)
+  recovery.py       — recovery-стек, вынесен из bot.py 07.06 (6 функций, 359 стр)
+  fitness.py        — get_*_fitness_data + refresh_athlete_cache, вынесен из bot.py 07.06 (207 стр)
   claude_advisor.py — промпты и вызовы DeepSeek (анализ + рекомендации)
   zones.py          — расчёт персональных темповых зон (Дэниелс)
   telegram_reader.py — чтение канала @Dusty_Dumbbells через Telethon
@@ -496,7 +498,32 @@ VO2max в этом endpoint НЕ приходит. Считается из ltsp 
 Убрана из формулы (только Garmin, смещение при частичной доступности).
 Остаётся в промпте как текстовый контекст.
 
-## === TODO / ПЛАНЫ / МЫСЛИ НА БУДУЩЕЕ ===
+## === РАЗБИВКА БОЛЬШИХ ФАЙЛОВ (в процессе, 07.06.2026) ===
+
+### bot.py — начата
+Было 5237 строк. Вынесено двумя шагами (по одному модулю за деплой):
+- `recovery.py` (359 стр) — recovery-стек: `_update_garmin_recovery_from_raw` (мёртвый код,
+  перенесён как есть, не вызывается нигде — чистить отдельным коммитом), `_fetch_garmin_recovery`,
+  `_get_recovery_data`, `_garmin_observation_end`, `_get_unified_recovery`, `_recovery_scenario`.
+  Зависит только от database + сервисов (garmin/whoop/coros/polar) + data_normalizer. Свой logger.
+- `fitness.py` (207 стр) — `get_*_fitness_data` + `refresh_athlete_cache`.
+bot.py → 4724 строки. Остальные блоки (keyboards, recommendation, schedulers) — на потом.
+Правило: новые модули тянут из database/сервисов/claude_advisor, НЕ из bot.py; bot.py импортирует имена прежними.
+
+### claude_advisor.py — ОТЛОЖЕНО, план готов
+3103 строки, разбивку отложили. Принципиально сложнее листьев bot.py: bot.py обращается к
+`claude_advisor.X` через атрибут модуля (17 имён, включая приватные и мутабельный глобал `last_prompt`).
+Поэтому простой вынос ломает API. Согласованный план:
+- claude_advisor.py остаётся ФАСАДОМ (~60 стр): реэкспорт всех имён из подмодулей →
+  `claude_advisor.X` продолжает работать, bot.py не трогаем.
+- `last_prompt` (мутабельный, пишется в ask_groq) реэкспортом сломается — нужен module-level
+  `__getattr__` (PEP 562) в фасаде, проксирующий к ai_client.last_prompt динамически.
+- Субстрат выносится ПЕРВЫМ (`pace_utils.py`): pace-конверсии, зональная математика,
+  `_SPEC_LABELS`, `_TTT_*`. Все 4 слоя его тянут, иначе каждый потащит остальных.
+- Целевые подмодули: pace_utils → prompts → recommend → formatting → ai_client + фасад.
+- Проверка после ai_client: дёрнуть `/prompt` (должен показать непустой промпт — иначе last_prompt сломан).
+
+
 
 ### Восстановление — убрать из вечерней рекомендации совсем (идея 02.06.2026)
 Восстановление за ночь сильно меняется. Вечерняя рекомендация на вечерних данных

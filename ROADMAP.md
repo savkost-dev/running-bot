@@ -56,10 +56,11 @@ data_normalizer.py уже написан и протестирован, оста
 |--------|-----------|
 | Garmin rate-limit 429 при массовом релогине — добавить задержку / не пачкой | средняя (рванёт если много токенов протухнет разом в cache_refresh) |
 | Пол/ДР для user 5 (Strava-only) — ручной ввод | низкая |
-| Разбивка bot.py (3308 стр) и claude_advisor.py (2684 стр) — keyboards.py, commands_admin.py, schedulers.py, recommendation.py, formatters.py | низкая, ПОСЛЕ слоёв (есть карта в FUNCTIONS.md/MAP.md) |
+| Разбивка bot.py: ✅ recovery.py + fitness.py вынесены (07.06, 5237→4724). Дальше keyboards/recommendation/schedulers — отложено | в процессе |
+| Разбивка claude_advisor.py (3103 стр): план готов (фасад + реэкспорт, pace_utils первым, __getattr__ для last_prompt) — ОТЛОЖЕНО, см. PROJECT_CONTEXT | низкая |
 | Дубли _pace_to_sec/_sec_to_pace (claude_advisor + data_normalizer) → utils.py | низкая |
 | Дубль _zones_from_vdot (zones.py + data_normalizer) → звать zones.py | низкая |
-| Почистить мусорные test_*/debug_/fix_db.py из src (deploy льёт всё) | низкая |
+| ✅ СДЕЛАНО: мусорные test_*/debug_/fix_db.py убраны из src и с сервера (07.06) | — |
 
 ---
 

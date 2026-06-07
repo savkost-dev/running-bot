@@ -1652,9 +1652,16 @@ def recommend_long(analysis_json: dict, user_data: dict) -> dict | None:
                 if not (mar_s and p["pace_sec"] < mar_s)]
     pool = eligible or list(range(len(with_pace)))
 
-    # базовая = ближайшая к EASY-ориентиру среди допустимых
-    base_idx = (min(pool, key=lambda i: abs(with_pace[i]["pace_sec"] - target))
-                if target else pool[len(pool) // 2])
+    # базовая = ближайшая к EASY-ориентиру, но НЕ округляем в быструю сторону.
+    # Длительная 100 мин (часто натощак/без воды) тяжелее, чем темп по зонам:
+    # целимся в easy и медленнее. Группу быстрее easy берём базой только если
+    # медленнее easy вообще ничего нет. Близкая-но-быстрая = опция прогрессии, не база.
+    if target:
+        not_faster = [i for i in pool if with_pace[i]["pace_sec"] >= target]
+        search = not_faster or pool
+        base_idx = min(search, key=lambda i: abs(with_pace[i]["pace_sec"] - target))
+    else:
+        base_idx = pool[len(pool) // 2]
 
     # Неполное восстановление → на СОСЕДНЮЮ группу медленнее (максимум −1,
     # шаг групп уже ~30 сек/км — −2 уводит в прогулку). Очень низкое —
