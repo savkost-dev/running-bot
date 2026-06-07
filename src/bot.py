@@ -4101,11 +4101,29 @@ def _collect_morning_snapshot(db_user_id: int) -> dict:
             snap["wake_at"] = _dt.utcfromtimestamp(int(wake_ms) / 1000).isoformat()
         elif us.get("wellnessEndTimeLocal"):
             snap["wake_at"] = str(us["wellnessEndTimeLocal"])
-        # TR — из сырья training_readiness; HRV — из garmin_recovery_cache
+        # TR — из сырья training_readiness: первая запись ПОСЛЕ пробуждения
+        # (уверены, что после сна и свежая). Время и пробуждение — локальные.
         tr_raw = g.get("training_readiness")
-        tr_item = tr_raw[0] if isinstance(tr_raw, list) and tr_raw else tr_raw
-        if isinstance(tr_item, dict) and tr_item.get("score") is not None:
-            snap["tr"] = int(tr_item["score"])
+        tr_list = tr_raw if isinstance(tr_raw, list) else ([tr_raw] if tr_raw else [])
+        tr_cands = [t for t in tr_list
+                    if isinstance(t, dict) and t.get("score") is not None
+                    and t.get("timestampLocal")]
+        if tr_cands:
+            wake_local = None
+            if wake_ms:
+                from datetime import datetime as _dt2
+                wake_local = _dt2.utcfromtimestamp(int(wake_ms) / 1000)
+            def _tr_local(t):
+                from datetime import datetime as _dt3
+                try:
+                    return _dt3.fromisoformat(t["timestampLocal"])
+                except Exception:
+                    return _dt3.max
+            after_wake = ([t for t in tr_cands if _tr_local(t) >= wake_local]
+                          if wake_local else [])
+            pick = (min(after_wake, key=_tr_local) if after_wake
+                    else min(tr_cands, key=_tr_local))
+            snap["tr"] = int(pick["score"])
         grc = get_garmin_recovery_cache(db_user_id)
         if grc and grc.get("hrv") is not None:
             snap["hrv"] = float(grc["hrv"])
