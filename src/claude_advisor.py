@@ -1656,11 +1656,12 @@ def recommend_long(analysis_json: dict, user_data: dict) -> dict | None:
     base_idx = (min(pool, key=lambda i: abs(with_pace[i]["pace_sec"] - target))
                 if target else pool[len(pool) // 2])
 
-    # Восстановление сдвигает базовую к более медленной группе
+    # Неполное восстановление → на СОСЕДНЮЮ группу медленнее (максимум −1,
+    # шаг групп уже ~30 сек/км — −2 уводит в прогулку). Очень низкое —
+    # тот же −1 + ровный темп + warning (это уже в recommendation_to_long_advice).
     rv = _recovery_value(user_data.get("recovery"))
     if rv is not None and rv < 50:
-        shift = 2 if rv < 35 else 1
-        base_idx = min(base_idx + shift, len(with_pace) - 1)
+        base_idx = min(base_idx + 1, len(with_pace) - 1)
     base = with_pace[base_idx]
     step_up = with_pace[base_idx - 1] if base_idx > 0 else None          # быстрее
     step_down = with_pace[base_idx + 1] if base_idx + 1 < len(with_pace) else None  # медленнее

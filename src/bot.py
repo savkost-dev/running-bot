@@ -4211,7 +4211,8 @@ async def scheduled_data_refresh(context: ContextTypes.DEFAULT_TYPE):
 
 async def scheduled_morning(context: ContextTypes.DEFAULT_TYPE):
     now = datetime.now()
-    if now.weekday() not in [1, 4, 6]:
+    # вт/пт — 07:00 МСК. Воскресенье вынесено в scheduled_morning_sunday (07:30 МСК).
+    if now.weekday() not in [1, 4]:
         return
     logger.info("Запускаю утреннюю рассылку...")
     # Пользователей без профиля/трекера не беспокоим — им нечего показывать
@@ -4225,6 +4226,27 @@ async def scheduled_morning(context: ContextTypes.DEFAULT_TYPE):
             logger.info(f"Пользователь {telegram_id} заблокировал бота (утренняя рассылка)")
         except Exception as e:
             logger.error(f"Morning notification error for {telegram_id}: {e}")
+
+
+async def scheduled_cache_refresh_sunday(context: ContextTypes.DEFAULT_TYPE):
+    """04:15 UTC (07:15 МСК), только вс — позже будничного рефреша,
+    чтобы к 07:15 Garmin успел обработать ночной сон. То же тело, что scheduled_cache_refresh."""
+    await scheduled_cache_refresh(context)
+
+
+async def scheduled_morning_sunday(context: ContextTypes.DEFAULT_TYPE):
+    """04:30 UTC (07:30 МСК), только вс — после воскресного рефреша."""
+    logger.info("Запускаю утреннюю рассылку (вс, 07:30 МСК)...")
+    users = [(tid, name, un) for tid, name, un, has in get_all_users_with_status() if has]
+    for telegram_id, name, _ in users:
+        try:
+            await _send_morning_check(telegram_id, context)
+            await asyncio.sleep(0.5)
+        except Forbidden:
+            _mark_user_inactive(telegram_id)
+            logger.info(f"Пользователь {telegram_id} заблокировал бота (воскресная рассылка)")
+        except Exception as e:
+            logger.error(f"Sunday morning notification error for {telegram_id}: {e}")
 
 
 # ── ГЛОБАЛЬНЫЙ ОБРАБОТЧИК ОШИБОК ─────────────────────────────
@@ -4833,10 +4855,12 @@ def main():
     app.add_error_handler(global_error_handler)
 
     job_queue = app.job_queue
-    job_queue.run_daily(scheduled_evening,       time=time(hour=17, minute=0))           # 20:00 МСК
-    job_queue.run_daily(scheduled_cache_refresh, time=time(hour=3,  minute=45))          # 06:45 МСК — все сервисы
-    job_queue.run_daily(scheduled_morning,       time=time(hour=4,  minute=0))           # 07:00 МСК — после кэша
-    job_queue.run_repeating(scheduled_new_workout_check, interval=1800, first=60)        # каждые 30 мин
+    job_queue.run_daily(scheduled_evening,       time=time(hour=17, minute=0))                          # 20:00 МСК
+    job_queue.run_daily(scheduled_cache_refresh, time=time(hour=3,  minute=45), days=(1, 4))            # 06:45 МСК вт/пт
+    job_queue.run_daily(scheduled_morning,       time=time(hour=4,  minute=0),  days=(1, 4))            # 07:00 МСК вт/пт
+    job_queue.run_daily(scheduled_cache_refresh_sunday, time=time(hour=4, minute=15), days=(6,))        # 07:15 МСК вс
+    job_queue.run_daily(scheduled_morning_sunday,       time=time(hour=4, minute=30), days=(6,))        # 07:30 МСК вс
+    job_queue.run_repeating(scheduled_new_workout_check, interval=1800, first=60)                       # каждые 30 мин
 
     import oauth_server as _oauth
     _oauth.set_telegram_app(app)
