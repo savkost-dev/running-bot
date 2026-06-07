@@ -4079,19 +4079,28 @@ def _collect_morning_snapshot(db_user_id: int) -> dict:
 
     # ── Garmin ──
     if get_token(db_user_id, "garmin"):
-        us = (_raw("garmin") or {}).get("user_summary") or {}
+        g = _raw("garmin") or {}
+        us = g.get("user_summary") or {}
         bb = us.get("bodyBatteryAtWakeTime")
         if bb is not None:
             snap["bb"] = int(bb)
-        secs = us.get("sleepingSeconds")
-        if secs:
-            snap["sleep_h"] = round(int(secs) / 3600, 2)
         rhr = us.get("restingHeartRate")
         if rhr:
             snap["rhr"] = int(rhr)
-        wake = us.get("wellnessEndTimeLocal")
-        if wake:
-            snap["wake_at"] = str(wake)
+        # Точные сон и пробуждение — из sleep_data.dailySleepDTO (не из ползущего user_summary)
+        dto = (g.get("sleep_data") or {}).get("dailySleepDTO") or {}
+        slp_secs = dto.get("sleepTimeSeconds")
+        if slp_secs:
+            snap["sleep_h"] = round(int(slp_secs) / 3600, 2)
+        elif us.get("sleepingSeconds"):
+            snap["sleep_h"] = round(int(us["sleepingSeconds"]) / 3600, 2)
+        wake_ms = dto.get("sleepEndTimestampLocal")
+        if wake_ms:
+            # Garmin уже сдвинул в локальную зону — берём utcfromtimestamp без повторного сдвига
+            from datetime import datetime as _dt
+            snap["wake_at"] = _dt.utcfromtimestamp(int(wake_ms) / 1000).isoformat()
+        elif us.get("wellnessEndTimeLocal"):
+            snap["wake_at"] = str(us["wellnessEndTimeLocal"])
         # TR и HRV — из garmin_recovery_cache (надёжнее, чем сырьё)
         grc = get_garmin_recovery_cache(db_user_id)
         if grc:

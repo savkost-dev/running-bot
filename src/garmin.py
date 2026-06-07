@@ -589,6 +589,7 @@ async def fetch_raw(db_user_id: int) -> dict | None:
             "training_status":    lambda: client.get_training_status(today),
             "training_readiness": lambda: client.get_training_readiness(today),
             "user_summary":       lambda: client.get_user_summary(today),
+            "sleep_data":         lambda: client.get_sleep_data(today),
             "hrv_data":           lambda: client.get_hrv_data(today),
             "lactate_threshold":  lambda: client.get_lactate_threshold(),
             "activities_48h":     lambda: client.get_activities_by_date(start_48, today, "running"),
