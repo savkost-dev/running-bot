@@ -1275,11 +1275,20 @@ def get_raw_service_data(user_id: int, service: str) -> dict | None:
 # ── Нормализованный кэш (слой 2) ─────────────────────────────
 
 def save_unified_data(user_id: int, unified_json: str, sources: str = "") -> None:
-    """Слой 2: сохраняет нормализованные данные всех сервисов в unified_cache."""
+    """Слой 2: сохраняет нормализованные данные всех сервисов в unified_cache.
+
+    ВАЖНО: upsert через ON CONFLICT обновляет ТОЛЬКО unified_json/sources/updated_at.
+    Колонки снимка "на утро" (morning_*) НЕ трогаются — иначе перенормализация
+    затирала бы пойманный утренний снимок (был баг с INSERT OR REPLACE).
+    """
     with get_connection() as conn:
         conn.execute("""
-            INSERT OR REPLACE INTO unified_cache (user_id, unified_json, sources, updated_at)
+            INSERT INTO unified_cache (user_id, unified_json, sources, updated_at)
             VALUES (?, ?, ?, datetime('now'))
+            ON CONFLICT(user_id) DO UPDATE SET
+                unified_json = excluded.unified_json,
+                sources = excluded.sources,
+                updated_at = excluded.updated_at
         """, (user_id, unified_json, sources))
     _db_logger.info(f"unified_cache сохранён: user={user_id} sources={sources}")
 
