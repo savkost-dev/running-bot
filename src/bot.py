@@ -4426,43 +4426,8 @@ async def scheduled_cache_refresh(context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.warning(f"Strava cache error for {telegram_id}: {e}")
 
-        # ── Garmin: recovery (Body Battery, HRV, TR) ──────────
-        if get_token(db_user_id, "garmin"):
-            try:
-                import garmin as _garmin
-                raw_g = await _garmin.fetch_raw(db_user_id)
-                if raw_g:
-                    _update_garmin_recovery_from_raw(db_user_id, raw_g)
-                    counts["garmin"] += 1
-            except Exception as e:
-                logger.warning(f"Garmin fetch_raw error for {telegram_id}: {e}")
-
-        # ── COROS ─────────────────────────────────────────────
-        if get_token(db_user_id, "coros"):
-            try:
-                import coros as _coros
-                await _coros.fetch_raw(db_user_id)
-                counts["coros"] += 1
-            except Exception as e:
-                logger.warning(f"COROS fetch_raw error for {telegram_id}: {e}")
-
-        # ── Polar ─────────────────────────────────────────────
-        if get_token(db_user_id, "polar"):
-            try:
-                import polar as _polar
-                await _polar.fetch_raw(db_user_id)
-                counts["polar"] += 1
-            except Exception as e:
-                logger.warning(f"Polar fetch_raw error for {telegram_id}: {e}")
-
-        # ── Whoop ─────────────────────────────────────────────
-        if get_token(db_user_id, "whoop"):
-            try:
-                import whoop as _whoop
-                await _whoop.fetch_raw(db_user_id)
-                counts["whoop"] += 1
-            except Exception as e:
-                logger.warning(f"Whoop fetch_raw error for {telegram_id}: {e}")
+        # Ночной забор сырья (Garmin/COROS/Polar/Whoop) + нормализация —
+        # перенесены в scheduled_wakeup_poll (по факту поимки ночи). Здесь не дублируем.
 
         # ── VO2max из трекера (тихо) ───────────────────────────
         new_vo2max, tracker_key, tracker_name = await _get_vo2max_from_tracker(db_user_id)
@@ -5209,7 +5174,7 @@ def main():
 
     job_queue = app.job_queue
     job_queue.run_daily(scheduled_evening,       time=time(hour=17, minute=0))                          # 20:00 МСК
-    job_queue.run_daily(scheduled_cache_refresh, time=time(hour=3,  minute=45), days=(1, 4))            # 06:45 МСК вт/пт
+    job_queue.run_daily(scheduled_cache_refresh, time=time(hour=2,  minute=0),  days=(1, 4))            # 05:00 МСК вт/пт
     job_queue.run_daily(scheduled_morning,       time=time(hour=4,  minute=0),  days=(1, 4))            # 07:00 МСК вт/пт
     job_queue.run_daily(scheduled_cache_refresh_sunday, time=time(hour=4, minute=15), days=(6,))        # 07:15 МСК вс
     job_queue.run_daily(scheduled_morning_sunday,       time=time(hour=4, minute=30), days=(6,))        # 07:30 МСК вс
