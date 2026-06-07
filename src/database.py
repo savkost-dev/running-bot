@@ -256,6 +256,14 @@ def init_db():
         except Exception:
             pass
 
+    # Маркеры "поймали полную ночь сегодня" в unified_cache
+    for col in ("morning_caught INTEGER DEFAULT 0", "morning_date TEXT"):
+        with get_connection() as conn:
+            try:
+                conn.execute(f"ALTER TABLE unified_cache ADD COLUMN {col}")
+            except Exception:
+                pass
+
     # Дефолт глобальной настройки режима анализа тренировок
     with get_connection() as conn:
         conn.execute(

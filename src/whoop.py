@@ -263,6 +263,48 @@ async def ensure_valid_token(db_user_id: int) -> str | None:
     return access_token
 
 
+# ── Слой 1.1: загрузка сырых данных ──────────────────
+
+async def fetch_raw(db_user_id: int) -> dict | None:
+    """Слой 1.1: сырые ответы Whoop API as is, БЕЗ парсинга.
+
+    Берёт последнюю запись recovery и sleep (limit=1) со всеми датами.
+    Фильтр "за сегодня" здесь НЕ применяется — это задача Слоя 2.
+    """
+    import json
+    import database as db
+
+    access_token = await ensure_valid_token(db_user_id)
+    if not access_token:
+        print(f"Whoop fetch_raw: нет токена для user_id={db_user_id}")
+        return None
+
+    headers = {"Authorization": f"Bearer {access_token}"}
+    async with aiohttp.ClientSession() as session:
+        recovery, sleep = await asyncio.gather(
+            _api_get(session, f"{WHOOP_API_BASE}/recovery", headers, params={"limit": 1}),
+            _api_get(session, f"{WHOOP_API_BASE}/activity/sleep", headers, params={"limit": 1}),
+            return_exceptions=True,
+        )
+
+    def _clean(x):
+        return None if isinstance(x, Exception) else x
+
+    raw = {
+        "recovery": _clean(recovery),
+        "sleep":    _clean(sleep),
+    }
+
+    if not any(v is not None for v in raw.values()):
+        print(f"Whoop fetch_raw: нет данных для user_id={db_user_id}")
+        return None
+
+    db.save_raw_service_data(db_user_id, "whoop", json.dumps(raw, ensure_ascii=False, default=str))
+    got = [k for k, v in raw.items() if v is not None]
+    print(f"Whoop fetch_raw: сохранено для user_id={db_user_id} ({', '.join(got)})")
+    return raw
+
+
 if __name__ == "__main__":
     print("Whoop auth URL (для теста):")
     print(get_auth_url(123456789))

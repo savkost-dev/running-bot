@@ -48,7 +48,7 @@ class UnifiedUserData:
     s3_zones:                  dict | None  = None  # E/M/T/I/R
 
     # Восстановление
-    s3_recovery_daily:          int | None   = None  # 0–100, суточное (COROS/Polar/Whoop, не Garmin)
+    s3_recovery_daily:          int | None   = None  # 0–100, суточное (COROS/Polar, не Garmin/Whoop)
     s3_recovery_total:          float | None = None  # TSB Strava (форма ±), не TR
     s3_recovery_total_at:       str | None   = None  # ISO timestamp TSB
     s3_training_readiness:      dict | None  = None  # {"score": 0-100, "level": str, "factors": list}
@@ -401,6 +401,30 @@ def normalize_polar(raw: dict) -> UnifiedUserData:
 
     logger.info(f"normalize_polar: vo2max={u.s3_vo2max} rec_daily={u.s3_recovery_daily} "
                 f"hrv={u.s3_hrv} sleep_h={u.s3_sleep_hours} sleep_score={u.s3_sleep_score}")
+    return u
+
+
+def normalize_whoop(raw: dict) -> UnifiedUserData:
+    """Whoop → UnifiedUserData. Источник данных за прошлую ночь: HRV + ЧСС покоя + сон.
+
+    raw — dict из _parse_whoop_raw: {hrv, rhr, sleep_score, sleep_hours}.
+    Не источник тренированности/нагрузки/суточного восстановления.
+    """
+    u = UnifiedUserData(sources=["whoop"])
+
+    # HRV, RHR (ночные)
+    if raw.get("hrv"):
+        u.s3_hrv = float(raw["hrv"])
+    if raw.get("rhr"):
+        u.s3_rhr = int(round(float(raw["rhr"])))
+    # Сон
+    if raw.get("sleep_hours") is not None:
+        u.s3_sleep_hours = round(float(raw["sleep_hours"]), 2)
+    if raw.get("sleep_score") is not None:
+        u.s3_sleep_score = int(round(float(raw["sleep_score"])))
+
+    logger.info(f"normalize_whoop: hrv={u.s3_hrv} rhr={u.s3_rhr} "
+                f"sleep_h={u.s3_sleep_hours} sleep_score={u.s3_sleep_score}")
     return u
 
 
@@ -764,6 +788,51 @@ def _parse_polar_raw(raw: dict) -> dict:
     return out
 
 
+def _parse_whoop_raw(raw: dict) -> dict:
+    """Извлекает поля из сырого ответа Whoop API в формат для normalize_whoop.
+
+    raw — dict из whoop.fetch_raw: {recovery: {records:[...]}, sleep: {records:[...]}}.
+    Берёт records[0].score.
+    """
+    out: dict = {}
+
+    rec = raw.get("recovery")
+    if isinstance(rec, dict):
+        records = rec.get("records") or []
+        if records:
+            r0 = records[0] or {}
+            score = r0.get("score") or {}
+            hrv = score.get("hrv_rmssd_milli")
+            if hrv is not None:
+                out["hrv"] = round(float(hrv), 1)
+            rhr = score.get("resting_heart_rate")
+            if rhr is not None:
+                out["rhr"] = float(rhr)
+            created = r0.get("created_at") or ""
+            if created:
+                out["recovery_date"] = created[:10]  # метка «за какую ночь»
+
+    slp = raw.get("sleep")
+    if isinstance(slp, dict):
+        records = slp.get("records") or []
+        if records:
+            s0 = records[0] or {}
+            score = s0.get("score") or {}
+            sp = score.get("sleep_performance_percentage")
+            if sp is not None:
+                out["sleep_score"] = float(sp)
+            stage = score.get("stage_summary") or {}
+            total_ms = (
+                (stage.get("total_light_sleep_time_milli") or 0) +
+                (stage.get("total_slow_wave_sleep_time_milli") or 0) +
+                (stage.get("total_rem_sleep_time_milli") or 0)
+            )
+            if total_ms:
+                out["sleep_hours"] = round(total_ms / 3_600_000, 2)
+
+    return out
+
+
 def _parse_strava_raw(raw: dict, athlete_cache: dict | None = None) -> dict:
     """Извлекает нужные поля из сырого ответа Strava API в формат для normalize_strava.
 
@@ -823,7 +892,7 @@ def run_normalization(user_id: int) -> "UnifiedUserData | None":
     import json as _json
     import database as db
 
-    u_garmin = u_coros = u_polar = u_strava = None
+    u_garmin = u_coros = u_polar = u_strava = u_whoop = None
 
     # Даты фиксации для каждого сервиса
     data_dates: dict = {}
@@ -883,7 +952,19 @@ def run_normalization(user_id: int) -> "UnifiedUserData | None":
         except Exception as e:
             logger.warning(f"normalize_strava error user={user_id}: {e}")
 
-    if not any([u_garmin, u_coros, u_polar, u_strava]):
+    # Whoop
+    raw_w = db.get_raw_service_data(user_id, "whoop")
+    if raw_w:
+        data_dates["whoop_fetched"] = raw_w["fetched_at"]
+        try:
+            parsed = _parse_whoop_raw(_json.loads(raw_w["raw_json"]))
+            u_whoop = normalize_whoop(parsed)
+            if parsed.get("recovery_date"):
+                data_dates["whoop_measured"] = parsed["recovery_date"]
+        except Exception as e:
+            logger.warning(f"normalize_whoop error user={user_id}: {e}")
+
+    if not any([u_garmin, u_coros, u_polar, u_strava, u_whoop]):
         logger.info(f"run_normalization: нет сырых данных для user={user_id}")
         return None
 
@@ -896,6 +977,19 @@ def run_normalization(user_id: int) -> "UnifiedUserData | None":
         if p and p.s3_recovery_daily is not None:
             merged.s3_recovery_daily = p.s3_recovery_daily
             break
+
+    # HRV/RHR/сон: если есть Whoop — приоритет ему (носимый ночью)
+    if u_whoop:
+        if u_whoop.s3_hrv is not None:
+            merged.s3_hrv = u_whoop.s3_hrv
+        if u_whoop.s3_rhr is not None:
+            merged.s3_rhr = u_whoop.s3_rhr
+        if u_whoop.s3_sleep_hours is not None:
+            merged.s3_sleep_hours = u_whoop.s3_sleep_hours
+        if u_whoop.s3_sleep_score is not None:
+            merged.s3_sleep_score = u_whoop.s3_sleep_score
+        if "whoop" not in merged.sources:
+            merged.sources.append("whoop")
 
     # recovery_total: только Strava TSB (форма ±), TR отдельно в s3_training_readiness
     if u_strava and u_strava.s3_recovery_total is not None:

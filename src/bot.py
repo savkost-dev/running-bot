@@ -4066,7 +4066,7 @@ async def scheduled_cache_refresh(context: ContextTypes.DEFAULT_TYPE):
     """
     logger.info("Запускаю обновление кэша всех сервисов (03:45 UTC)...")
     users = get_all_users()
-    counts = {"strava": 0, "garmin": 0, "coros": 0, "polar": 0, "vo2max": 0, "normalized": 0}
+    counts = {"strava": 0, "garmin": 0, "coros": 0, "polar": 0, "whoop": 0, "vo2max": 0, "normalized": 0}
 
     for telegram_id, name, _ in users:
         db_user_id = get_or_create_user(telegram_id, name)
@@ -4111,6 +4111,15 @@ async def scheduled_cache_refresh(context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.warning(f"Polar fetch_raw error for {telegram_id}: {e}")
 
+        # ── Whoop ─────────────────────────────────────────────
+        if get_token(db_user_id, "whoop"):
+            try:
+                import whoop as _whoop
+                await _whoop.fetch_raw(db_user_id)
+                counts["whoop"] += 1
+            except Exception as e:
+                logger.warning(f"Whoop fetch_raw error for {telegram_id}: {e}")
+
         # ── VO2max из трекера (тихо) ───────────────────────────
         new_vo2max, tracker_key, tracker_name = await _get_vo2max_from_tracker(db_user_id)
         if new_vo2max is not None:
@@ -4145,8 +4154,8 @@ async def scheduled_cache_refresh(context: ContextTypes.DEFAULT_TYPE):
 
     logger.info(
         f"Кэш обновлён: Strava={counts['strava']}, Garmin={counts['garmin']}, "
-        f"COROS={counts['coros']}, Polar={counts['polar']}, VO2max изменён={counts['vo2max']}, "
-        f"normalized={counts['normalized']}"
+        f"COROS={counts['coros']}, Polar={counts['polar']}, Whoop={counts['whoop']}, "
+        f"VO2max изменён={counts['vo2max']}, normalized={counts['normalized']}"
     )
 
 
