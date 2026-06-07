@@ -1,10 +1,10 @@
-VERSION = "0.24.56"
+VERSION = "0.24.57"
 BUILD_DATE = "2026-06-07"
 CHANGES = [
-    "Whoop затащен в конвейер слоёв 1-2 как источник данных за прошлую ночь: "
-    "fetch_raw (сырьё recovery+sleep в raw_service_data), _parse_whoop_raw + normalize_whoop "
-    "(HRV, ЧСС покоя, сон + дата ночи). В мёрдже Whoop даёт HRV/RHR/сон (приоритет — носимый ночью), "
-    "дата ночи в data_dates.whoop_measured. whoop.fetch_raw добавлен в плановый сбор 06:45/07:15.",
-    "Извлечение bodyBatteryAtWakeTime в Слое 2 (data_normalizer) — для детектора пробуждения.",
-    "Миграция unified_cache: колонки morning_caught, morning_date (детектор «поймали ночь»).",
+    "Опросник пробуждения (scheduled_wakeup_poll): каждые 15 мин в окне 06:00–09:00 МСК. "
+    "Для юзеров с ночным сервисом (garmin/coros/polar/whoop, не strava), у кого сегодня ночь ещё "
+    "не поймана — синкает сырьё (слой 1) и перепроверяет готовность. Поймал → ставит флаг "
+    "morning_caught и исключает до завтра. Только забор данных, нормализация не трогается.",
+    "Детектор готовности ночи _night_ready: garmin wake-time / coros sleepHrv / polar дата / whoop дата.",
+    "БД: set_morning_caught / get_morning_caught (флаг в unified_cache, сбрасывается сменой даты).",
 ]

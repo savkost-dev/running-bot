@@ -3985,6 +3985,120 @@ async def scheduled_new_workout_check(context: ContextTypes.DEFAULT_TYPE):
         asyncio.create_task(_autoanalyze_post(workout_lr, context))
 
 
+# ── ДЕТЕКТОР ЗАКОНЧЕННОЙ НОЧИ (опросник пробуждения) ─────────
+
+def _night_services(db_user_id: int) -> list[str]:
+    """Ночные сервисы юзера (дают данные за сон). Strava не в счёт."""
+    return [s for s in ("garmin", "coros", "polar", "whoop") if get_token(db_user_id, s)]
+
+
+def _night_ready(db_user_id: int, today_msk: str) -> bool | None:
+    """True/False — обработана ли сегодняшняя ночь по сырью. None — нет ночного сервиса.
+
+    Критерий (любой сработавший источник = ночь готова):
+      garmin: user_summary.bodyBatteryAtWakeTime не None
+      coros:  sleepHrvData.avgSleepHrv > 0
+      polar:  nightly_recharge[-1].date == сегодня
+      whoop:  recovery.records[0].created_at[:10] == сегодня
+    """
+    import json as _json
+    from database import get_raw_service_data
+    svcs = _night_services(db_user_id)
+    if not svcs:
+        return None
+
+    def _raw(svc):
+        row = get_raw_service_data(db_user_id, svc)
+        if not row:
+            return None
+        try:
+            return _json.loads(row["raw_json"])
+        except Exception:
+            return None
+
+    if "garmin" in svcs:
+        us = (_raw("garmin") or {}).get("user_summary") or {}
+        if us.get("bodyBatteryAtWakeTime") is not None:
+            return True
+    if "coros" in svcs:
+        dash = (_raw("coros") or {}).get("dashboard") or {}
+        info = ((dash.get("data") or {}).get("summaryInfo")) or {}
+        hrv = (info.get("sleepHrvData") or {}).get("avgSleepHrv")
+        if hrv and float(hrv) > 0:
+            return True
+    if "polar" in svcs:
+        nr = (_raw("polar") or {}).get("nightly_recharge")
+        items = nr if isinstance(nr, list) else ((nr or {}).get("recharges") or (nr or {}).get("items") or [])
+        items = [x for x in items if isinstance(x, dict)]
+        if items and str(items[-1].get("date")) == today_msk:
+            return True
+    if "whoop" in svcs:
+        recs = ((_raw("whoop") or {}).get("recovery") or {}).get("records") or []
+        if recs and str(recs[0].get("created_at", "")[:10]) == today_msk:
+            return True
+    return False
+
+
+async def _sync_night_services(db_user_id: int) -> None:
+    """Дёргает свежее сырьё (слой 1) по ночным сервисам юзера."""
+    if get_token(db_user_id, "garmin"):
+        import garmin as _g
+        await _g.fetch_raw(db_user_id)
+    if get_token(db_user_id, "coros"):
+        import coros as _c
+        await _c.fetch_raw(db_user_id)
+    if get_token(db_user_id, "polar"):
+        import polar as _p
+        await _p.fetch_raw(db_user_id)
+    if get_token(db_user_id, "whoop"):
+        import whoop as _w
+        await _w.fetch_raw(db_user_id)
+
+
+async def scheduled_wakeup_poll(context: ContextTypes.DEFAULT_TYPE):
+    """Опросник пробуждения: 06:00–09:00 МСК каждые 15 мин.
+    Для юзеров с ночным сервисом, у кого сегодня ночь ещё не поймана (morning_caught≠сегодня):
+    синкает сырьё (слой 1), перепроверяет; если ночь закрыта — ставит morning_caught и
+    исключает до завтра. Только забор данных — нормализация/снимок не трогаются.
+    """
+    from database import get_morning_caught, set_morning_caught
+    from datetime import datetime, timezone, timedelta
+    MSK = timezone(timedelta(hours=3))
+    now_msk = datetime.now(MSK)
+    # Окно работы: 06:00–09:00 МСК. Вне окна — выход.
+    if not (6 <= now_msk.hour < 9):
+        return
+    today = now_msk.strftime("%Y-%m-%d")
+
+    users = get_all_users()
+    caught_now = synced = 0
+    for telegram_id, name, _ in users:
+        db_user_id = get_or_create_user(telegram_id, name)
+        if not _night_services(db_user_id):
+            continue
+        # уже поймали сегодня — пропускаем
+        flag = get_morning_caught(db_user_id)
+        if flag and flag.get("caught") and flag.get("date") == today:
+            continue
+        # ночь уже готова по текущему сырью?
+        if _night_ready(db_user_id, today):
+            set_morning_caught(db_user_id, today)
+            caught_now += 1
+            continue
+        # не готова — синкаем свежее сырьё и перепроверяем
+        try:
+            await _sync_night_services(db_user_id)
+            synced += 1
+        except Exception as e:
+            logger.warning(f"wakeup_poll sync error for {telegram_id}: {e}")
+        if _night_ready(db_user_id, today):
+            set_morning_caught(db_user_id, today)
+            caught_now += 1
+        await asyncio.sleep(1)
+
+    logger.info(f"Опросник пробуждения: поймано сегодня={caught_now}, синков={synced} (дата {today})")
+
+
 # ── ПЛАНИРОВЩИК ──────────────────────────────────────────────
 
 async def scheduled_evening(context: ContextTypes.DEFAULT_TYPE):
@@ -4870,6 +4984,7 @@ def main():
     job_queue.run_daily(scheduled_cache_refresh_sunday, time=time(hour=4, minute=15), days=(6,))        # 07:15 МСК вс
     job_queue.run_daily(scheduled_morning_sunday,       time=time(hour=4, minute=30), days=(6,))        # 07:30 МСК вс
     job_queue.run_repeating(scheduled_new_workout_check, interval=1800, first=60)                       # каждые 30 мин
+    job_queue.run_repeating(scheduled_wakeup_poll, interval=900, first=120)                              # каждые 15 мин (окно 06:00–09:00 МСК внутри)
 
     import oauth_server as _oauth
     _oauth.set_telegram_app(app)

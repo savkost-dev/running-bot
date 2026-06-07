@@ -1291,6 +1291,38 @@ def get_unified_data(user_id: int, max_age_hours: int = 12) -> dict | None:
     return {"unified_json": row[0], "sources": row[1], "updated_at": row[2]}
 
 
+def set_morning_caught(user_id: int, date_msk: str) -> None:
+    """Слой 3 (детектор пробуждения): помечает, что ночь поймана за date_msk.
+
+    Пишет в unified_cache. Строка юзера уже должна существовать (создаётся нормализацией);
+    если её нет — создаёт минимальную запись только с флагом.
+    """
+    with get_connection() as conn:
+        cur = conn.execute(
+            "UPDATE unified_cache SET morning_caught = 1, morning_date = ? WHERE user_id = ?",
+            (date_msk, user_id)
+        )
+        if cur.rowcount == 0:
+            conn.execute(
+                "INSERT INTO unified_cache (user_id, unified_json, sources, updated_at, "
+                "morning_caught, morning_date) VALUES (?, '', '', datetime('now'), 1, ?)",
+                (user_id, date_msk)
+            )
+    _db_logger.info(f"morning_caught: user={user_id} date={date_msk}")
+
+
+def get_morning_caught(user_id: int) -> dict | None:
+    """Слой 3: читает флаг пойманной ночи. Возвращает {caught, date} или None."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT morning_caught, morning_date FROM unified_cache WHERE user_id = ?",
+            (user_id,)
+        ).fetchone()
+    if not row:
+        return None
+    return {"caught": bool(row[0]), "date": row[1]}
+
+
 def get_users_list_for_b() -> list[dict]:
     """Пользователи для кнопок /b и /a_user."""
     with get_connection() as conn:
