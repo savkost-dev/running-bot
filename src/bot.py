@@ -2613,18 +2613,31 @@ async def _send_admin_data_block(
         _tr_cur = (_rec.get("training_readiness") or {}).get("score") if isinstance(_rec.get("training_readiness"), dict) else None
         _lines = ["🔬 <b>Данные для рекомендации</b>"]
         if _snap and _snap.get("caught"):
+            # snapshot_at (когда бот снял снимок), UTC → МСК, только время
+            _snap_t = ""
+            _sa = _snap.get("snapshot_at")
+            if _sa:
+                try:
+                    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+                    _sd = _dt.fromisoformat(str(_sa).replace("Z", "+00:00"))
+                    if _sd.tzinfo is None:
+                        _sd = _sd.replace(tzinfo=_tz.utc)
+                    _snap_t = ", снят " + _sd.astimezone(_tz(_td(hours=3))).strftime("%H:%M МСК")
+                except Exception:
+                    pass
             _lines.append(
-                f"\n<b>Снимок на утро</b> ({_snap.get('date') or '—'}):\n"
+                f"\n<b>Снимок на утро</b> ({_snap.get('date') or '—'}{_snap_t}):\n"
                 f"TR {_snap.get('tr')} | BB {_snap.get('bb')} | HRV {_snap.get('hrv')} | "
                 f"RHR {_snap.get('rhr')} | сон {_snap.get('sleep_h')}ч | подъём {(_snap.get('wake_at') or '—')[11:16]}"
             )
         else:
             _lines.append("\n<b>Снимок на утро</b>: нет (ночь не поймана)")
-        _dt_cur = (_rec.get("data_fetched_at") or "")[:16].replace("T", " ")
+        # data_fetched_at: для Garmin = wellnessEndTimeLocal (локальное), показываем как есть
+        _dt_cur = (str(_rec.get("data_fetched_at") or "")[:16]).replace("T", " ")
         _bb_cur = (_rec.get("recovery_score") if _rec.get("source") == "unified_cache"
                    else _rec.get("body_battery"))
         _lines.append(
-            f"\n<b>Сейчас</b> ({_dt_cur or '—'}):\n"
+            f"\n<b>Последняя синхронизация</b> ({_dt_cur or '—'}):\n"
             f"TR {_tr_cur} | BB {_bb_cur}"
         )
         await context.bot.send_message(telegram_id, "\n".join(_lines), parse_mode="HTML")
@@ -3657,6 +3670,23 @@ async def _get_recovery_data(db_user_id: int, force_fresh: bool = False) -> dict
     return None
 
 
+def _garmin_observation_end(db_user_id: int) -> str | None:
+    """wellnessEndTimeLocal из сырья Garmin — до какого момента есть данные (локальное время).
+    Для остальных сервисов поля нет — вызывающий оставляет синк как конец наблюдения."""
+    import json as _json
+    from database import get_raw_service_data, get_token
+    if not get_token(db_user_id, "garmin"):
+        return None
+    row = get_raw_service_data(db_user_id, "garmin")
+    if not row:
+        return None
+    try:
+        us = (_json.loads(row["raw_json"]) or {}).get("user_summary") or {}
+        return us.get("wellnessEndTimeLocal") or None
+    except Exception:
+        return None
+
+
 async def _get_unified_recovery(db_user_id: int, force_fresh: bool = True) -> dict | None:
     from database import get_unified_data
     from data_normalizer import UnifiedUserData
@@ -3684,6 +3714,10 @@ async def _get_unified_recovery(db_user_id: int, force_fresh: bool = True) -> di
                         or row.get("updated_at"))
             except Exception:
                 pass
+        # Для Garmin конец наблюдения = wellnessEndTimeLocal (локальное); иначе синк выше
+        _obs_end = _garmin_observation_end(db_user_id)
+        if _obs_end:
+            recovery["data_fetched_at"] = _obs_end
         return recovery
 
     # Прошедшая тренировка — данные ИЗ unified_cache (утренний снимок)
@@ -3693,6 +3727,12 @@ async def _get_unified_recovery(db_user_id: int, force_fresh: bool = True) -> di
             return await _get_recovery_data(db_user_id, force_fresh=False)
         u = UnifiedUserData.from_json(row["unified_json"])
         dd = u.data_dates or {}
+        _data_fetched = (dd.get("garmin_synced_at")
+            or dd.get("garmin_fetched") or dd.get("coros_fetched")
+            or dd.get("polar_fetched") or dd.get("strava_fetched")
+            or row.get("updated_at"))
+        # Для Garmin конец наблюдения = wellnessEndTimeLocal; иначе синк
+        _obs_end = _garmin_observation_end(db_user_id)
         return {
             "source":                  "unified_cache",
             "recovery_score":          u.s3_recovery_daily,
@@ -3703,10 +3743,7 @@ async def _get_unified_recovery(db_user_id: int, force_fresh: bool = True) -> di
             "rhr":                     u.s3_rhr,
             "body_battery":            u.s3_body_battery,
             "sleep_hours":             u.s3_sleep_hours,
-            "data_fetched_at":         (dd.get("garmin_synced_at")
-                or dd.get("garmin_fetched") or dd.get("coros_fetched")
-                or dd.get("polar_fetched") or dd.get("strava_fetched")
-                or row.get("updated_at")),
+            "data_fetched_at":         _obs_end or _data_fetched,
         }
     except Exception:
         return await _get_recovery_data(db_user_id, force_fresh=False)
