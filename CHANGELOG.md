@@ -5,6 +5,20 @@
 
 ---
 
+## [0.24.68] 2026-06-07 — Рефакторинг: fitness-домен → fitness.py
+
+### Изменено
+- **Новый модуль `src/fitness.py`**: вынесены 6 функций из `bot.py` без изменения логики:
+  - `refresh_athlete_cache` — обновление кэша CTL/ATL/TSB, прогнозы, соревнования (Strava)
+  - `get_fitness_data` — fitness из Strava (быстрые данные + кэш медленных)
+  - `get_garmin_fitness_data` / `get_coros_fitness_data` / `get_polar_fitness_data` — fitness из трекеров
+  - `_get_vo2max_from_tracker` — VO2max из первого доступного трекера (Garmin → COROS → Polar)
+- **`bot.py`**: удалены две зоны (блок «КЭШ АТЛЕТА» 108–259 и `_get_vo2max_from_tracker`), добавлен `from fitness import ...`. Размер 4901 → 4720 строк.
+
+**Зависимости**: `fitness.py` — чистый лист, тянет только из `database`/`strava`/сервисов, обратных импортов в `bot.py` не имеет (цикла нет). Шаг 2 разбивки `bot.py` (план: recovery → **fitness** → keyboards → recommendation → schedulers).
+
+---
+
 ## [0.24.67] 2026-06-07 — Рефакторинг: recovery-домен → recovery.py
 
 ### Изменено
