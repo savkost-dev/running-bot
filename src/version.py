@@ -1,8 +1,10 @@
-VERSION = "0.24.55"
+VERSION = "0.24.56"
 BUILD_DATE = "2026-06-07"
 CHANGES = [
-    "воскресный конвейер сдвинут позже (Garmin к утру не успевал обработать сон → BB/HRV/TR пустые): "
-    "refresh 06:45→07:15 МСК, утренняя рассылка 07:00→07:30 МСК. Только воскресенье — вт/пт без изменений.",
-    "scheduled_cache_refresh/scheduled_morning ограничены днями вт/пт через days=(1,4); "
-    "добавлены scheduled_cache_refresh_sunday (07:15) и scheduled_morning_sunday (07:30) с days=(6,).",
+    "Whoop затащен в конвейер слоёв 1-2 как источник данных за прошлую ночь: "
+    "fetch_raw (сырьё recovery+sleep в raw_service_data), _parse_whoop_raw + normalize_whoop "
+    "(HRV, ЧСС покоя, сон + дата ночи). В мёрдже Whoop даёт HRV/RHR/сон (приоритет — носимый ночью), "
+    "дата ночи в data_dates.whoop_measured. whoop.fetch_raw добавлен в плановый сбор 06:45/07:15.",
+    "Извлечение bodyBatteryAtWakeTime в Слое 2 (data_normalizer) — для детектора пробуждения.",
+    "Миграция unified_cache: колонки morning_caught, morning_date (детектор «поймали ночь»).",
 ]
