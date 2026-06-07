@@ -4101,15 +4101,14 @@ def _collect_morning_snapshot(db_user_id: int) -> dict:
             snap["wake_at"] = _dt.utcfromtimestamp(int(wake_ms) / 1000).isoformat()
         elif us.get("wellnessEndTimeLocal"):
             snap["wake_at"] = str(us["wellnessEndTimeLocal"])
-        # TR и HRV — из garmin_recovery_cache (надёжнее, чем сырьё)
+        # TR — из сырья training_readiness; HRV — из garmin_recovery_cache
+        tr_raw = g.get("training_readiness")
+        tr_item = tr_raw[0] if isinstance(tr_raw, list) and tr_raw else tr_raw
+        if isinstance(tr_item, dict) and tr_item.get("score") is not None:
+            snap["tr"] = int(tr_item["score"])
         grc = get_garmin_recovery_cache(db_user_id)
-        if grc:
-            tr = grc.get("training_readiness")
-            tr_score = tr.get("score") if isinstance(tr, dict) else None
-            if tr_score is not None:
-                snap["tr"] = int(tr_score)
-            if grc.get("hrv") is not None:
-                snap["hrv"] = float(grc["hrv"])
+        if grc and grc.get("hrv") is not None:
+            snap["hrv"] = float(grc["hrv"])
 
     # ── Whoop (HRV/RHR/сон/wake — если ещё не заполнены) ──
     if get_token(db_user_id, "whoop"):
