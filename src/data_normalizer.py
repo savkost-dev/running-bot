@@ -972,10 +972,16 @@ def run_normalization(user_id: int) -> "UnifiedUserData | None":
     fitness_priority = [p for p in [u_garmin, u_coros, u_polar, u_strava] if p]
     merged = merge(fitness_priority)
 
-    # recovery_daily: только Polar ANS (COROS и Garmin суточные — в своих полях)
-    for p in [u_polar]:
-        if p and p.s3_recovery_daily is not None:
-            merged.s3_recovery_daily = p.s3_recovery_daily
+    # recovery_daily: универсальное суточное восстановление 0-100.
+    # Приоритет источников: Garmin (Body Battery) → COROS (recoveryPct) → Polar (ANS).
+    # Один человек = одно устройство, конфликта нет.
+    for val in (
+        (u_garmin.s3_body_battery if u_garmin else None),
+        (u_coros.s3_coros_recovery if u_coros else None),
+        (u_polar.s3_recovery_daily if u_polar else None),
+    ):
+        if val is not None:
+            merged.s3_recovery_daily = val
             break
 
     # HRV/RHR/сон: если есть Whoop — приоритет ему (носимый ночью)

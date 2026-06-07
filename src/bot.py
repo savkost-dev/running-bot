@@ -2596,6 +2596,47 @@ def _user_has_data(db_user_id: int) -> bool:
     return any(get_token(db_user_id, s) for s in ("strava", "garmin", "coros", "polar"))
 
 
+async def _send_admin_data_block(
+    telegram_id: int,
+    db_user_id: int,
+    recovery: dict | None,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """Админу — отдельным сообщением: снимок на утро (из базы) + текущие данные (на лету).
+    Вызывается в конце каждой рекомендации (A и B). Только для админа.
+    """
+    if telegram_id not in ADMIN_TELEGRAM_IDS:
+        return
+    try:
+        _snap = get_morning_caught(db_user_id)
+        _rec = recovery or {}
+        _tr_cur = (_rec.get("training_readiness") or {}).get("score") if isinstance(_rec.get("training_readiness"), dict) else None
+        _lines = ["🔬 <b>Данные для рекомендации</b>"]
+        if _snap and _snap.get("caught"):
+            _lines.append(
+                f"\n<b>Снимок на утро</b> ({_snap.get('date') or '—'}):\n"
+                f"TR {_snap.get('tr')} | BB {_snap.get('bb')} | HRV {_snap.get('hrv')} | "
+                f"RHR {_snap.get('rhr')} | сон {_snap.get('sleep_h')}ч | подъём {(_snap.get('wake_at') or '—')[11:16]}"
+            )
+        else:
+            _lines.append("\n<b>Снимок на утро</b>: нет (ночь не поймана)")
+        if _rec.get("source") == "unified_cache":
+            _lines.append(
+                f"\n<b>Сейчас</b> (из кэша, тренировка прошла):\n"
+                f"TR {_tr_cur} | BB {_rec.get('body_battery')} | HRV {_rec.get('hrv')} | "
+                f"RHR {_rec.get('rhr')} | recovery {_rec.get('recovery_score')} | total {_rec.get('recovery_total')}"
+            )
+        else:
+            _lines.append(
+                f"\n<b>Сейчас</b> (источник {_rec.get('source') or '—'}):\n"
+                f"TR {_tr_cur} | BB {_rec.get('body_battery')} | HRV {_rec.get('hrv')} | "
+                f"RHR {_rec.get('resting_hr')} | recovery {_rec.get('recovery_score')}"
+            )
+        await context.bot.send_message(telegram_id, "\n".join(_lines), parse_mode="HTML")
+    except Exception as _e:
+        logger.warning(f"admin snapshot block: {_e}")
+
+
 async def _send_ai_variant_b(
     telegram_id: int,
     analysis: dict,
@@ -2684,35 +2725,7 @@ async def _send_ai_variant_b(
             except Exception as _e:
                 logger.error(f"save_last_recommendation (B): {_e}")
         # Админу — снимок на утро (из базы) + текущие данные (на лету), отдельным сообщением
-        if telegram_id in ADMIN_TELEGRAM_IDS:
-            try:
-                _snap = get_morning_caught(db_user_id)
-                _rec = user_data.get("recovery") or {}
-                _tr_cur = (_rec.get("training_readiness") or {}).get("score") if isinstance(_rec.get("training_readiness"), dict) else None
-                _lines = ["🔬 <b>Данные для рекомендации</b>"]
-                if _snap and _snap.get("caught"):
-                    _lines.append(
-                        f"\n<b>Снимок на утро</b> ({_snap.get('date') or '—'}):\n"
-                        f"TR {_snap.get('tr')} | BB {_snap.get('bb')} | HRV {_snap.get('hrv')} | "
-                        f"RHR {_snap.get('rhr')} | сон {_snap.get('sleep_h')}ч | подъём {(_snap.get('wake_at') or '—')[11:16]}"
-                    )
-                else:
-                    _lines.append("\n<b>Снимок на утро</b>: нет (ночь не поймана)")
-                if _rec.get("source") == "unified_cache":
-                    _lines.append(
-                        f"\n<b>Сейчас</b> (из кэша, тренировка прошла):\n"
-                        f"TR {_tr_cur} | BB {_rec.get('body_battery')} | HRV {_rec.get('hrv')} | "
-                        f"RHR {_rec.get('rhr')} | recovery {_rec.get('recovery_score')} | total {_rec.get('recovery_total')}"
-                    )
-                else:
-                    _lines.append(
-                        f"\n<b>Сейчас</b> (источник {_rec.get('source') or '—'}):\n"
-                        f"TR {_tr_cur} | BB {_rec.get('body_battery')} | HRV {_rec.get('hrv')} | "
-                        f"RHR {_rec.get('resting_hr')} | recovery {_rec.get('recovery_score')}"
-                    )
-                await context.bot.send_message(telegram_id, "\n".join(_lines), parse_mode="HTML")
-            except Exception as _e:
-                logger.warning(f"admin snapshot block (B): {_e}")
+        await _send_admin_data_block(telegram_id, db_user_id, user_data.get("recovery"), context)
         if msg:
             try:
                 await msg.edit_text(msg_text, parse_mode="HTML", reply_markup=final_b_markup)
@@ -2982,35 +2995,7 @@ async def _send_recommendation(
         except Exception as _e:
             logger.error(f"save_last_recommendation (A): {_e}")
     # Админу — снимок на утро (из базы) + текущие данные (на лету), отдельным сообщением
-    if telegram_id in ADMIN_TELEGRAM_IDS:
-        try:
-            _snap = get_morning_caught(db_user_id)
-            _rec = user_data.get("recovery") or {}
-            _tr_cur = (_rec.get("training_readiness") or {}).get("score") if isinstance(_rec.get("training_readiness"), dict) else None
-            _lines = ["🔬 <b>Данные для рекомендации</b>"]
-            if _snap and _snap.get("caught"):
-                _lines.append(
-                    f"\n<b>Снимок на утро</b> ({_snap.get('date') or '—'}):\n"
-                    f"TR {_snap.get('tr')} | BB {_snap.get('bb')} | HRV {_snap.get('hrv')} | "
-                    f"RHR {_snap.get('rhr')} | сон {_snap.get('sleep_h')}ч | подъём {(_snap.get('wake_at') or '—')[11:16]}"
-                )
-            else:
-                _lines.append("\n<b>Снимок на утро</b>: нет (ночь не поймана)")
-            if _rec.get("source") == "unified_cache":
-                _lines.append(
-                    f"\n<b>Сейчас</b> (из кэша, тренировка прошла):\n"
-                    f"TR {_tr_cur} | BB {_rec.get('body_battery')} | HRV {_rec.get('hrv')} | "
-                    f"RHR {_rec.get('rhr')} | recovery {_rec.get('recovery_score')} | total {_rec.get('recovery_total')}"
-                )
-            else:
-                _lines.append(
-                    f"\n<b>Сейчас</b> (источник {_rec.get('source') or '—'}):\n"
-                    f"TR {_tr_cur} | BB {_rec.get('body_battery')} | HRV {_rec.get('hrv')} | "
-                    f"RHR {_rec.get('resting_hr')} | recovery {_rec.get('recovery_score')}"
-                )
-            await context.bot.send_message(telegram_id, "\n".join(_lines), parse_mode="HTML")
-        except Exception as _e:
-            logger.warning(f"admin snapshot block (A): {_e}")
+    await _send_admin_data_block(telegram_id, db_user_id, user_data.get("recovery"), context)
     scenario_header = scenario_ctx["user_text"] + "\n\n" if scenario_ctx.get("user_text") else ""
     await _out(scenario_header + banner + body, final_markup, parse_mode="HTML")
 
