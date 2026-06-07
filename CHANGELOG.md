@@ -5,6 +5,22 @@
 
 ---
 
+## [0.24.67] 2026-06-07 — Рефакторинг: recovery-домен → recovery.py
+
+### Изменено
+- **Новый модуль `src/recovery.py`**: вынесены 6 функций из `bot.py` без изменения логики:
+  - `_update_garmin_recovery_from_raw` — обновление `garmin_recovery_cache` из raw
+  - `_fetch_garmin_recovery` — живой запрос Garmin + кэш
+  - `_get_recovery_data` — выбор источника (Whoop → Garmin → COROS → Polar)
+  - `_garmin_observation_end` — `wellnessEndTimeLocal` из сырья Garmin
+  - `_get_unified_recovery` — live (`force_fresh`) или утренний снимок
+  - `_recovery_scenario` — тексты сценария восстановления
+- **`bot.py`**: блок 3516–3852 удалён, добавлен `from recovery import ...`. Размер 5237 → 4901 строк.
+
+**Зависимости**: `recovery.py` — чистый лист, тянет только из `database`/сервисов/`data_normalizer`, обратных импортов в `bot.py` не имеет (цикла нет). Первый шаг разбивки `bot.py` на модули (план: recovery → fitness → keyboards → recommendation → schedulers).
+
+---
+
 ## [0.24.49] 2026-06-06 — фикс метки времени data_fetched_at (lastSyncTimestampGMT)
 
 ### Исправлено

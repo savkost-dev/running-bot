@@ -1,8 +1,8 @@
-VERSION = "0.24.66"
+VERSION = "0.24.67"
 BUILD_DATE = "2026-06-07"
 CHANGES = [
-    "Админский блок данных: _get_unified_recovery (прошедшая ветка) расширен — отдаёт "
-    "hrv/rhr/body_battery/sleep_hours из unified_cache. В окне «Сейчас» для прошедшей "
-    "тренировки теперь видны эти поля из кэша, а не None. (TR/recovery_score остаются null "
-    "если нормализатор слоя 2 их не заполнил — отдельная история.)",
+    "Рефакторинг: recovery-домен вынесен из bot.py в новый модуль recovery.py "
+    "(6 функций: _update_garmin_recovery_from_raw, _fetch_garmin_recovery, _get_recovery_data, "
+    "_garmin_observation_end, _get_unified_recovery, _recovery_scenario). Логика без изменений, "
+    "только перенос. bot.py: 5237 → 4901 строк.",
 ]
