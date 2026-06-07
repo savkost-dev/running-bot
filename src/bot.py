@@ -4124,9 +4124,11 @@ def _collect_morning_snapshot(db_user_id: int) -> dict:
             pick = (min(after_wake, key=_tr_local) if after_wake
                     else min(tr_cands, key=_tr_local))
             snap["tr"] = int(pick["score"])
-        grc = get_garmin_recovery_cache(db_user_id)
-        if grc and grc.get("hrv") is not None:
-            snap["hrv"] = float(grc["hrv"])
+        # HRV — из сырья hrv_data.hrvSummary.lastNightAvg (есть у всех Garmin-юзеров).
+        # Кэш garmin_recovery_cache в снимке НЕ используем — всё из сырья (слой 1).
+        hrv_sum = (g.get("hrv_data") or {}).get("hrvSummary") or {}
+        if hrv_sum.get("lastNightAvg") is not None:
+            snap["hrv"] = float(hrv_sum["lastNightAvg"])
 
     # ── Whoop (HRV/RHR/сон/wake — если ещё не заполнены) ──
     if get_token(db_user_id, "whoop"):
