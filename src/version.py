@@ -1,7 +1,7 @@
-VERSION = "0.24.62"
+VERSION = "0.24.63"
 BUILD_DATE = "2026-06-07"
 CHANGES = [
-    "Снимок «на утро» Garmin TR: берём первую запись training_readiness ПОСЛЕ "
-    "пробуждения (timestampLocal >= sleepEndTimestampLocal) — гарантированно после сна "
-    "и свежая, не дневная сползшая. Фолбэк — самая ранняя запись если пробуждение неизвестно.",
+    "Снимок «на утро» Garmin HRV: берём из сырья hrv_data.hrvSummary.lastNightAvg "
+    "(есть у всех Garmin-юзеров), фолбэк на garmin_recovery_cache. Раньше HRV брался "
+    "только из кэша, который у части юзеров пуст → HRV=None в снимке.",
 ]
