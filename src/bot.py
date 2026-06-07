@@ -31,6 +31,7 @@ from database import (
     save_workout_analysis, get_workout_analysis, get_latest_workout_analysis,
     get_preprocess_mode, set_preprocess_mode,
     get_users_list_for_b,
+    get_morning_caught,
 )
 from strava import (
     get_auth_url, get_recent_runs, analyze_fitness,
@@ -2682,6 +2683,36 @@ async def _send_ai_variant_b(
                 )
             except Exception as _e:
                 logger.error(f"save_last_recommendation (B): {_e}")
+        # Админу — снимок на утро (из базы) + текущие данные (на лету), отдельным сообщением
+        if telegram_id in ADMIN_TELEGRAM_IDS:
+            try:
+                _snap = get_morning_caught(db_user_id)
+                _rec = user_data.get("recovery") or {}
+                _tr_cur = (_rec.get("training_readiness") or {}).get("score") if isinstance(_rec.get("training_readiness"), dict) else None
+                _lines = ["🔬 <b>Данные для рекомендации</b>"]
+                if _snap and _snap.get("caught"):
+                    _lines.append(
+                        f"\n<b>Снимок на утро</b> ({_snap.get('date') or '—'}):\n"
+                        f"TR {_snap.get('tr')} | BB {_snap.get('bb')} | HRV {_snap.get('hrv')} | "
+                        f"RHR {_snap.get('rhr')} | сон {_snap.get('sleep_h')}ч | подъём {(_snap.get('wake_at') or '—')[11:16]}"
+                    )
+                else:
+                    _lines.append("\n<b>Снимок на утро</b>: нет (ночь не поймана)")
+                if _rec.get("source") == "unified_cache":
+                    _lines.append(
+                        f"\n<b>Сейчас</b> (из кэша, тренировка прошла):\n"
+                        f"TR {_tr_cur} | BB {_rec.get('body_battery')} | HRV {_rec.get('hrv')} | "
+                        f"RHR {_rec.get('rhr')} | recovery {_rec.get('recovery_score')} | total {_rec.get('recovery_total')}"
+                    )
+                else:
+                    _lines.append(
+                        f"\n<b>Сейчас</b> (источник {_rec.get('source') or '—'}):\n"
+                        f"TR {_tr_cur} | BB {_rec.get('body_battery')} | HRV {_rec.get('hrv')} | "
+                        f"RHR {_rec.get('resting_hr')} | recovery {_rec.get('recovery_score')}"
+                    )
+                await context.bot.send_message(telegram_id, "\n".join(_lines), parse_mode="HTML")
+            except Exception as _e:
+                logger.warning(f"admin snapshot block (B): {_e}")
         if msg:
             try:
                 await msg.edit_text(msg_text, parse_mode="HTML", reply_markup=final_b_markup)
@@ -2950,6 +2981,36 @@ async def _send_recommendation(
             )
         except Exception as _e:
             logger.error(f"save_last_recommendation (A): {_e}")
+    # Админу — снимок на утро (из базы) + текущие данные (на лету), отдельным сообщением
+    if telegram_id in ADMIN_TELEGRAM_IDS:
+        try:
+            _snap = get_morning_caught(db_user_id)
+            _rec = user_data.get("recovery") or {}
+            _tr_cur = (_rec.get("training_readiness") or {}).get("score") if isinstance(_rec.get("training_readiness"), dict) else None
+            _lines = ["🔬 <b>Данные для рекомендации</b>"]
+            if _snap and _snap.get("caught"):
+                _lines.append(
+                    f"\n<b>Снимок на утро</b> ({_snap.get('date') or '—'}):\n"
+                    f"TR {_snap.get('tr')} | BB {_snap.get('bb')} | HRV {_snap.get('hrv')} | "
+                    f"RHR {_snap.get('rhr')} | сон {_snap.get('sleep_h')}ч | подъём {(_snap.get('wake_at') or '—')[11:16]}"
+                )
+            else:
+                _lines.append("\n<b>Снимок на утро</b>: нет (ночь не поймана)")
+            if _rec.get("source") == "unified_cache":
+                _lines.append(
+                    f"\n<b>Сейчас</b> (из кэша, тренировка прошла):\n"
+                    f"TR {_tr_cur} | BB {_rec.get('body_battery')} | HRV {_rec.get('hrv')} | "
+                    f"RHR {_rec.get('rhr')} | recovery {_rec.get('recovery_score')} | total {_rec.get('recovery_total')}"
+                )
+            else:
+                _lines.append(
+                    f"\n<b>Сейчас</b> (источник {_rec.get('source') or '—'}):\n"
+                    f"TR {_tr_cur} | BB {_rec.get('body_battery')} | HRV {_rec.get('hrv')} | "
+                    f"RHR {_rec.get('resting_hr')} | recovery {_rec.get('recovery_score')}"
+                )
+            await context.bot.send_message(telegram_id, "\n".join(_lines), parse_mode="HTML")
+        except Exception as _e:
+            logger.warning(f"admin snapshot block (A): {_e}")
     scenario_header = scenario_ctx["user_text"] + "\n\n" if scenario_ctx.get("user_text") else ""
     await _out(scenario_header + banner + body, final_markup, parse_mode="HTML")
 
@@ -3658,6 +3719,10 @@ async def _get_unified_recovery(db_user_id: int, force_fresh: bool = True) -> di
             "training_readiness":      u.s3_training_readiness,
             "training_readiness_at":   u.s3_training_readiness_at,
             "recovery_total":          u.s3_recovery_total,
+            "hrv":                     u.s3_hrv,
+            "rhr":                     u.s3_rhr,
+            "body_battery":            u.s3_body_battery,
+            "sleep_hours":             u.s3_sleep_hours,
             "data_fetched_at":         (dd.get("garmin_synced_at")
                 or dd.get("garmin_fetched") or dd.get("coros_fetched")
                 or dd.get("polar_fetched") or dd.get("strava_fetched")
