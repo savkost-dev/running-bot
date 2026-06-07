@@ -4254,9 +4254,13 @@ def _collect_morning_snapshot(db_user_id: int) -> dict:
             if snap["wake_at"] is None and n.get("sleep_end_time"):
                 snap["wake_at"] = str(n["sleep_end_time"])
 
-    # ── COROS (только HRV; времени пробуждения нет) ──
+    # ── COROS (суточное recoveryPct + HRV/RHR; времени пробуждения нет) ──
     if get_token(db_user_id, "coros"):
         info = (((_raw("coros") or {}).get("dashboard") or {}).get("data") or {}).get("summaryInfo") or {}
+        # Суточное восстановление — то же поле, что берёт нормализатор (recoveryPct)
+        rpc = info.get("recoveryPct")
+        if snap["bb"] is None and rpc is not None:
+            snap["bb"] = max(0, min(100, int(rpc)))
         hrv = (info.get("sleepHrvData") or {}).get("avgSleepHrv")
         if snap["hrv"] is None and hrv and float(hrv) > 0:
             snap["hrv"] = float(hrv)
