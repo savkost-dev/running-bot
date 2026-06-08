@@ -1,6 +1,7 @@
 # Карта зависимостей и дублей
 
-> 2026-06-03 — чистая документация, код не тронут
+> 2026-06-03 — первая версия (чистая документация, код не тронут)
+> 2026-06-08 — обновлено: вынесены `recovery.py` и `fitness.py` из bot.py; актуализированы размеры
 
 ---
 
@@ -14,12 +15,23 @@ bot.py
  ├── telegram_reader  (find_next_workout, find_next_long_run, ...)
  ├── claude_advisor   (analyze_workout, recommend_group, format_*, ...)
  ├── zones            (get_pace_zones, recalculate_and_save)
+ ├── recovery         (_get_recovery_data, _get_unified_recovery, _recovery_scenario, ...)  ← вынесено 2026-06-08
+ ├── fitness          (get_*_fitness_data, refresh_athlete_cache, _get_vo2max_from_tracker)  ← вынесено 2026-06-08
  └── [ленивые импорты внутри функций]
       ├── garmin       (get_garmin_fitness_data, upload_workout, ...)
       ├── coros        (get_coros_fitness_data, ...)
       ├── polar        (get_polar_fitness_data, ...)
       ├── whoop        (get_full_recovery_data, ...)
       └── fit_generator (build_garmin_interval_workout, ...)
+
+recovery.py  ← новый модуль (домен восстановления, вынесен из bot.py)
+ ├── database         (get_preferences, get_token, get/save_garmin_recovery_cache)
+ └── [ленивые импорты] garmin, whoop, coros, polar, data_normalizer, database
+
+fitness.py   ← новый модуль (домен формы + кэш атлета, вынесен из bot.py)
+ ├── database         (get_token, save_athlete_cache, get_athlete_cache)
+ ├── strava           (get_full_athlete_data)
+ └── [ленивые импорты] strava, garmin, coros, polar
 
 oauth_server.py
  ├── database         (get_token, save_token, ...)
@@ -42,27 +54,37 @@ oauth_server.py
  whoop.py            — только aiohttp + database
 ```
 
-**Вывод:** `bot.py` — единственный оркестратор, всё остальное — изолированные слои.
-`claude_advisor.py` при разбивке не создаст проблем с импортами.
+**Вывод:** `bot.py` — единственный оркестратор. `recovery.py` и `fitness.py` — чистые
+листья (тянут только из database/сервисов, обратных импортов в bot.py нет, циклов нет).
+`claude_advisor.py` при разбивке потребует фасадной стратегии (см. ниже): bot.py
+обращается к нему через атрибут модуля (`claude_advisor.X`), в т.ч. к приватным членам
+и мутабельному глобалу `last_prompt`.
 
 ---
 
-## Размеры файлов
+## Размеры файлов (2026-06-08)
 
 | Файл | Строк | Статус |
 |------|-------|--------|
-| `bot.py` | 3308 | ⚠️ громоздко — 93 функции, всё в одном |
-| `claude_advisor.py` | 2684 | ⚠️ громоздко — 48 функций, промты + математика + форматтеры |
-| `database.py` | 1062 | ок — один слой, единая ответственность |
-| `telegram_reader.py` | 631 | ок |
-| `data_normalizer.py` | 377 | ок |
-| `coros.py` | 455 | ок |
-| `polar.py` | 413 | ок |
-| `garmin.py` | 409 | ок |
-| `strava.py` | 383 | ок |
-| `oauth_server.py` | 363 | ок |
-| `fit_generator.py` | 350 | ок |
-| остальные | <220 | ок |
+| `bot.py` | 4724 | ⚠️ громоздко — 118 функций; recovery/fitness уже вынесены, далее keyboards/recommendation/schedulers |
+| `claude_advisor.py` | 3110 | ⚠️ громоздко — 45 функций, промты + математика + форматтеры (разбивка не начата) |
+| `database.py` | 1385 | ок — один слой, единая ответственность |
+| `data_normalizer.py` | 1026 | ок |
+| `telegram_reader.py` | 762 | ок |
+| `coros.py` | 679 | ок |
+| `garmin.py` | 649 | ок |
+| `polar.py` | 605 | ок |
+| `strava.py` | 550 | ок |
+| `fit_generator.py` | 481 | ок |
+| `oauth_server.py` | 434 | ок |
+| `recovery.py` | 359 | ✅ вынесен из bot.py (6 функций, чистый лист) |
+| `whoop.py` | 310 | ок |
+| `weather.py` | 246 | ок |
+| `zones.py` | 234 | ок |
+| `fitness.py` | 207 | ✅ вынесен из bot.py (6 функций, чистый лист) |
+| остальные | <10 | ок |
+
+> История bot.py: 5237 (исх.) → 4901 (−recovery) → 4724 (−fitness).
 
 ---
 
@@ -108,24 +130,35 @@ oauth_server.py
 
 ---
 
-## Предложения по разбивке (без изменения импортов)
+## План разбивки
 
-### bot.py → 4 модуля
+### bot.py → модули (порядок: recovery → fitness → keyboards → recommendation → schedulers)
 
-| Новый файл | Что переносить | Строк |
-|------------|---------------|-------|
-| `keyboards.py` | все `_build_*_keyboard`, `_build_*_text`, `_settings_nav`, `_svc_*`, `_merge_keyboards`, `get_main_keyboard` | ~350 |
-| `commands_admin.py` | все `cmd_stats/users/services/debug*/ratings/feedbacks/analyze/reanalyze/show_analyze/test_*/preprocess_mode/prompt` + вспомогательные `_run_*`, `_collect_*`, `_reanalyze_one`, `_format_analysis_result` | ~500 |
-| `schedulers.py` | `scheduled_*` (5 штук) + `_autoanalyze_post` + `_edit_newer` + `_notify_all` + `_broadcast_split` | ~400 |
-| `bot.py` (остаток) | команды пользователя, логика рекомендаций, обработчики, main | ~1600 |
+| Новый файл | Что переносить | Статус |
+|------------|---------------|--------|
+| `recovery.py` | `_get_recovery_data`, `_get_unified_recovery`, `_recovery_scenario`, `_fetch_garmin_recovery`, `_update_garmin_recovery_from_raw`, `_garmin_observation_end` | ✅ сделано (v0.24.67) |
+| `fitness.py` | `get_*_fitness_data`, `refresh_athlete_cache`, `_get_vo2max_from_tracker` | ✅ сделано (v0.24.68) |
+| `keyboards.py` | все `_build_*_keyboard`, `_build_*_text`, `_settings_nav`, `_svc_*`, `_merge_keyboards`, `get_main_keyboard` | ⏳ след. (билдеры перемешаны с `cmd_*` — расцепить) |
+| `recommendation.py` | `_send_recommendation`, `_send_ai_variant_b`, `_send_workout/morning/long_run_recommendation`, `_build_variant_b_prompt`, `_user_has_data` | ⏳ |
+| `schedulers.py` | `scheduled_*` (вкл. `scheduled_wakeup_poll`) + ночные хелперы (`_night_ready`, `_collect_morning_snapshot`, `_sync_night_services`, `_normalize_after_catch`) + `_autoanalyze_post` + `_notify_all` + `_broadcast_split` + `_edit_newer` | ⏳ |
 
-### claude_advisor.py → 3 модуля
+### claude_advisor.py → фасад + 5 подмодулей (разбивка не начата)
 
-| Новый файл | Что переносить | Строк |
-|------------|---------------|-------|
-| `recommendation.py` | `recommend_group`, `recommend_long` + вся математика (`_intensity`, `_time_to_termination`, `_zone_*`, `_form_score`, `_recovery_value`, `_group_primary_pace`, `_spec_component`, `_quality_label`, `_workout_character`, `_pace_sec`, `_classify_zone`) | ~400 |
-| `formatters.py` | `format_evening_message`, `format_morning_message`, `format_long_run_message`, `recommendation_to_advice`, `recommendation_to_long_advice`, `generate_step2_prose`, `_pct_bar`, `_suit_comment`, `_shorten_group_label`, `_sanitize_group_name`, `_recovery_warning`, `_recovery_descriptor`, `_sec_to_pace`, `_pace_to_sec`, `_add_sec_to_pace` | ~600 |
-| `claude_advisor.py` (остаток) | промпты, API-вызовы (analyze_workout, ask_groq, ask_deepseek_garmin, generate_ai_b_*) | ~1500 |
+⚠️ **Фасадная стратегия обязательна**: bot.py обращается к `claude_advisor.X` через атрибут
+модуля, в т.ч. к приватным (`_SPEC_LABELS`, `_sanitize_group_name`, `_recovery_value`,
+`_recovery_descriptor`, `_build_step2_prompt`, `_build_analyze_prompt`) и к мутабельному
+глобалу `last_prompt` (пишется в `ask_groq`, читается в bot.py:604). Поэтому
+`claude_advisor.py` остаётся **тонким фасадом-реэкспортом**, код переезжает в подмодули,
+`last_prompt` проксируется через module-level `__getattr__` (PEP 562).
+
+| Новый файл | Что переносить | ~строк | Зависит от |
+|------------|---------------|--------|-----------|
+| `pace_utils.py` | pace-конверсии + зональные константы/математика (`_pace_sec`, `_classify_zone`, `_intensity`, `_time_to_termination`, `_zone_*`, `_workout_character`, `_SPEC_LABELS`, `_TTT_*`) | ~250 | — (лист, выносить первым) |
+| `prompts.py` | все `build_*_prompt`, `_build_recovery_block`, `_estimate_vo2max` | ~750 | pace_utils |
+| `recommend.py` | `recommend_group`, `recommend_long`, движок | ~400 | pace_utils |
+| `formatting.py` | `format_*_message`, `recommendation_to_*_advice`, `_pct_bar`, `_suit_comment`, `_sanitize_group_name`, `_recovery_value/descriptor` | ~750 | pace_utils |
+| `ai_client.py` | `_get_client`, `ask_groq`, `analyze_workout`, `ask_deepseek_garmin`, `generate_*`, `last_prompt` | ~450 | prompts |
+| `claude_advisor.py` (фасад) | реэкспорт всего + `__getattr__` для `last_prompt` | ~60 | все выше |
 
 ### utils.py — утилиты без домашнего файла
 

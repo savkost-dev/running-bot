@@ -3618,15 +3618,34 @@ def _night_ready(db_user_id: int, today_msk: str) -> bool | None:
         except Exception:
             return None
 
+    # if "garmin" in svcs:
+    #     us = (_raw("garmin") or {}).get("user_summary") or {}
+    #     if us.get("bodyBatteryAtWakeTime") is not None:
+    #         return True
+
     if "garmin" in svcs:
-        us = (_raw("garmin") or {}).get("user_summary") or {}
-        if us.get("bodyBatteryAtWakeTime") is not None:
-            return True
+        g = _raw("garmin") or {}
+        dto = (g.get("sleep_data") or {}).get("dailySleepDTO") or {}
+        wake_ms = dto.get("sleepEndTimestampLocal")
+        if wake_ms:
+            from datetime import datetime as _dt
+            wake_date = _dt.utcfromtimestamp(int(wake_ms) / 1000).strftime("%Y-%m-%d")
+            if wake_date == today_msk:
+                return True
+    # if "coros" in svcs:
+    #     dash = (_raw("coros") or {}).get("dashboard") or {}
+    #     info = ((dash.get("data") or {}).get("summaryInfo")) or {}
+    #     hrv = (info.get("sleepHrvData") or {}).get("avgSleepHrv")
+    #     if hrv and float(hrv) > 0:
+    #         return True
     if "coros" in svcs:
         dash = (_raw("coros") or {}).get("dashboard") or {}
         info = ((dash.get("data") or {}).get("summaryInfo")) or {}
-        hrv = (info.get("sleepHrvData") or {}).get("avgSleepHrv")
-        if hrv and float(hrv) > 0:
+        shd = info.get("sleepHrvData") or {}
+        hrv = shd.get("avgSleepHrv")
+        happen = str(shd.get("happenDay") or "")        # формат COROS: "20260608"
+        today_compact = today_msk.replace("-", "")      # "2026-06-08" → "20260608"
+        if hrv and float(hrv) > 0 and happen == today_compact:
             return True
     if "polar" in svcs:
         nr = (_raw("polar") or {}).get("nightly_recharge")
