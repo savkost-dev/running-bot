@@ -943,6 +943,31 @@ def get_last_recommendation(user_id: int, workout_date: str | None = None) -> di
     }
 
 
+def get_recommendations_for_date(workout_date: str) -> list[dict]:
+    """Все рекомендации за указанную дату (для отчёта админу после рассылки).
+    JOIN с users по имени. last_recommendation — одна строка на юзера,
+    поэтому это ровно те, кому ушла рекомендация на эту тренировку.
+    Возвращает список {name, recommended_group, evening_recovery_score, lowered_by_recovery}."""
+    with get_connection() as conn:
+        rows = conn.execute("""
+            SELECT COALESCE(u.name, u.username, 'user_' || lr.user_id),
+                   lr.recommended_group, lr.evening_recovery_score, lr.lowered_by_recovery
+            FROM last_recommendation lr
+            JOIN users u ON u.id = lr.user_id
+            WHERE lr.workout_date = ?
+            ORDER BY lr.recommended_group, COALESCE(u.name, u.username)
+        """, (workout_date,)).fetchall()
+    return [
+        {
+            "name": r[0],
+            "recommended_group": r[1],
+            "evening_recovery_score": r[2],
+            "lowered_by_recovery": bool(r[3]) if r[3] is not None else False,
+        }
+        for r in rows
+    ]
+
+
 # ── Кэш Garmin recovery ──────────────────────────────────────
 
 def get_garmin_recovery_cache(user_id: int, max_age_hours: int = 8) -> dict | None:

@@ -20,7 +20,7 @@ from database import (
     save_athlete_cache, get_athlete_cache,
     save_user_profile, get_user_profile,
     get_preferences, set_preference,
-    save_last_recommendation, get_last_recommendation,
+    save_last_recommendation, get_last_recommendation, get_recommendations_for_date,
     get_workout_notification, save_workout_notification, get_last_workout_notification,
     get_users_for_notification,
     get_garmin_recovery_cache, save_garmin_recovery_cache,
@@ -62,6 +62,10 @@ from fitness import (
 
 ADMIN_TELEGRAM_IDS = {273726778}
 ADMIN_ID = 273726778
+
+# Поимённая секция в отчёте админу после вечерней рассылки.
+# Когда юзеров станет много — выключить (останется только сводка по группам).
+BROADCAST_REPORT_DETAILED = True
 
 
 def _mark_user_inactive(telegram_id: int) -> None:
@@ -3902,11 +3906,52 @@ async def scheduled_evening(context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Evening notification error for {telegram_id}: {e}")
     logger.info(f"Вечерняя рассылка завершена ({wtype}, status={status}): {count} отправлено (кэш, без парсинга на лету)")
-    await _notify_admin(
-        context.bot,
-        f"📨 Рассылка завершена\n"
-        f"Тип: {wtype} | Отправлено: {count} пользователям"
-    )
+
+    base = (f"📨 Рассылка завершена\n"
+            f"Тип: {wtype} | Отправлено: {count} пользователям")
+
+    # Отчёт по разосланным рекомендациям — НЕ критичен, не должен ронять уведомление.
+    report = ""
+    try:
+        bcast_date = live.get("workout_date") if live else None
+        recs = get_recommendations_for_date(bcast_date) if bcast_date else []
+        if recs:
+            groups: dict[str, list] = {}
+            for r in recs:
+                groups.setdefault(str(r["recommended_group"] or "—"), []).append(r)
+            summary = " · ".join(f"гр{g}: {len(lst)}" for g, lst in groups.items())
+            lines = [f"📊 Группы: {summary}"]
+            if BROADCAST_REPORT_DETAILED:
+                for g, lst in groups.items():
+                    lines.append(f"\n▸ Группа {g}")
+                    for r in lst:
+                        rs = r["evening_recovery_score"]
+                        mark = "↓" if r["lowered_by_recovery"] else ""
+                        lines.append(f"   {r['name']} (rec={rs if rs is not None else '—'}{mark})")
+            report = "\n".join(lines)
+    except Exception as e:
+        logger.error(f"Отчёт по рассылке не собрался: {e}")
+        report = ""
+
+    # Отправка: влезает в лимит — одним сообщением; иначе базовое + отчёт отдельно (с разбивкой).
+    try:
+        if report and len(base) + 2 + len(report) <= 4000:
+            await _notify_admin(context.bot, f"{base}\n\n{report}")
+        else:
+            await _notify_admin(context.bot, base)
+            if report:
+                chunk: list[str] = []
+                clen = 0
+                for ln in report.split("\n"):
+                    if chunk and clen + len(ln) + 1 > 4000:
+                        await _notify_admin(context.bot, "\n".join(chunk))
+                        chunk, clen = [], 0
+                    chunk.append(ln)
+                    clen += len(ln) + 1
+                if chunk:
+                    await _notify_admin(context.bot, "\n".join(chunk))
+    except Exception as e:
+        logger.error(f"Отправка отчёта по рассылке: {e}")
 
 
 async def scheduled_cache_refresh(context: ContextTypes.DEFAULT_TYPE):
