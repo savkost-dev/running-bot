@@ -1,8 +1,6 @@
-VERSION = "0.24.71"
+VERSION = "0.24.72"
 BUILD_DATE = "2026-06-08"
 CHANGES = [
-    "Вечерняя рассылка: в отчёт админу добавлена сводка по группам (гр1: N · гр2: M) "
-    "и поимённый список (Имя rec=X, ↓ при lowered_by_recovery) — отключается константой "
-    "BROADCAST_REPORT_DETAILED. Сборка/отправка в try/except (не роняет уведомление), "
-    "лимит 4096 — отчёт уходит отдельным сообщением с разбивкой. Новая get_recommendations_for_date."
+    "Отчёт админу после рассылки: к именам в поимённом списке добавлен Telegram-ник "
+    "(@username) — Имя (@nick) (rec=X). get_recommendations_for_date теперь отдаёт username."
 ]

@@ -951,7 +951,8 @@ def get_recommendations_for_date(workout_date: str) -> list[dict]:
     with get_connection() as conn:
         rows = conn.execute("""
             SELECT COALESCE(u.name, u.username, 'user_' || lr.user_id),
-                   lr.recommended_group, lr.evening_recovery_score, lr.lowered_by_recovery
+                   lr.recommended_group, lr.evening_recovery_score, lr.lowered_by_recovery,
+                   u.username
             FROM last_recommendation lr
             JOIN users u ON u.id = lr.user_id
             WHERE lr.workout_date = ?
@@ -963,6 +964,7 @@ def get_recommendations_for_date(workout_date: str) -> list[dict]:
             "recommended_group": r[1],
             "evening_recovery_score": r[2],
             "lowered_by_recovery": bool(r[3]) if r[3] is not None else False,
+            "username": r[4],
         }
         for r in rows
     ]

@@ -3927,7 +3927,8 @@ async def scheduled_evening(context: ContextTypes.DEFAULT_TYPE):
                     for r in lst:
                         rs = r["evening_recovery_score"]
                         mark = "↓" if r["lowered_by_recovery"] else ""
-                        lines.append(f"   {r['name']} (rec={rs if rs is not None else '—'}{mark})")
+                        nick = f" (@{r['username']})" if r.get("username") else ""
+                        lines.append(f"   {r['name']}{nick} (rec={rs if rs is not None else '—'}{mark})")
             report = "\n".join(lines)
     except Exception as e:
         logger.error(f"Отчёт по рассылке не собрался: {e}")
