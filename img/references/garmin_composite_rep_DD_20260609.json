@@ -1,0 +1,50 @@
+{
+  "_reference_note": "РЕФЕРЕНС целевой структуры для составного повтора (800+200 внутри одного repeat). Тренировка 09.06.2026, гр.3.5: 8 серий по 1км (800 база + 200 ускорение) / 200 восст. ВАЖНО: в этом экспорте у первого interval (800м) ошибочно стоит no.target — в корректной версии у 800м тоже должен быть pace.zone (базовый темп). Целевая связка: interval 800 (pace.zone, база) -> interval 200 (pace.zone, ускорение) -> recovery 200 (no.target), всё внутри одного RepeatGroupDTO numberOfIterations=8, skipLastRestStep=true.",
+  "workoutName": "DD_20260609-3.5_lvl_g",
+  "sportType": {"sportTypeId": 1, "sportTypeKey": "running", "displayOrder": 1},
+  "workoutSegments": [{
+    "segmentOrder": 1,
+    "sportType": {"sportTypeId": 1, "sportTypeKey": "running", "displayOrder": 1},
+    "workoutSteps": [{
+      "type": "RepeatGroupDTO",
+      "stepOrder": 1,
+      "stepType": {"stepTypeId": 6, "stepTypeKey": "repeat", "displayOrder": 6},
+      "childStepId": 1,
+      "numberOfIterations": 8,
+      "workoutSteps": [
+        {
+          "type": "ExecutableStepDTO", "stepOrder": 2,
+          "stepType": {"stepTypeId": 3, "stepTypeKey": "interval", "displayOrder": 3},
+          "childStepId": 1,
+          "endCondition": {"conditionTypeId": 3, "conditionTypeKey": "distance", "displayOrder": 3, "displayable": true},
+          "endConditionValue": 800.0,
+          "_target_note": "В ЭКСПОРТЕ был no.target — ОШИБКА. Должен быть pace.zone с базовым темпом.",
+          "targetType": {"workoutTargetTypeId": 6, "workoutTargetTypeKey": "pace.zone", "displayOrder": 6},
+          "targetValueOne": null, "targetValueTwo": null
+        },
+        {
+          "type": "ExecutableStepDTO", "stepOrder": 3,
+          "stepType": {"stepTypeId": 3, "stepTypeKey": "interval", "displayOrder": 3},
+          "childStepId": 1,
+          "endCondition": {"conditionTypeId": 3, "conditionTypeKey": "distance", "displayOrder": 3, "displayable": true},
+          "endConditionValue": 200.0,
+          "targetType": {"workoutTargetTypeId": 6, "workoutTargetTypeKey": "pace.zone", "displayOrder": 6},
+          "targetValueOne": 4.5454546, "targetValueTwo": 4.0,
+          "_target_note": "Ускорение 3:40->4:10/км (4.545->4.0 м/с)"
+        },
+        {
+          "type": "ExecutableStepDTO", "stepOrder": 4,
+          "stepType": {"stepTypeId": 4, "stepTypeKey": "recovery", "displayOrder": 4},
+          "childStepId": 1,
+          "endCondition": {"conditionTypeId": 3, "conditionTypeKey": "distance", "displayOrder": 3, "displayable": true},
+          "endConditionValue": 200.0,
+          "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target", "displayOrder": 1},
+          "targetValueOne": null, "targetValueTwo": null
+        }
+      ],
+      "endConditionValue": 8.0,
+      "endCondition": {"conditionTypeId": 7, "conditionTypeKey": "iterations", "displayOrder": 7, "displayable": false},
+      "skipLastRestStep": true, "smartRepeat": false
+    }]
+  }]
+}

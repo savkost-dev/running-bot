@@ -4726,10 +4726,11 @@ def main():
 
     job_queue = app.job_queue
     job_queue.run_daily(scheduled_evening,       time=time(hour=17, minute=0))                          # 20:00 МСК
-    job_queue.run_daily(scheduled_cache_refresh, time=time(hour=2,  minute=0),  days=(1, 4))            # 05:00 МСК вт/пт
-    job_queue.run_daily(scheduled_morning,       time=time(hour=4,  minute=0),  days=(1, 4))            # 07:00 МСК вт/пт
-    job_queue.run_daily(scheduled_cache_refresh_sunday, time=time(hour=4, minute=15), days=(6,))        # 07:15 МСК вс
-    job_queue.run_daily(scheduled_morning_sunday,       time=time(hour=4, minute=30), days=(6,))        # 07:30 МСК вс
+    # PTB days: 0=вс, 1=пн … 6=сб → вт/пт = (2, 5), вс = (0,)
+    job_queue.run_daily(scheduled_cache_refresh, time=time(hour=2,  minute=0),  days=(2, 5))            # 05:00 МСК вт/пт
+    job_queue.run_daily(scheduled_morning,       time=time(hour=4,  minute=0),  days=(2, 5))            # 07:00 МСК вт/пт
+    job_queue.run_daily(scheduled_cache_refresh_sunday, time=time(hour=4, minute=15), days=(0,))        # 07:15 МСК вс
+    job_queue.run_daily(scheduled_morning_sunday,       time=time(hour=4, minute=30), days=(0,))        # 07:30 МСК вс
     job_queue.run_repeating(scheduled_new_workout_check, interval=1800, first=60)                       # каждые 30 мин
     job_queue.run_repeating(scheduled_wakeup_poll, interval=900, first=120)                              # каждые 15 мин (окно 06:00–09:00 МСК внутри)
 
