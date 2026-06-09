@@ -81,7 +81,9 @@ def _age_str(updated_at):
         return ""
     try:
         d = datetime.fromisoformat(str(updated_at))
-        hrs = (datetime.now() - d).total_seconds() / 3600
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=timezone.utc)  # SQLite datetime('now') = UTC
+        hrs = (datetime.now(timezone.utc) - d).total_seconds() / 3600
         return f"{int(hrs)}ч назад" if hrs >= 1 else f"{int(hrs*60)}мин назад"
     except Exception:
         return ""
@@ -103,7 +105,11 @@ def build_report(target_date: str | None = None) -> str:
         if snap and snap.get("caught") and (show_all or snap.get("date") == target_date):
             caught.append((name, snap, devs, uid))
         elif devs:
-            missed_with_dev.append((name, devs))
+            # есть ночной трекер, но за нужную дату не поймано
+            if snap and snap.get("date"):
+                # слепок есть, но за СТАРУЮ дату → неактивный аккаунт → выкидываем из отчёта
+                continue
+            missed_with_dev.append((name, devs, uid))
         else:
             missed_no_dev.append(name)
 
@@ -114,7 +120,7 @@ def build_report(target_date: str | None = None) -> str:
         dev_str = "+".join(_SVC_NAMES.get(d, d) for d in devs) or "—"
         date_tag = f" [{s.get('date')}]" if show_all else ""
         cur_tr, cur_bb, upd, _ = _current(uid)
-        lines.append(f"▸ {name} · {dev_str}{date_tag}")
+        lines.append(f"▸ {name} · {dev_str} · id={uid}{date_tag}")
         lines.append(
             f"   утро:   TR {_num(s.get('tr'))} | BB {_num(s.get('bb'))} | "
             f"HRV {_num(s.get('hrv'))} | RHR {_num(s.get('rhr'))} | "
@@ -122,14 +128,14 @@ def build_report(target_date: str | None = None) -> str:
             f"(снят {_hhmm(s.get('snapshot_at'), to_msk=True)})"
         )
         age = _age_str(upd)
-        age_tag = f"  (обновл. {_hhmm(upd)} {age})".rstrip() if upd else ""
+        age_tag = f"  (обновл. {_hhmm(upd, to_msk=True)} {age})".rstrip() if upd else ""
         lines.append(f"   сейчас: TR {_num(cur_tr)} | BB {_num(cur_bb)}{age_tag}")
 
     if missed_with_dev:
         lines.append("")
         lines.append(f"⚠️ Ночной трекер есть, но не поймано ({len(missed_with_dev)}):")
-        for name, devs in missed_with_dev:
-            lines.append(f"   {name} · {'+'.join(_SVC_NAMES.get(d, d) for d in devs)}")
+        for name, devs, uid in missed_with_dev:
+            lines.append(f"   {name} · {'+'.join(_SVC_NAMES.get(d, d) for d in devs)} · id={uid}")
 
     if missed_no_dev:
         lines.append("")
