@@ -3849,10 +3849,12 @@ async def scheduled_wakeup_poll(context: ContextTypes.DEFAULT_TYPE):
             continue
         # уже поймали сегодня — пропускаем
         flag = get_morning_caught(db_user_id)
-        if flag and flag.get("caught") and flag.get("date") == today:
+        caught_today = flag and flag.get("caught") and flag.get("date") == today
+        # пойман сегодня И (TR заполнен ИЛИ не Garmin) — пропускаем
+        if caught_today and (flag.get("tr") is not None or not get_token(db_user_id, "garmin")):
             continue
         # ночь уже готова по текущему сырью?
-        if _night_ready(db_user_id, today):
+        if not caught_today and _night_ready(db_user_id, today):
             set_morning_caught(db_user_id, today, snapshot=_collect_morning_snapshot(db_user_id))
             _normalize_after_catch(db_user_id)
             caught_now += 1
