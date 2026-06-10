@@ -3532,11 +3532,17 @@ async def _autoanalyze_post(workout: dict, context=None) -> None:
         if not result:
             logger.warning(f"autoanalyze: post_id={post_id} анализ не удался ({reason})")
             return
-        # Failsafe B: анонс без групп физически бесполезен для рекомендации
-        if result.get("is_valid") and not (result.get("groups") or []):
-            result["is_valid"] = False
-            result["reject_reason"] = "нет групп с темпами — не анонс"
-            logger.info(f"autoanalyze: post_id={post_id} is_valid сброшен (groups=[])")
+        # Failsafe B: анонс без групп С ТЕМПАМИ физически бесполезен для рекомендации.
+        # Прогрев-посты проходят с одной группой «здоровье» без темпа — это не анонс.
+        # Группа «с темпом» = в её JSON есть паттерн M:SS (схемонезависимо для interval/long).
+        if result.get("is_valid"):
+            import re as _re_fs
+            _paced = [g for g in (result.get("groups") or [])
+                      if _re_fs.search(r"\d{1,2}:\d{2}", _json.dumps(g, ensure_ascii=False))]
+            if not _paced:
+                result["is_valid"] = False
+                result["reject_reason"] = "нет групп с темпами — не анонс"
+                logger.info(f"autoanalyze: post_id={post_id} is_valid сброшен (нет групп с темпами)")
         save_workout_analysis(
             post_id=post_id,
             workout_date=result.get("workout_date", ""),
