@@ -6,7 +6,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import BadRequest, TimedOut, NetworkError, Forbidden
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, CallbackQueryHandler,
-    MessageHandler, filters, ContextTypes
+    MessageHandler, filters, ContextTypes, TypeHandler
 )
 from dotenv import load_dotenv
 
@@ -25,6 +25,7 @@ from database import (
     get_users_for_notification,
     get_garmin_recovery_cache, save_garmin_recovery_cache,
     user_exists, log_activity, get_bot_stats, count_users_with_service,
+    get_activity_daily, get_activity_top,
     delete_token,
     get_all_users_with_details, get_users_with_service_full, get_users_with_profile_full,
     save_feedback, save_rating, get_recent_ratings, get_recent_feedbacks,
@@ -334,7 +335,6 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_workout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db_user_id = _mark_user_active_if_needed(user.id, user.full_name, user.username)
-    log_activity(db_user_id, '/workout')
     msg = await update.message.reply_text("🔍 Ищу анонс, анализирую и подбираю группу...")
     await _send_recommendation(user.id, user.full_name, context, long=False, msg=msg)
 
@@ -342,7 +342,6 @@ async def cmd_workout(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_long(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db_user_id = _mark_user_active_if_needed(user.id, user.full_name, user.username)
-    log_activity(db_user_id, '/long')
     msg = await update.message.reply_text("🔍 Подбираю Long Run...")
     await _send_recommendation(user.id, user.full_name, context, long=True, msg=msg)
 
@@ -350,7 +349,6 @@ async def cmd_long(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_morning(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db_user_id = _mark_user_active_if_needed(user.id, user.full_name, user.username)
-    log_activity(db_user_id, '/morning')
     msg = await update.message.reply_text("☀️ Проверяю твоё восстановление...")
     await _send_morning_check(user.id, context, msg)
 
@@ -4676,6 +4674,59 @@ async def panalyze_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     )
 
 
+# ── АКТИВНОСТЬ ПОЛЬЗОВАТЕЛЕЙ ──────────────────────────────────────────
+
+# Основные inline-кнопки логируем КАК команды — /stats считает их вместе
+_BTN_TO_CMD = {
+    "get_workout":  "/workout",
+    "get_long_run": "/long",
+    "get_morning":  "/morning",
+}
+
+
+async def _activity_logger(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Сквозной логгер действий (group=-1, не блокирует остальные хендлеры).
+    Пишет в user_activity только ВХОДЯЩИЕ действия юзера: команды (/x) и
+    inline-кнопки (btn:<data>; главные кнопки маппятся в /workout|/long|/morning).
+    Рассылки — исходящие, сюда не попадают по построению."""
+    try:
+        u = update.effective_user
+        if not u:
+            return
+        action = None
+        if update.callback_query and update.callback_query.data:
+            data = update.callback_query.data
+            action = _BTN_TO_CMD.get(data) or ("btn:" + data[:40])
+        elif update.message and update.message.text and update.message.text.startswith("/"):
+            action = update.message.text.split()[0].split("@")[0][:40]
+        if action:
+            db_user_id = get_or_create_user(u.id, u.full_name or "", u.username)
+            log_activity(db_user_id, action)
+    except Exception:
+        pass  # логгер никогда не должен мешать основной логике
+
+
+async def cmd_activity(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/activity (admin) — активность по дням + топ действий за 14 дней."""
+    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+        return
+    days = 14
+    daily = get_activity_daily(days)
+    top = get_activity_top(days)
+    lines = [f"📈 Активность за {days} дней (дни МСК, без рассылок)", ""]
+    if daily:
+        for d, users_cnt, actions_cnt in daily:
+            lines.append(f"{d}: {users_cnt} чел · {actions_cnt} действий")
+    else:
+        lines.append("Нет данных.")
+    if top:
+        lines += ["", "Топ действий:"]
+        for cmd, cnt, uniq in top:
+            lines.append(f"  {cmd}: {cnt} (юзеров: {uniq})")
+    lines += ["", "Кнопки Тренировка/Long Run/Утро считаются как /workout, /long, /morning."]
+    await update.message.reply_text("\n".join(lines))
+
+
 def main():
     init_db()
 
@@ -4721,6 +4772,7 @@ def main():
     app.add_handler(CommandHandler("p_a",       p_a_self_command))
     app.add_handler(CommandHandler("p_a_user",  p_a_command))
     app.add_handler(CommandHandler("p_analyze", p_analyze_command))
+    app.add_handler(CommandHandler("activity",  cmd_activity))
     app.add_handler(CallbackQueryHandler(b_user_callback,   pattern=r"^b_user_\d+$"))
     app.add_handler(CallbackQueryHandler(a_user_callback,   pattern=r"^a_user_\d+$"))
     app.add_handler(CallbackQueryHandler(w_user_callback,   pattern=r"^w_user_\d+$"))
@@ -4731,6 +4783,8 @@ def main():
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     app.add_error_handler(global_error_handler)
+    # Сквозной логгер активности: group=-1 выполняется НЕЗАВИСИМО от основных хендлеров
+    app.add_handler(TypeHandler(Update, _activity_logger), group=-1)
 
     job_queue = app.job_queue
     job_queue.run_daily(scheduled_evening,       time=time(hour=17, minute=0))                          # 20:00 МСК

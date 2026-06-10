@@ -498,6 +498,32 @@ def log_activity(user_id: int, command: str) -> None:
         )
 
 
+def get_activity_daily(days: int = 14) -> list:
+    """Активность по дням (дни МСК, +3ч к UTC в created_at).
+    Возвращает [(date, uniq_users, actions)] от новых к старым."""
+    with get_connection() as conn:
+        return conn.execute(
+            "SELECT date(created_at, '+3 hours') AS d, "
+            "COUNT(DISTINCT user_id), COUNT(*) "
+            "FROM user_activity "
+            "WHERE created_at >= datetime('now', ?) "
+            "GROUP BY d ORDER BY d DESC",
+            (f"-{int(days)} days",)
+        ).fetchall()
+
+
+def get_activity_top(days: int = 14, limit: int = 12) -> list:
+    """Топ действий за период: [(command, actions, uniq_users)] по убыванию."""
+    with get_connection() as conn:
+        return conn.execute(
+            "SELECT command, COUNT(*) AS cnt, COUNT(DISTINCT user_id) "
+            "FROM user_activity "
+            "WHERE created_at >= datetime('now', ?) "
+            "GROUP BY command ORDER BY cnt DESC LIMIT ?",
+            (f"-{int(days)} days", int(limit))
+        ).fetchall()
+
+
 def get_bot_stats() -> dict:
     """Возвращает агрегированную статистику для команды /stats."""
     with get_connection() as conn:
