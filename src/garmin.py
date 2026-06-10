@@ -609,6 +609,29 @@ async def fetch_raw(db_user_id: int) -> dict | None:
         print(f"Garmin fetch_raw: нет данных для user_id={db_user_id}")
         return None
 
+    # Проверка полноты ночи: сон + Body Battery на пробуждение должны быть в ответе.
+    # Если их нет (ранний/неполный срез — ночь ещё не закрыта Garmin'ом), НЕ перезаписываем
+    # уже лежащее полное сырьё за сегодня — ждём следующий заход опроса.
+    _dto = (raw.get("sleep_data") or {}).get("dailySleepDTO") or {}
+    _us = raw.get("user_summary") or {}
+    night_complete = (_dto.get("sleepEndTimestampLocal") is not None
+                      and _us.get("bodyBatteryAtWakeTime") is not None)
+    if not night_complete:
+        _existing = db.get_raw_service_data(db_user_id, "garmin")
+        if _existing:
+            try:
+                _old = json.loads(_existing["raw_json"])
+                _odto = (_old.get("sleep_data") or {}).get("dailySleepDTO") or {}
+                _ous = _old.get("user_summary") or {}
+                if (_odto.get("sleepEndTimestampLocal") is not None
+                        and _ous.get("bodyBatteryAtWakeTime") is not None
+                        and _odto.get("calendarDate") == today):
+                    print(f"Garmin fetch_raw: неполный ответ (нет сна/BB), "
+                          f"сохраняю старое полное сырьё за {today} user_id={db_user_id}")
+                    return _old
+            except Exception:
+                pass
+
     db.save_raw_service_data(db_user_id, "garmin", json.dumps(raw, ensure_ascii=False, default=str))
     got = [k for k, v in raw.items() if v is not None]
     print(f"Garmin fetch_raw: сохранено для user_id={db_user_id} ({', '.join(got)})")
