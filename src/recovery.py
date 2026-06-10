@@ -272,7 +272,8 @@ def _recovery_scenario(workout_dict: dict, data_fetched_at: str | None) -> dict:
                 from datetime import datetime, timezone, timedelta
                 MSK = timezone(timedelta(hours=3))
                 dt = datetime.fromisoformat(data_fetched_at.replace("Z", "+00:00"))
-                dt_msk = dt.astimezone(MSK)
+                # naive (без tz) = wellnessEndTimeLocal, УЖЕ МСК — не конвертируем; aware (Z) — в МСК
+                dt_msk = dt.astimezone(MSK) if dt.tzinfo else dt.replace(tzinfo=MSK)
                 time_str = dt_msk.strftime("%H:%M МСК %d.%m")
             except Exception:
                 pass
@@ -306,7 +307,8 @@ def _recovery_scenario(workout_dict: dict, data_fetched_at: str | None) -> dict:
     if data_fetched_at:
         try:
             dt = datetime.fromisoformat(data_fetched_at.replace("Z", "+00:00"))
-            data_dt = dt.astimezone(MSK)
+            # naive (без tz) = wellnessEndTimeLocal, УЖЕ МСК — не конвертируем; aware (Z) — в МСК
+            data_dt = dt.astimezone(MSK) if dt.tzinfo else dt.replace(tzinfo=MSK)
             sync_str = f"Данные синхронизированы: {data_dt.strftime('%H:%M МСК %d.%m')}. "
         except Exception:
             pass
