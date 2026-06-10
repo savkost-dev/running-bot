@@ -524,6 +524,19 @@ def get_activity_top(days: int = 14, limit: int = 12) -> list:
         ).fetchall()
 
 
+def get_activity_users(days: int = 14) -> list:
+    """Кто активен за период: [(name, username, actions, last_date_msk)] по убыванию действий."""
+    with get_connection() as conn:
+        return conn.execute(
+            "SELECT COALESCE(u.name, u.username, 'user_' || a.user_id), u.username, "
+            "COUNT(*) AS cnt, MAX(date(a.created_at, '+3 hours')) "
+            "FROM user_activity a JOIN users u ON u.id = a.user_id "
+            "WHERE a.created_at >= datetime('now', ?) "
+            "GROUP BY a.user_id ORDER BY cnt DESC",
+            (f"-{int(days)} days",)
+        ).fetchall()
+
+
 def get_bot_stats() -> dict:
     """Возвращает агрегированную статистику для команды /stats."""
     with get_connection() as conn:
