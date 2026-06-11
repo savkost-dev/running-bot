@@ -99,6 +99,23 @@ async def _fetch_garmin_recovery(db_user_id: int) -> dict | None:
     return None
 
 
+def _unified_calc_tr(db_user_id: int) -> dict | None:
+    """s3_training_readiness из unified_cache — включая расчётный (coros-calc/strava-calc)."""
+    try:
+        from database import get_unified_data
+        from data_normalizer import UnifiedUserData
+        row = get_unified_data(db_user_id, max_age_hours=20)
+        if not row:
+            return None
+        u = UnifiedUserData.from_json(row["unified_json"])
+        tr = u.s3_training_readiness
+        if isinstance(tr, dict) and tr.get("score") is not None:
+            return tr
+    except Exception:
+        pass
+    return None
+
+
 async def _get_recovery_data(db_user_id: int, force_fresh: bool = False) -> dict | None:
     """Возвращает данные восстановления (Whoop → Garmin).
     force_fresh=True — пропускает кэш Garmin, всегда запрашивает API.
@@ -162,6 +179,11 @@ async def _get_recovery_data(db_user_id: int, force_fresh: bool = False) -> dict
             import coros as _coros
             result = await _coros.get_recovery_for_prompt(db_user_id)
             if result:
+                # расчётный TR (coros-calc) из нормализатора — у COROS нет нативного
+                if not result.get("training_readiness"):
+                    _tr = _unified_calc_tr(db_user_id)
+                    if _tr:
+                        result["training_readiness"] = _tr
                 return result
         except Exception as e:
             logger.error(f"COROS recovery error for user {db_user_id}: {e}")
@@ -175,6 +197,12 @@ async def _get_recovery_data(db_user_id: int, force_fresh: bool = False) -> dict
                 return result
         except Exception as e:
             logger.error(f"Polar recovery error for user {db_user_id}: {e}")
+
+    # Strava-only: расчётный TR из TSB (strava-calc) — других источников восстановления нет
+    if get_token(db_user_id, "strava"):
+        _tr = _unified_calc_tr(db_user_id)
+        if _tr:
+            return {"source": "strava", "training_readiness": _tr}
 
     return None
 

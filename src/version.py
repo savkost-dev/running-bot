@@ -1,10 +1,10 @@
-VERSION = "0.24.79"
+VERSION = "0.24.80"
 BUILD_DATE = "2026-06-11"
 CHANGES = [
-    "Расчётный Training Readiness для COROS/Strava в нормализаторе: "
-    "base=clip((TSB+20)/0.4, 0..100); COROS = sqrt(base*RecoveryPct) (геом. среднее), "
-    "COROS без Strava = RecoveryPct, Strava-only = base. Пишется в s3_training_readiness "
-    "с level=coros-calc/strava-calc. Garmin/Polar не затронуты.",
-    "0.24.78: альтернативы Легко/Тяжело только из групп с подходимостью ≥50%.",
-    "0.24.77: сквозной логгер активности + /activity."
+    "Расчётный TR доведён до живых путей: _get_recovery_data подмешивает "
+    "s3_training_readiness из unified в COROS-ветку (coros-calc) и добавлен "
+    "Strava-only fallback (strava-calc). Теперь TR виден в /morning, /workout, /long "
+    "и админ-блоке, а не только в ретро-рекомендациях из unified_cache.",
+    "0.24.79: расчётный TR для COROS/Strava в нормализаторе.",
+    "0.24.78: альтернативы Легко/Тяжело только из групп с подходимостью ≥50%."
 ]
