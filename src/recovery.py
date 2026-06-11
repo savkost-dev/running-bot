@@ -235,26 +235,16 @@ async def _get_unified_recovery(db_user_id: int, force_fresh: bool = True) -> di
             return None
         # data_fetched_at: берём lastSyncTimestampGMT из свежего запроса Garmin
         # (сохранён в synced_at в _fetch_garmin_recovery).
-        # Если нет (Whoop, COROS, Polar) — фолбэк на unified_cache как раньше.
+        # Подпись времени — ТОЛЬКО из этого же живого похода (lastSyncTimestampGMT).
+        # Нет живого времени — не подписываем ничем: никаких подмен старым временем
+        # из сырья/unified — данные и время должны быть из одного источника.
         synced_at = recovery.pop("synced_at", None)
         if synced_at:
-            recovery["data_fetched_at"] = synced_at
-        else:
-            try:
-                row = get_unified_data(db_user_id, max_age_hours=20)
-                if row:
-                    u = UnifiedUserData.from_json(row["unified_json"])
-                    dd = u.data_dates or {}
-                    recovery["data_fetched_at"] = (dd.get("garmin_synced_at")
-                        or dd.get("garmin_fetched") or dd.get("coros_fetched")
-                        or dd.get("polar_fetched") or dd.get("strava_fetched")
-                        or row.get("updated_at"))
-            except Exception:
-                pass
-        # Для Garmin конец наблюдения = wellnessEndTimeLocal (локальное); иначе синк выше
-        _obs_end = _garmin_observation_end(db_user_id)
-        if _obs_end:
-            recovery["data_fetched_at"] = _obs_end
+            s = str(synced_at)
+            # GMT без маркера — помечаем Z, чтобы сценарий корректно конвертировал в МСК
+            if "Z" not in s and "+" not in s:
+                s += "Z"
+            recovery["data_fetched_at"] = s
         return recovery
 
     # Прошедшая тренировка — данные ИЗ unified_cache (утренний снимок)
