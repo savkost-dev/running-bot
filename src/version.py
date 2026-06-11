@@ -1,9 +1,9 @@
-VERSION = "0.24.82"
+VERSION = "0.24.83"
 BUILD_DATE = "2026-06-11"
 CHANGES = [
-    "Расчётный TR строже: считается ТОЛЬКО при сегодняшнем TSB (COROS ati/cti или Strava). "
-    "Без TSB TR отсутствует — один Recovery не TR.",
-    "0.24.81: COROS day_detail (ati/cti) в сырье; родной Form приоритетнее Strava TSB; "
-    "ati/cti берутся только за сегодня (МСК).",
-    "0.24.80: расчётный TR доведён до живых путей (_get_recovery_data)."
+    "Расчётный TR в утреннем слепке: _collect_morning_snapshot для не-Garmin юзеров "
+    "берёт TR из unified (coros-calc/strava-calc); порядок поимки изменён — "
+    "сначала нормализация, потом сборка снимка (оба места wakeup_poll).",
+    "0.24.82: TR строже — только при сегодняшнем TSB; без TSB TR отсутствует.",
+    "0.24.81: COROS /analyse/query (ati/cti за сегодня) в сырье; родной Form приоритетнее Strava TSB."
 ]

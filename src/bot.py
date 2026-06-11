@@ -3816,6 +3816,14 @@ def _collect_morning_snapshot(db_user_id: int) -> dict:
         if snap["rhr"] is None and rhr and int(rhr) > 0:
             snap["rhr"] = int(rhr)
 
+    # Расчётный TR (coros-calc/strava-calc) из unified — для не-Garmin юзеров.
+    # Требует, чтобы нормализация прошла ДО сборки снимка (см. scheduled_wakeup_poll).
+    if snap["tr"] is None and not get_token(db_user_id, "garmin"):
+        from recovery import _unified_calc_tr
+        _tr = _unified_calc_tr(db_user_id)
+        if _tr:
+            snap["tr"] = int(_tr["score"])
+
     return snap
 
 
@@ -3860,8 +3868,8 @@ async def scheduled_wakeup_poll(context: ContextTypes.DEFAULT_TYPE):
             continue
         # ночь уже готова по текущему сырью?
         if not caught_today and _night_ready(db_user_id, today):
-            set_morning_caught(db_user_id, today, snapshot=_collect_morning_snapshot(db_user_id))
             _normalize_after_catch(db_user_id)
+            set_morning_caught(db_user_id, today, snapshot=_collect_morning_snapshot(db_user_id))
             caught_now += 1
             continue
         # не готова — синкаем свежее сырьё и перепроверяем
@@ -3871,8 +3879,8 @@ async def scheduled_wakeup_poll(context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.warning(f"wakeup_poll sync error for {telegram_id}: {e}")
         if _night_ready(db_user_id, today):
-            set_morning_caught(db_user_id, today, snapshot=_collect_morning_snapshot(db_user_id))
             _normalize_after_catch(db_user_id)
+            set_morning_caught(db_user_id, today, snapshot=_collect_morning_snapshot(db_user_id))
             caught_now += 1
         await asyncio.sleep(1)
 
