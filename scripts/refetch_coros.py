@@ -32,17 +32,18 @@ def main():
         print("fetch_raw вернул None")
         return
 
-    dd = raw.get("day_detail")
+    dd = raw.get("analyse")
     if isinstance(dd, dict):
-        items = ((dd.get("data") or {}).get("dataList")) or []
+        items = ((dd.get("data") or {}).get("dayList")) or []
         items = [i for i in items if isinstance(i, dict)]
-        print(f"  day_detail: result={dd.get('result')} записей={len(items)}")
+        print(f"  analyse.dayList: result={dd.get('result')} записей={len(items)}")
+        if items:
+            print(f"  ключи записи: {list(items[0].keys())}")
         for i in items[-3:]:
             day = i.get("happenDay") or i.get("day") or i.get("date")
-            print(f"    day={day} ati={i.get('ati')} cti={i.get('cti')} "
-                  f"tired={i.get('tiredRate') or i.get('tired_rate')}")
+            print(f"    day={day} ati={i.get('ati')} cti={i.get('cti')}")
     else:
-        print(f"  day_detail: {dd!r}")
+        print(f"  analyse: {dd!r}")
 
     print("== run_normalization ==")
     run_normalization(uid)

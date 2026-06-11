@@ -706,11 +706,11 @@ def _parse_coros_raw(raw: dict) -> dict:
             total_km = round(sum((a.get("distance") or 0) for a in acts_list if isinstance(a, dict)) / 1000, 1)
             out["load_48h"] = {"sessions_48h": len(acts_list), "total_km_48h": total_km}
 
-    # ati/cti (родной COROS Form) из day_detail — ТОЛЬКО за сегодня (МСК).
+    # ati/cti (родной COROS Form) из /analyse/query (ключ "analyse", data.dayList) — ТОЛЬКО за сегодня (МСК).
     # Старые дни не берём: лучше без TSB, чем с протухшим. Если поля даты нет — берём последнюю.
-    dd = raw.get("day_detail")
+    dd = raw.get("analyse")
     if isinstance(dd, dict) and str(dd.get("result")) == "0000":
-        items = ((dd.get("data") or {}).get("dataList")) or []
+        items = ((dd.get("data") or {}).get("dayList")) or []
         items = [i for i in items if isinstance(i, dict)]
         from datetime import datetime as _dt2, timezone as _tz2, timedelta as _td2
         _today_compact = _dt2.now(_tz2(_td2(hours=3))).strftime("%Y%m%d")

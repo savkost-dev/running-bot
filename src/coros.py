@@ -629,10 +629,7 @@ async def fetch_raw(db_user_id: int) -> dict | None:
             "startDay": start_48.strftime("%Y%m%d"),
             "endDay":   today.strftime("%Y%m%d"),
         }),
-        _get(db_user_id, "/v2/coros/sport/detail/dayDetail", {
-            "startDay": (today - timedelta(days=7)).strftime("%Y%m%d"),
-            "endDay":   today.strftime("%Y%m%d"),
-        }),
+        _get(db_user_id, "/analyse/query"),  # EvoLab: dayList с ati/cti (Form); dayDetail мёртв (500)
         return_exceptions=True,
     )
 
@@ -643,7 +640,7 @@ async def fetch_raw(db_user_id: int) -> dict | None:
         "dashboard":  _clean(dashboard),
         "account":    _clean(account),
         "activity":   _clean(activity),
-        "day_detail": _clean(day_detail),  # ati/cti (Form) по дням
+        "analyse":    _clean(day_detail),  # ati/cti (Form) по дням из /analyse/query
     }
 
     if not any(v is not None for v in raw.values()):
