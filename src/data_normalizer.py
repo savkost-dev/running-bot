@@ -706,6 +706,20 @@ def _parse_coros_raw(raw: dict) -> dict:
             total_km = round(sum((a.get("distance") or 0) for a in acts_list if isinstance(a, dict)) / 1000, 1)
             out["load_48h"] = {"sessions_48h": len(acts_list), "total_km_48h": total_km}
 
+    # ati/cti (родной COROS Form) из day_detail — последняя запись с данными
+    dd = raw.get("day_detail")
+    if isinstance(dd, dict) and str(dd.get("result")) == "0000":
+        items = ((dd.get("data") or {}).get("dataList")) or []
+        for item in reversed([i for i in items if isinstance(i, dict)]):
+            ati = item.get("ati")
+            cti = item.get("cti")
+            if ati is not None or cti is not None:
+                if ati is not None:
+                    out["ati"] = float(ati)
+                if cti is not None:
+                    out["cti"] = float(cti)
+                break
+
     return out
 
 
@@ -1009,6 +1023,10 @@ def run_normalization(user_id: int) -> "UnifiedUserData | None":
     _has_native_tr = isinstance(_tr_obj, dict) and _tr_obj.get("score") is not None
     if not _has_native_tr and not u_garmin:
         _tsb = merged.s3_recovery_total
+        # Родной COROS Form (cti-ati из day_detail) приоритетнее Strava TSB
+        if (u_coros and u_coros.s3_load_chronic
+                and u_coros.s3_load_chronic.tsb is not None):
+            _tsb = u_coros.s3_load_chronic.tsb
         _base = max(0.0, min(100.0, (float(_tsb) + 20.0) / 0.4)) if _tsb is not None else None
         _coros_rec = u_coros.s3_coros_recovery if u_coros else None
         _calc = _src = None

@@ -621,12 +621,16 @@ async def fetch_raw(db_user_id: int) -> dict | None:
     today = date.today()
     start_48 = today - timedelta(days=2)
 
-    dashboard, account, activity = await asyncio.gather(
+    dashboard, account, activity, day_detail = await asyncio.gather(
         _get(db_user_id, "/dashboard/query"),
         _get(db_user_id, "/account/query"),
         _get(db_user_id, "/activity/query", {
             "size": "20", "pageNumber": "1",
             "startDay": start_48.strftime("%Y%m%d"),
+            "endDay":   today.strftime("%Y%m%d"),
+        }),
+        _get(db_user_id, "/v2/coros/sport/detail/dayDetail", {
+            "startDay": (today - timedelta(days=7)).strftime("%Y%m%d"),
             "endDay":   today.strftime("%Y%m%d"),
         }),
         return_exceptions=True,
@@ -636,9 +640,10 @@ async def fetch_raw(db_user_id: int) -> dict | None:
         return None if isinstance(x, Exception) else x
 
     raw = {
-        "dashboard": _clean(dashboard),
-        "account":   _clean(account),
-        "activity":  _clean(activity),
+        "dashboard":  _clean(dashboard),
+        "account":    _clean(account),
+        "activity":   _clean(activity),
+        "day_detail": _clean(day_detail),  # ati/cti (Form) по дням
     }
 
     if not any(v is not None for v in raw.values()):

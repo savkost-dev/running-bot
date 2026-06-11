@@ -20,7 +20,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import database as db
 
-_PAT = ("sleep", "wake", "bed", "rest", "hrv", "recovery", "night")
+_PAT = ("sleep", "wake", "bed", "rest", "hrv", "recovery", "night",
+        "ati", "cti", "load", "form", "tsb", "fatigue", "fitness", "intensity")
 
 
 def _walk(obj, path="", out=None, depth=0):
@@ -57,6 +58,12 @@ def main():
     dash = g.get("dashboard")
     if isinstance(dash, dict):
         print(f"[dashboard] ключи: {list(dash.keys())}")
+        data = dash.get("data")
+        if isinstance(data, dict):
+            print(f"[dashboard.data] ключи: {list(data.keys())}")
+            si = data.get("summaryInfo")
+            if isinstance(si, dict):
+                print(f"[dashboard.data.summaryInfo] ВСЕ ключи: {list(si.keys())}")
 
     hits = _walk(g)
     print(f"\nПоля про сон/пробуждение/HRV/восстановление ({len(hits)}):")
