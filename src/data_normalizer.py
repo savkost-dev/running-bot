@@ -707,7 +707,7 @@ def _parse_coros_raw(raw: dict) -> dict:
             out["load_48h"] = {"sessions_48h": len(acts_list), "total_km_48h": total_km}
 
     # ati/cti (родной COROS Form) из /analyse/query (ключ "analyse", data.dayList) — ТОЛЬКО за сегодня (МСК).
-    # Старые дни не берём: лучше без TSB, чем с протухшим. Если поля даты нет — берём последнюю.
+    # Старые дни не берём: лучше без TSB, чем с протухшим. Запись без даты тоже не берём.
     dd = raw.get("analyse")
     if isinstance(dd, dict) and str(dd.get("result")) == "0000":
         items = ((dd.get("data") or {}).get("dayList")) or []
@@ -728,8 +728,8 @@ def _parse_coros_raw(raw: dict) -> dict:
             if ati is None and cti is None:
                 continue
             d = _day_of(item)
-            if d is not None and d != _today_compact:
-                continue  # не сегодняшний день — пропускаем
+            if d != _today_compact:
+                continue  # не сегодняшний день или нет даты — пропускаем
             if ati is not None:
                 out["ati"] = float(ati)
             if cti is not None:

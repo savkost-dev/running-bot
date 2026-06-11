@@ -2492,8 +2492,17 @@ async def _send_admin_data_block(
             )
         else:
             _lines.append("\n<b>Снимок на утро</b>: нет (ночь не поймана)")
-        # data_fetched_at: для Garmin = wellnessEndTimeLocal (локальное), показываем как есть
-        _dt_cur = (str(_rec.get("data_fetched_at") or "")[:16]).replace("T", " ")
+        # data_fetched_at: живой синк = GMT с 'Z' → конвертируем в МСК; naive без tz = уже локальное
+        _dt_cur = ""
+        _raw_dt = str(_rec.get("data_fetched_at") or "")
+        if _raw_dt:
+            try:
+                from datetime import datetime as _dtm, timezone as _tzm, timedelta as _tdm
+                _d = _dtm.fromisoformat(_raw_dt.replace("Z", "+00:00"))
+                _d = _d.astimezone(_tzm(_tdm(hours=3))) if _d.tzinfo else _d
+                _dt_cur = _d.strftime("%Y-%m-%d %H:%M")
+            except Exception:
+                _dt_cur = (_raw_dt[:16]).replace("T", " ")
         _bb_cur = (_rec.get("recovery_score") if _rec.get("source") == "unified_cache"
                    else _rec.get("body_battery"))
         _lines.append(
