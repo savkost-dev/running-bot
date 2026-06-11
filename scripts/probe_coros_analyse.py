@@ -73,6 +73,13 @@ async def main():
             d = data.get("data")
             if isinstance(d, dict):
                 print(f"  [data] ключи: {list(d.keys())}")
+                dl = d.get("dayList")
+                if isinstance(dl, list) and dl and isinstance(dl[0], dict):
+                    print(f"  [dayList] len={len(dl)}")
+                    print(f"  [dayList[0]] ВСЕ ключи: {list(dl[0].keys())}")
+                    for it in (dl[0], dl[-1]):
+                        day = it.get("happenDay") or it.get("day") or it.get("date") or it.get("dateTime")
+                        print(f"    day={day} ati={it.get('ati')} cti={it.get('cti')}")
             elif isinstance(d, list):
                 print(f"  [data] list len={len(d)}; ключи [0]: "
                       f"{list(d[0].keys()) if d and isinstance(d[0], dict) else '—'}")

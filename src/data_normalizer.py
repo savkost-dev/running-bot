@@ -706,19 +706,35 @@ def _parse_coros_raw(raw: dict) -> dict:
             total_km = round(sum((a.get("distance") or 0) for a in acts_list if isinstance(a, dict)) / 1000, 1)
             out["load_48h"] = {"sessions_48h": len(acts_list), "total_km_48h": total_km}
 
-    # ati/cti (родной COROS Form) из day_detail — последняя запись с данными
+    # ati/cti (родной COROS Form) из day_detail — ТОЛЬКО за сегодня (МСК).
+    # Старые дни не берём: лучше без TSB, чем с протухшим. Если поля даты нет — берём последнюю.
     dd = raw.get("day_detail")
     if isinstance(dd, dict) and str(dd.get("result")) == "0000":
         items = ((dd.get("data") or {}).get("dataList")) or []
-        for item in reversed([i for i in items if isinstance(i, dict)]):
+        items = [i for i in items if isinstance(i, dict)]
+        from datetime import datetime as _dt2, timezone as _tz2, timedelta as _td2
+        _today_compact = _dt2.now(_tz2(_td2(hours=3))).strftime("%Y%m%d")
+
+        def _day_of(it):
+            for k in ("happenDay", "day", "date"):
+                v = it.get(k)
+                if v is not None:
+                    return str(v)
+            return None
+
+        for item in reversed(items):
             ati = item.get("ati")
             cti = item.get("cti")
-            if ati is not None or cti is not None:
-                if ati is not None:
-                    out["ati"] = float(ati)
-                if cti is not None:
-                    out["cti"] = float(cti)
-                break
+            if ati is None and cti is None:
+                continue
+            d = _day_of(item)
+            if d is not None and d != _today_compact:
+                continue  # не сегодняшний день — пропускаем
+            if ati is not None:
+                out["ati"] = float(ati)
+            if cti is not None:
+                out["cti"] = float(cti)
+            break
 
     return out
 
@@ -1016,30 +1032,28 @@ def run_normalization(user_id: int) -> "UnifiedUserData | None":
         merged.s3_recovery_total = u_strava.s3_recovery_total
 
     # Расчётный TR для COROS/Strava (у них нет нативного Training Readiness).
-    # base = clip((TSB+20)/0.4, 0..100). COROS: TR = sqrt(base * RecoveryPct) — геом. среднее;
-    # без TSB (нет Strava) → TR = RecoveryPct. Strava-only: TR = base.
+    # СТРОГО: считаем ТОЛЬКО при наличии сегодняшнего TSB (COROS ati/cti или Strava).
+    # base = clip((TSB+20)/0.4, 0..100). COROS: TR = sqrt(base * RecoveryPct);
+    # Strava-only: TR = base. БЕЗ TSB TR не считаем — один Recovery не TR.
     # Garmin-юзеров не трогаем: родной TR приоритетен, Garmin BB в расчёт НЕ идёт.
     _tr_obj = merged.s3_training_readiness
     _has_native_tr = isinstance(_tr_obj, dict) and _tr_obj.get("score") is not None
     if not _has_native_tr and not u_garmin:
         _tsb = merged.s3_recovery_total
-        # Родной COROS Form (cti-ati из day_detail) приоритетнее Strava TSB
+        # Родной COROS Form (cti-ati из day_detail, только сегодняшний) приоритетнее Strava TSB
         if (u_coros and u_coros.s3_load_chronic
                 and u_coros.s3_load_chronic.tsb is not None):
             _tsb = u_coros.s3_load_chronic.tsb
-        _base = max(0.0, min(100.0, (float(_tsb) + 20.0) / 0.4)) if _tsb is not None else None
-        _coros_rec = u_coros.s3_coros_recovery if u_coros else None
-        _calc = _src = None
-        if _coros_rec is not None:
-            _calc = (_base * float(_coros_rec)) ** 0.5 if _base is not None else float(_coros_rec)
-            _src = "coros-calc"
-        elif _base is not None:
-            _calc = _base
-            _src = "strava-calc"
-        if _calc is not None:
+        if _tsb is not None:
+            _base = max(0.0, min(100.0, (float(_tsb) + 20.0) / 0.4))
+            _coros_rec = u_coros.s3_coros_recovery if u_coros else None
+            if _coros_rec is not None:
+                _calc, _src = (_base * float(_coros_rec)) ** 0.5, "coros-calc"
+            else:
+                _calc, _src = _base, "strava-calc"
             _score = int(round(max(0.0, min(100.0, _calc))))
             merged.s3_training_readiness = {"score": _score, "level": _src, "factors": {}}
-            logger.info(f"run_normalization: расчётный TR={_score} ({_src}) user={user_id}")
+            logger.info(f"run_normalization: расчётный TR={_score} ({_src}, tsb={_tsb}) user={user_id}")
 
     # load_recent: strava → garmin → coros
     for p in [u_strava, u_garmin, u_coros]:
