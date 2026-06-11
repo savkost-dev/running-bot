@@ -1001,6 +1001,28 @@ def run_normalization(user_id: int) -> "UnifiedUserData | None":
     if u_strava and u_strava.s3_recovery_total is not None:
         merged.s3_recovery_total = u_strava.s3_recovery_total
 
+    # Расчётный TR для COROS/Strava (у них нет нативного Training Readiness).
+    # base = clip((TSB+20)/0.4, 0..100). COROS: TR = sqrt(base * RecoveryPct) — геом. среднее;
+    # без TSB (нет Strava) → TR = RecoveryPct. Strava-only: TR = base.
+    # Garmin-юзеров не трогаем: родной TR приоритетен, Garmin BB в расчёт НЕ идёт.
+    _tr_obj = merged.s3_training_readiness
+    _has_native_tr = isinstance(_tr_obj, dict) and _tr_obj.get("score") is not None
+    if not _has_native_tr and not u_garmin:
+        _tsb = merged.s3_recovery_total
+        _base = max(0.0, min(100.0, (float(_tsb) + 20.0) / 0.4)) if _tsb is not None else None
+        _coros_rec = u_coros.s3_coros_recovery if u_coros else None
+        _calc = _src = None
+        if _coros_rec is not None:
+            _calc = (_base * float(_coros_rec)) ** 0.5 if _base is not None else float(_coros_rec)
+            _src = "coros-calc"
+        elif _base is not None:
+            _calc = _base
+            _src = "strava-calc"
+        if _calc is not None:
+            _score = int(round(max(0.0, min(100.0, _calc))))
+            merged.s3_training_readiness = {"score": _score, "level": _src, "factors": {}}
+            logger.info(f"run_normalization: расчётный TR={_score} ({_src}) user={user_id}")
+
     # load_recent: strava → garmin → coros
     for p in [u_strava, u_garmin, u_coros]:
         if p and p.s3_load_recent is not None:
