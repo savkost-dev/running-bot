@@ -839,6 +839,7 @@ def _build_help_text(is_admin: bool) -> str:
             "/p_a_user — промпт варианта A для выбранного пользователя\n"
             "/p_analyze — промпт Шага 1 (анализ анонса)\n"
             "/activity — активность по дням и топ действий за 14 дней"
+            "\n/msg_user <id> <текст> — написать юзеру от имени бота"
         )
     return text
 
@@ -4751,6 +4752,41 @@ async def cmd_activity(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await update.message.reply_text("\n".join(lines))
 
 
+async def cmd_msg_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/msg_user <id> <текст> (admin) — отправить сообщение юзеру от имени бота.
+    id — внутренний db_user_id (как в отчётах/слепках). Текст — всё после id,
+    переносы строк сохраняются. Отправляется без parse_mode (как есть)."""
+    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+        return
+    args = context.args or []
+    if len(args) < 2:
+        await update.message.reply_text(
+            "Формат: /msg_user <id> <текст>\n"
+            "id — внутренний (как в отчётах). Пример: /msg_user 6 Спасибо за обратную связь!")
+        return
+    try:
+        target_uid = int(args[0])
+    except ValueError:
+        await update.message.reply_text("id должен быть числом (внутренний db_user_id).")
+        return
+    # текст = всё после команды и id (split сохраняет переносы внутри текста)
+    text = update.message.text.split(maxsplit=2)[2]
+    from database import get_connection
+    with get_connection() as conn:
+        row = conn.execute("SELECT telegram_id, name FROM users WHERE id=?",
+                           (target_uid,)).fetchone()
+    if not row:
+        await update.message.reply_text(f"Юзер id={target_uid} не найден.")
+        return
+    tg_id, name = row[0], row[1]
+    try:
+        await context.bot.send_message(tg_id, text)
+        await update.message.reply_text(f"✅ Отправлено: {name} (id={target_uid})")
+    except Exception as e:
+        await update.message.reply_text(
+            f"❌ Не отправилось для id={target_uid}: {type(e).__name__}: {e}")
+
+
 def main():
     init_db()
 
@@ -4797,6 +4833,7 @@ def main():
     app.add_handler(CommandHandler("p_a_user",  p_a_command))
     app.add_handler(CommandHandler("p_analyze", p_analyze_command))
     app.add_handler(CommandHandler("activity",  cmd_activity))
+    app.add_handler(CommandHandler("msg_user",  cmd_msg_user))
     app.add_handler(CallbackQueryHandler(b_user_callback,   pattern=r"^b_user_\d+$"))
     app.add_handler(CallbackQueryHandler(a_user_callback,   pattern=r"^a_user_\d+$"))
     app.add_handler(CallbackQueryHandler(w_user_callback,   pattern=r"^w_user_\d+$"))
