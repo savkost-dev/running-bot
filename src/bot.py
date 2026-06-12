@@ -2405,6 +2405,19 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── ОБРАТНАЯ СВЯЗЬ (текст) ────────────────────────────────
 
+    # ── /msg_user: текст юзеру от имени бота (admin) ──
+    elif context.user_data.get("awaiting_msg_user"):
+        target = context.user_data.pop("awaiting_msg_user")
+        if text.strip().lower() in ("отмена", "cancel", "/cancel"):
+            await update.message.reply_text("Отменено, ничего не отправлено.")
+            return
+        try:
+            await context.bot.send_message(target["tg_id"], text)
+            await update.message.reply_text(f"✅ Отправлено: {target['name']}")
+        except Exception as e:
+            await update.message.reply_text(
+                f"❌ Не отправилось для {target['name']}: {type(e).__name__}: {e}")
+        return
     elif context.user_data.get("awaiting_feedback"):
         fb_type = context.user_data.pop("awaiting_feedback")
         type_label = "Проблема" if fb_type == "bug" else "Идея"
@@ -4759,39 +4772,77 @@ async def cmd_msg_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
         return
     args = context.args or []
-    if len(args) < 2:
+    from database import get_connection
+    # Без аргументов — список юзеров кнопками (как /w_user)
+    if not args:
+        users = get_users_list_for_b()
+        if not users:
+            await update.message.reply_text("Нет пользователей.")
+            return
+        keyboard = [
+            [InlineKeyboardButton(
+                u["name"] + (f" (@{u['username']})" if u.get("username") else ""),
+                callback_data=f"msgu_{u['db_user_id']}"
+            )]
+            for u in users
+        ]
         await update.message.reply_text(
-            "Формат: /msg_user <id или @username> <текст>\n"
-            "Примеры: /msg_user 6 Спасибо! или /msg_user @alexeykarev Спасибо!")
+            "✉️ Кому написать от имени бота?",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
         return
     raw_id = args[0]
-    from database import get_connection
     with get_connection() as conn:
         if raw_id.startswith("@"):
             row = conn.execute(
-                "SELECT telegram_id, name FROM users WHERE username=? COLLATE NOCASE",
+                "SELECT telegram_id, name, id FROM users WHERE username=? COLLATE NOCASE",
                 (raw_id[1:],)).fetchone()
         else:
             try:
                 target_uid = int(raw_id)
             except ValueError:
                 await update.message.reply_text(
-                    "Первый аргумент — числовой id или @username.")
+                    "Формат: /msg_user [id или @username] [текст]. Без аргументов — список кнопками.")
                 return
-            row = conn.execute("SELECT telegram_id, name FROM users WHERE id=?",
+            row = conn.execute("SELECT telegram_id, name, id FROM users WHERE id=?",
                                (target_uid,)).fetchone()
     if not row:
         await update.message.reply_text(f"Юзер {raw_id} не найден.")
         return
-    # текст = всё после команды и адресата (split сохраняет переносы внутри текста)
+    tg_id, name, db_uid = row[0], row[1], row[2]
+    # Адресат без текста — ждём текст следующим сообщением
+    if len(args) < 2:
+        context.user_data["awaiting_msg_user"] = {"uid": db_uid, "tg_id": tg_id, "name": name}
+        await update.message.reply_text(
+            f"✉️ Напиши текст для {name} следующим сообщением (или напиши «отмена»).")
+        return
+    # Адресат + текст одной командой (split сохраняет переносы внутри текста)
     text = update.message.text.split(maxsplit=2)[2]
-    tg_id, name = row[0], row[1]
     try:
         await context.bot.send_message(tg_id, text)
         await update.message.reply_text(f"✅ Отправлено: {name} ({raw_id})")
     except Exception as e:
         await update.message.reply_text(
             f"❌ Не отправилось для {raw_id}: {type(e).__name__}: {e}")
+
+
+async def msg_user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Нажатие на юзера в списке /msg_user — ждём текст следующим сообщением."""
+    query = update.callback_query
+    if query.from_user.id not in ADMIN_TELEGRAM_IDS:
+        await query.answer("Нет доступа.")
+        return
+    await query.answer()
+    db_uid = int(query.data.rsplit("_", 1)[-1])
+    users = get_users_list_for_b()
+    user = next((u for u in users if u["db_user_id"] == db_uid), None)
+    if not user:
+        await query.edit_message_text("Пользователь не найден.")
+        return
+    context.user_data["awaiting_msg_user"] = {
+        "uid": db_uid, "tg_id": user["telegram_id"], "name": user["name"]}
+    await query.edit_message_text(
+        f"✉️ Напиши текст для {user['name']} следующим сообщением (или напиши «отмена»).")
 
 
 def main():
@@ -4841,6 +4892,7 @@ def main():
     app.add_handler(CommandHandler("p_analyze", p_analyze_command))
     app.add_handler(CommandHandler("activity",  cmd_activity))
     app.add_handler(CommandHandler("msg_user",  cmd_msg_user))
+    app.add_handler(CallbackQueryHandler(msg_user_callback,  pattern=r"^msgu_\d+$"))
     app.add_handler(CallbackQueryHandler(b_user_callback,   pattern=r"^b_user_\d+$"))
     app.add_handler(CallbackQueryHandler(a_user_callback,   pattern=r"^a_user_\d+$"))
     app.add_handler(CallbackQueryHandler(w_user_callback,   pattern=r"^w_user_\d+$"))
