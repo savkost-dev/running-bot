@@ -21,7 +21,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 import database as db
 
 _PAT = ("sleep", "wake", "bed", "rest", "hrv", "recovery", "night",
-        "ati", "cti", "load", "form", "tsb", "fatigue", "fitness", "intensity")
+        "ati", "cti", "load", "form", "tsb", "fatigue", "fitness", "intensity",
+        "sync", "upload", "updatetime", "lasttime", "timestamp")
 
 
 def _walk(obj, path="", out=None, depth=0):
@@ -66,11 +67,28 @@ def main():
                 print(f"[dashboard.data.summaryInfo] ВСЕ ключи: {list(si.keys())}")
 
     hits = _walk(g)
-    print(f"\nПоля про сон/пробуждение/HRV/восстановление ({len(hits)}):")
+    print(f"\nПоля про сон/HRV/нагрузку/время синка ({len(hits)}):")
     for p, v in hits:
         print(f"  {p} = {v!r}")
     if not hits:
         print("  ничего не найдено")
+
+    # timestamp сегодняшней записи dayList из analyse — кандидат на время синка
+    an = g.get("analyse")
+    if isinstance(an, dict):
+        from datetime import datetime, timezone, timedelta
+        today = datetime.now(timezone(timedelta(hours=3))).strftime("%Y%m%d")
+        for it in ((an.get("data") or {}).get("dayList") or []):
+            if isinstance(it, dict) and str(it.get("happenDay")) == today:
+                ts = it.get("timestamp")
+                human = ""
+                try:
+                    human = datetime.fromtimestamp(int(ts) / (1000 if int(ts) > 10**11 else 1),
+                                                   timezone.utc).isoformat()
+                except Exception:
+                    pass
+                print(f"\ndayList[сегодня {today}]: timestamp={ts!r} (UTC: {human})")
+                break
 
 
 if __name__ == "__main__":

@@ -105,11 +105,19 @@ def build_report(target_date: str | None = None) -> str:
         if snap and snap.get("caught") and (show_all or snap.get("date") == target_date):
             caught.append((name, snap, devs, uid))
         elif devs:
-            # есть ночной трекер, но за нужную дату не поймано
-            if snap and snap.get("date"):
-                # слепок есть, но за СТАРУЮ дату → неактивный аккаунт → выкидываем из отчёта
-                continue
-            missed_with_dev.append((name, devs, uid))
+            # есть ночной трекер, но за нужную дату не поймано.
+            # Скрываем только давно неактивных (последний слепок >7 дней назад);
+            # пропустивших одно-несколько утр — показываем в «не поймано» с датой последнего.
+            last_date = (snap or {}).get("date")
+            if last_date:
+                try:
+                    days_ago = (datetime.strptime(target_date if not show_all else today_msk, "%Y-%m-%d")
+                                - datetime.strptime(str(last_date), "%Y-%m-%d")).days
+                except Exception:
+                    days_ago = None
+                if days_ago is not None and days_ago > 7:
+                    continue  # давно неактивный аккаунт — не захламляем отчёт
+            missed_with_dev.append((name, devs, uid, last_date))
         else:
             missed_no_dev.append(name)
 
@@ -134,8 +142,9 @@ def build_report(target_date: str | None = None) -> str:
     if missed_with_dev:
         lines.append("")
         lines.append(f"⚠️ Ночной трекер есть, но не поймано ({len(missed_with_dev)}):")
-        for name, devs, uid in missed_with_dev:
-            lines.append(f"   {name} · {'+'.join(_SVC_NAMES.get(d, d) for d in devs)} · id={uid}")
+        for name, devs, uid, last_date in missed_with_dev:
+            tail = f" (последний слепок {last_date})" if last_date else " (слепков ещё не было)"
+            lines.append(f"   {name} · {'+'.join(_SVC_NAMES.get(d, d) for d in devs)} · id={uid}{tail}")
 
     if missed_no_dev:
         lines.append("")

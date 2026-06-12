@@ -12,3 +12,5 @@ test_*.py
 temp/
 *.fit
 *.gpx
+.ipynb_checkpoints/
+data/
