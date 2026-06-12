@@ -4761,30 +4761,37 @@ async def cmd_msg_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     args = context.args or []
     if len(args) < 2:
         await update.message.reply_text(
-            "Формат: /msg_user <id> <текст>\n"
-            "id — внутренний (как в отчётах). Пример: /msg_user 6 Спасибо за обратную связь!")
+            "Формат: /msg_user <id или @username> <текст>\n"
+            "Примеры: /msg_user 6 Спасибо! или /msg_user @alexeykarev Спасибо!")
         return
-    try:
-        target_uid = int(args[0])
-    except ValueError:
-        await update.message.reply_text("id должен быть числом (внутренний db_user_id).")
-        return
-    # текст = всё после команды и id (split сохраняет переносы внутри текста)
-    text = update.message.text.split(maxsplit=2)[2]
+    raw_id = args[0]
     from database import get_connection
     with get_connection() as conn:
-        row = conn.execute("SELECT telegram_id, name FROM users WHERE id=?",
-                           (target_uid,)).fetchone()
+        if raw_id.startswith("@"):
+            row = conn.execute(
+                "SELECT telegram_id, name FROM users WHERE username=? COLLATE NOCASE",
+                (raw_id[1:],)).fetchone()
+        else:
+            try:
+                target_uid = int(raw_id)
+            except ValueError:
+                await update.message.reply_text(
+                    "Первый аргумент — числовой id или @username.")
+                return
+            row = conn.execute("SELECT telegram_id, name FROM users WHERE id=?",
+                               (target_uid,)).fetchone()
     if not row:
-        await update.message.reply_text(f"Юзер id={target_uid} не найден.")
+        await update.message.reply_text(f"Юзер {raw_id} не найден.")
         return
+    # текст = всё после команды и адресата (split сохраняет переносы внутри текста)
+    text = update.message.text.split(maxsplit=2)[2]
     tg_id, name = row[0], row[1]
     try:
         await context.bot.send_message(tg_id, text)
-        await update.message.reply_text(f"✅ Отправлено: {name} (id={target_uid})")
+        await update.message.reply_text(f"✅ Отправлено: {name} ({raw_id})")
     except Exception as e:
         await update.message.reply_text(
-            f"❌ Не отправилось для id={target_uid}: {type(e).__name__}: {e}")
+            f"❌ Не отправилось для {raw_id}: {type(e).__name__}: {e}")
 
 
 def main():
