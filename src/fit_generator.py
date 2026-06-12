@@ -450,14 +450,37 @@ def build_garmin_from_analysis(analysis: dict, group_num: str) -> dict:
             v_fast = v_slow
 
         inner = []
-        if work_m > 0:
-            inner.append(_step(1, dist_m=work_m,
-                               v_fast=v_fast or None, v_slow=v_slow or None,
-                               child_id=1))
-        if rec_m > 0:
-            inner.append(_step(2, dist_m=rec_m, stype='recovery',
-                               v_fast=v_rec or None, v_slow=v_rec or None,
-                               child_id=1))
+        # Составной рабочий отрезок: segments у группы → ПОДРЯД по interval-шагу
+        # на каждый сегмент (свой темп), recovery ОДИН после всей связки.
+        # Масштабируется на любое число сегментов (2, 3, 5 темпов без отдыха).
+        segs = [s for s in (bdata.get('segments') or [])
+                if isinstance(s, dict) and s.get('distance_m')]
+        if len(segs) >= 2:
+            idx = 1
+            for s in segs:
+                sv_fast = _pace_to_ms(s.get('work_pace_end') or '')
+                sv_slow = _pace_to_ms(s.get('work_pace_start') or '')
+                if sv_fast > 0 and sv_slow == 0.0:
+                    sv_slow = sv_fast
+                elif sv_slow > 0 and sv_fast == 0.0:
+                    sv_fast = sv_slow
+                inner.append(_step(idx, dist_m=float(s['distance_m']),
+                                   v_fast=sv_fast or None, v_slow=sv_slow or None,
+                                   child_id=1))
+                idx += 1
+            if rec_m > 0:
+                inner.append(_step(idx, dist_m=rec_m, stype='recovery',
+                                   v_fast=v_rec or None, v_slow=v_rec or None,
+                                   child_id=1))
+        else:
+            if work_m > 0:
+                inner.append(_step(1, dist_m=work_m,
+                                   v_fast=v_fast or None, v_slow=v_slow or None,
+                                   child_id=1))
+            if rec_m > 0:
+                inner.append(_step(2, dist_m=rec_m, stype='recovery',
+                                   v_fast=v_rec or None, v_slow=v_rec or None,
+                                   child_id=1))
 
         steps.append(_repeat_group(top_order, reps, inner,
                                    skip_last_rest=(rec_m > 0)))
