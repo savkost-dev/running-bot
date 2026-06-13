@@ -374,7 +374,7 @@ def _plot_table(work, rest, plan_work, plan_rest, title, out_path):
 WORK_EXACT_EPS = 3.0
 WORK_CORR_GREEN = 5
 WORK_CORR_YELLOW = 10
-_SERIES_COLORS = ["#4da6ff", "#ffa64d", "#7ed957", "#c77dff", "#ff6b6b"]
+_SERIES_COLORS = ["#1f77b4", "#ff7f0e", "#2ca02c", "#9467bd", "#8c564b"]
 
 
 def _flatten_plan_steps(wkt):
@@ -495,18 +495,18 @@ def _plot_work_segmented(work_roles, x_ticks, title, out_path):
                                color="gold", alpha=0.15, zorder=1)
                     ax.axhspan(target - WORK_CORR_GREEN, target + WORK_CORR_GREEN,
                                color="green", alpha=0.18, zorder=1)
-                    ax.axhline(target, color=c, ls="--", lw=2.4, alpha=0.9, zorder=4,
+                    ax.axhline(target, color="red", ls="-", lw=3.0, alpha=0.85, zorder=4,
                                label=f"{r['label']} — эталон {_pace_formatter(target)} (±5/±10с)")
                     et_pts = np.full(len(xs), target)
                 else:
                     et_pts = np.linspace(slow, fast, len(xs))
-                    ax.plot(xs, et_pts, color=c, ls="--", lw=2.4, alpha=0.85, zorder=4,
+                    ax.plot(xs, et_pts, color="red", ls="-", lw=3.5, alpha=0.85, zorder=4,
                             label=f"{r['label']} — эталон ({_pace_formatter(slow)}→{_pace_formatter(fast)})")
                 _draw_deltas(ax, xs, ys, et_pts)
             if len(xs) >= 2:
                 a, b = np.polyfit(xs, ys, 1)
                 tr = a * xs + b
-                ax.plot(xs, tr, color=c, ls=":", lw=2.2, zorder=4,
+                ax.plot(xs, tr, color=c, ls="--", lw=2.4, zorder=4,
                         label=f"{r['label']} — тренд ({_pace_formatter(tr[0])}→{_pace_formatter(tr[-1])})")
         for k, r in enumerate(work_roles):
             ax.text(0.02, 0.98 - k * 0.20, "\n".join(_stats_lines(r["label"], r["ys"])),
