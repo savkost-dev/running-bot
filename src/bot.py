@@ -4866,12 +4866,16 @@ async def cmd_last(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await msg.edit_text(
         f"📊 Разбор: {res['name']}\n"
         f"рабочих отрезков: {res['n_work']}, отдыха: {res['n_rest']}")
-    for png, cap in ((res.get("work_png"), "Рабочие интервалы"),
-                     (res.get("rest_png"), "Отдых"),
-                     (res.get("table_png"), "Таблица повторов")):
-        if png:
-            with open(png, "rb") as f:
-                await context.bot.send_photo(update.effective_user.id, photo=f, caption=cap)
+    items = [(res.get("work_png"), "Рабочие интервалы"),
+             (res.get("rest_png"), "Отдых"),
+             (res.get("table_png"), "Таблица повторов")]
+    items = [(p, c) for p, c in items if p]
+    for i, (png, cap) in enumerate(items):
+        # к последней картинке прикрепляем кнопку «Главное меню»
+        markup = _add_main_menu_btn(None) if i == len(items) - 1 else None
+        with open(png, "rb") as f:
+            await context.bot.send_photo(update.effective_user.id, photo=f,
+                                         caption=cap, reply_markup=markup)
 
 
 def main():
