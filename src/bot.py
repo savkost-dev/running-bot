@@ -4956,7 +4956,19 @@ async def cmd_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await msg.edit_text(f"⚠️ {res.get('msg')}")
         return
     await msg.edit_text(f"🤖 Анализ тренировки: {res['name']}")
-    for ch in _send_chunks(res["answer"]):
+    # Страховка: убираем остатки Markdown (отправляем как простой текст).
+    import re as _re_md
+    _ans = res["answer"]
+    _ans = _re_md.sub(r"\*\*(.+?)\*\*", r"\1", _ans)   # **жирный** → текст
+    _ans = _re_md.sub(r"__(.+?)__", r"\1", _ans)         # __жирный__ → текст
+    _clean = []
+    for _ln in _ans.split("\n"):
+        _s = _ln.lstrip()
+        _s = _re_md.sub(r"^#{1,6}\s*", "", _s)            # заголовки #
+        _s = _re_md.sub(r"^[\*\-]\s+", "— ", _s)           # маркеры *,- → —
+        _clean.append(_s)
+    _ans = "\n".join(_clean).strip()
+    for ch in _send_chunks(_ans):
         await context.bot.send_message(update.effective_user.id, ch)
 
 
