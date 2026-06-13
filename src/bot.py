@@ -840,7 +840,7 @@ def _build_help_text(is_admin: bool) -> str:
             "/p_analyze — промпт Шага 1 (анализ анонса)\n"
             "/activity — активность по дням и топ действий за 14 дней"
             "\n/msg_user <id> <текст> — написать юзеру от имени бота"
-            "\n/last — разбор последней выполненной тренировки (графики факт vs план)"
+            "\n/last — разбор последней выполненной тренировки (графики факт vs план; /last dark — тёмная тема)"
         )
     return text
 
@@ -4852,10 +4852,13 @@ async def cmd_last(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
         return
     db_user_id = get_or_create_user(update.effective_user.id, update.effective_user.full_name)
+    # Аргумент: /last dark (или d/тёмная) → тёмная тема; без аргумента — светлая
+    arg = (context.args[0].lower() if context.args else "")
+    dark = arg in ("dark", "d", "тёмная", "темная", "black", "night", "ночь")
     msg = await update.message.reply_text("⏳ Собираю разбор последней тренировки…")
     try:
         from activity_review import build_review
-        res = await build_review(db_user_id)
+        res = await build_review(db_user_id, dark=dark)
     except Exception as e:
         logger.error(f"/last error for {update.effective_user.id}: {e}", exc_info=True)
         await msg.edit_text(f"❌ Ошибка разбора: {type(e).__name__}: {e}")

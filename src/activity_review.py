@@ -34,7 +34,8 @@ REST_CORRIDOR_YELLOW = 30    # жёлтая зона = плановый темп
 DELTA_GREEN = 5
 DELTA_YELLOW = 10
 
-# ── ФЛАГ: ночной (тёмный) режим всех картинок. Меняется одной строкой. ──
+# ── Ночной (тёмный) режим всех картинок. По умолчанию тёмный; build_review
+#    выставляет его на время вызова из аргумента команды (/last light → светлый). ──
 DARK_MODE = True
 
 
@@ -367,12 +368,15 @@ def _plot_table(work, rest, plan_work, plan_rest, title, out_path):
     return out_path
 
 
-async def build_review(db_user_id: int, out_dir: str = "/tmp") -> dict:
+async def build_review(db_user_id: int, out_dir: str = "/tmp", dark: bool = True) -> dict:
     """Главная точка: собирает факт+план последней DD-активности, строит графики.
 
-    Возвращает {ok, name, work_png, rest_png, msg}. Любой PNG может быть None.
-    Рабочие ветки не трогает.
+    dark — тёмная тема (по умолчанию True). Выставляет глобальный DARK_MODE на время вызова.
+    Возвращает {ok, name, work_png, rest_png, table_png, ...}. Рабочие ветки не трогает.
     """
+    global DARK_MODE
+    DARK_MODE = dark
+
     client = await garmin._client(db_user_id)
     if not client:
         return {"ok": False, "msg": "Garmin не подключён или нет клиента."}
