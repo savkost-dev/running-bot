@@ -2777,7 +2777,20 @@ async def _send_recommendation(
                                  msg=msg, is_broadcast=is_broadcast)
         return
 
-    rec = (claude_advisor.recommend_long(analysis, user_data) if long
+    # Для long: жара влияет на ВЫБОР группы. Погоду берём ДО recommend_long
+    # (прогноз на старт + через 2 ч); тот же объект переиспользуем ниже.
+    weather_long = None
+    if long:
+        weather_long = await get_weather_for_workout(
+            (live or {}).get("location", "") or analysis.get("location", ""),
+            (live or {}).get("workout_date", "") or analysis.get("workout_date", ""),
+            (live or {}).get("schedule", "") or analysis.get("schedule", "") or "",
+        )
+    _temps = [t for t in ((weather_long or {}).get("temp"),
+                          (weather_long or {}).get("temp_plus2h")) if t is not None]
+    _temp_c = max(_temps) if _temps else None
+
+    rec = (claude_advisor.recommend_long(analysis, user_data, temp_c=_temp_c) if long
            else claude_advisor.recommend_group(analysis, user_data))
     if not rec or not rec.get("ok"):
         note = (rec or {}).get("note", "Не удалось собрать рекомендацию. Попробуй позже.")
@@ -2804,7 +2817,8 @@ async def _send_recommendation(
         workout_dict,
         (user_data["recovery"] or {}).get("data_fetched_at") if user_data["recovery"] else None,
     )
-    weather = await get_weather_for_workout(
+    # Для long погода уже получена выше (weather_long) — переиспользуем.
+    weather = weather_long if long else await get_weather_for_workout(
         workout_dict.get("location", ""), workout_dict.get("workout_date", ""),
         workout_dict.get("schedule", ""),
     )

@@ -132,11 +132,19 @@ async def get_weather_for_workout(
             f"?lat={lat}&lon={lon}&appid={OPENWEATHER_KEY}&units=metric&lang=ru"
         )
         try:
+            from datetime import timedelta
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
-                    result = _parse_forecast(await resp.json(), workout_dt)
+                    data = await resp.json()
+                    result = _parse_forecast(data, workout_dt)
                     if result:
                         result["timing"] = timing
+                        # Прогноз через 2 ч после старта (летом утром быстро теплеет).
+                        # Берём из того же ответа forecast — без второго запроса.
+                        plus2 = _parse_forecast(data, workout_dt + timedelta(hours=2))
+                        if plus2:
+                            result["temp_plus2h"] = plus2["temp"]
+                            result["feels_like_plus2h"] = plus2["feels_like"]
                     return result
         except Exception:
             return None

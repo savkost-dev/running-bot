@@ -1605,12 +1605,35 @@ def _extract_long_pace(group: dict) -> str | None:
     return None
 
 
-def recommend_long(analysis_json: dict, user_data: dict) -> dict | None:
+# ── Жара: пульсовой дрейф → сдвиг целевого темпа (вариант A) ──
+# Эмпирика (DeepSeek): +10 уд/мин дрейфа ≈ +10 сек/км замедления (K≈1.0 сек/км на уд/мин).
+# Линейно 15→30 °C: 0→10 уд/мин. До 15 °C сдвига нет, выше 30 °C — плато.
+_HEAT_T0 = 15.0          # °C — порог, ниже которого жара не учитывается
+_HEAT_T1 = 30.0          # °C — потолок линейной зоны (выше — плато)
+_HEAT_BPM_AT_T1 = 10.0   # уд/мин прогнозируемого дрейфа при T1
+_HEAT_SEC_PER_BPM = 1.0  # сек/км замедления на 1 уд/мин дрейфа
+
+
+def _heat_pace_shift(temp_c: float | None) -> int:
+    """Сдвиг целевого темпа (сек/км, ≥0) для компенсации пульсового дрейфа на жаре.
+    0 при T ≤ 15 °C; линейно до +10 сек/км к 30 °C; плато выше."""
+    if temp_c is None or temp_c <= _HEAT_T0:
+        return 0
+    frac = min(temp_c, _HEAT_T1) - _HEAT_T0
+    drift_bpm = _HEAT_BPM_AT_T1 * frac / (_HEAT_T1 - _HEAT_T0)
+    return int(round(drift_bpm * _HEAT_SEC_PER_BPM))
+
+
+def recommend_long(analysis_json: dict, user_data: dict, temp_c: float | None = None) -> dict | None:
     """Облегчённая рекомендация для длительной (100 минут).
 
     Длительная — доп. сервис: без трёхкомпонентного %, акцент на «потянешь ли
     100 минут комфортно». Зоны берутся готовыми (get_pace_zones). Специализация
     почти не влияет (длительная = аэробная база под полумарафон/марафон).
+
+    temp_c — температура воздуха на тренировку (°C). При >15 °C целевой темп и
+    марафонский потолок сдвигаются медленнее (компенсация пульсового дрейфа),
+    зоны при этом НЕ меняются. None → жара не учитывается.
 
     Возвращает структуру, совместимую с отображением /workout (main_group +
     alternatives + заметки), или {"ok": False, "note": ...}.
@@ -1675,9 +1698,14 @@ def recommend_long(analysis_json: dict, user_data: dict) -> dict | None:
     zone_secs = {z: _pace_sec(p) for z, p in zones_map.items()}
     easy_s = zone_secs.get("easy")
     mar_s = zone_secs.get("marathon")
+    # Жара: сдвигаем ОБА ориентира (target и марафонский потолок) медленнее на дельту
+    # пульсового дрейфа. Зоны не трогаем — это локальная поправка только для длительной.
+    heat_shift = _heat_pace_shift(temp_c)
+    if mar_s is not None:
+        mar_s = mar_s + heat_shift
     # Длительная = аэробный объём в зоне EASY. Ориентир — лёгкий темп
     # (НЕ среднее с марафонским — оно завышало и уводило в быстрые группы).
-    target = easy_s or ((mar_s + 40) if mar_s else None)
+    target = (easy_s + heat_shift) if easy_s else ((mar_s + 40) if mar_s else None)
 
     with_pace = [p for p in paced if p["pace_sec"]]
     with_pace.sort(key=lambda p: p["pace_sec"])  # быстрые → медленные
