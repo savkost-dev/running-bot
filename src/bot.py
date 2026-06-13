@@ -4866,7 +4866,8 @@ async def cmd_last(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"📊 Разбор: {res['name']}\n"
         f"рабочих отрезков: {res['n_work']}, отдыха: {res['n_rest']}")
     for png, cap in ((res.get("work_png"), "Рабочие интервалы"),
-                     (res.get("rest_png"), "Отдых")):
+                     (res.get("rest_png"), "Отдых"),
+                     (res.get("table_png"), "Таблица повторов")):
         if png:
             with open(png, "rb") as f:
                 await context.bot.send_photo(update.effective_user.id, photo=f, caption=cap)

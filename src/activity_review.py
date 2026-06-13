@@ -56,33 +56,37 @@ def _delta_color(abs_sec):
 
 
 # ── Сбор факта ──
-def _fact_paces(splits):
-    """(work_sec[], rest_sec[]) — темпы сек/км. tail (короткий хвост) отбрасываем."""
+def _fact_laps(splits):
+    """(work[], rest[]) где каждый элемент = (duration_s, pace_sec_per_km).
+    tail (аномально короткий последний work) отбрасываем."""
     laps = []
     if isinstance(splits, dict):
         laps = splits.get("lapDTOs") or splits.get("laps") or []
     laps = [l for l in laps if isinstance(l, dict)]
 
-    def pace(lp):
-        d = lp.get("distance")
-        t = lp.get("duration") or lp.get("movingDuration")
-        return (t / (d / 1000)) if (d and t) else None
-
-    work, rest = [], []
+    work, rest = [], []  # элементы: (distance, duration_s, pace)
     for lp in laps:
         it = str(lp.get("intensityType") or "").upper()
-        p = pace(lp)
+        d = lp.get("distance")
+        t = lp.get("duration") or lp.get("movingDuration")
+        p = (t / (d / 1000)) if (d and t) else None
         if p is None:
             continue
         if it == "ACTIVE":
-            work.append((lp.get("distance"), p))
+            work.append((d, t, p))
         elif it in ("RECOVERY", "REST"):
-            rest.append(p)
+            rest.append((d, t, p))
     if len(work) >= 3:
-        med = statistics.median([d for d, _ in work if d])
+        med = statistics.median([d for d, _, _ in work if d])
         if work[-1][0] and work[-1][0] < 0.5 * med:
             work = work[:-1]
-    return [p for _, p in work], rest
+    return ([(t, p) for _, t, p in work], [(t, p) for _, t, p in rest])
+
+
+def _fact_paces(splits):
+    """(work_sec[], rest_sec[]) — только темпы сек/км (обёртка над _fact_laps)."""
+    work, rest = _fact_laps(splits)
+    return [p for _, p in work], [p for _, p in rest]
 
 
 # ── Сбор плана из Garmin workout ──
@@ -239,6 +243,53 @@ def _plot_rest(rest_sec, plan_rest, title, out_path):
     return out_path
 
 
+def _fmt_time(sec):
+    """Длительность в м:сс (или ч:мм:сс для длинных)."""
+    if sec is None:
+        return "—"
+    sec = int(round(sec))
+    h, rem = divmod(sec, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+
+
+def _plot_table(work, rest, title, out_path):
+    """Таблица-картинка: строка = повтор, колонки время/темп work и rest.
+    work/rest — списки (duration_s, pace_sec). Строк столько, сколько work-повторов."""
+    n = len(work)
+    if n == 0:
+        return None
+    headers = ["№", "Работа время", "Работа темп", "Отдых время", "Отдых темп"]
+    rows = []
+    for i in range(n):
+        wt, wp = work[i]
+        if i < len(rest):
+            rt, rp = rest[i]
+            rt_s, rp_s = _fmt_time(rt), _pace_formatter(rp)
+        else:
+            rt_s, rp_s = "—", "—"  # последний повтор без отдыха
+        rows.append([str(i + 1), _fmt_time(wt), _pace_formatter(wp), rt_s, rp_s])
+
+    # высота под число строк
+    fig_h = max(2.5, 0.4 * (n + 2))
+    fig, ax = plt.subplots(figsize=(7, fig_h))
+    ax.axis("off")
+    ax.set_title(title, fontsize=13, fontweight="bold", pad=12)
+    tbl = ax.table(cellText=rows, colLabels=headers, loc="center", cellLoc="center")
+    tbl.auto_set_font_size(False)
+    tbl.set_fontsize(9)
+    tbl.scale(1, 1.3)
+    # шапка жирная и с фоном
+    for j in range(len(headers)):
+        c = tbl[0, j]
+        c.set_facecolor("#dddddd")
+        c.set_text_props(fontweight="bold")
+    plt.tight_layout()
+    fig.savefig(out_path, dpi=120, bbox_inches="tight")
+    plt.close(fig)
+    return out_path
+
+
 async def build_review(db_user_id: int, out_dir: str = "/tmp") -> dict:
     """Главная точка: собирает факт+план последней DD-активности, строит графики.
 
@@ -262,7 +313,9 @@ async def build_review(db_user_id: int, out_dir: str = "/tmp") -> dict:
     wkt_id = act.get("workoutId")
 
     splits = await asyncio.to_thread(client.get_activity_splits, act_id)
-    work_sec, rest_sec = _fact_paces(splits)
+    work_laps, rest_laps = _fact_laps(splits)
+    work_sec = [p for _, p in work_laps]
+    rest_sec = [p for _, p in rest_laps]
 
     plan = {"work": None, "rest": None}
     if wkt_id:
@@ -279,6 +332,10 @@ async def build_review(db_user_id: int, out_dir: str = "/tmp") -> dict:
     rest_png = await asyncio.to_thread(
         _plot_rest, rest_sec, plan["rest"], "Анализ восстановительных интервалов",
         base + "_rest.png")
+    table_png = await asyncio.to_thread(
+        _plot_table, work_laps, rest_laps, "Повторы: факт",
+        base + "_table.png")
 
     return {"ok": True, "name": name, "work_png": work_png, "rest_png": rest_png,
-            "n_work": len(work_sec), "n_rest": len(rest_sec), "msg": ""}
+            "table_png": table_png, "n_work": len(work_sec), "n_rest": len(rest_sec),
+            "msg": ""}
