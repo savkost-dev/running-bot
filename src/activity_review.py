@@ -368,12 +368,282 @@ def _plot_table(work, rest, plan_work, plan_rest, title, out_path):
     return out_path
 
 
-async def build_review(db_user_id: int, out_dir: str = "/tmp", dark: bool = True) -> dict:
-    """Главная точка: собирает факт+план последней DD-активности, строит графики.
+# ══ Сегментная модель (составные повторы: 800 база + 200 ускорение и т.п.) ══
+# Эталон work: узкий диапазон pace.zone (|slow-fast|<=EPS) → точное значение
+# (горизонталь + коридоры ±5/±10с); широкий → прогрессия linspace по повторам.
+WORK_EXACT_EPS = 3.0
+WORK_CORR_GREEN = 5
+WORK_CORR_YELLOW = 10
+_SERIES_COLORS = ["#4da6ff", "#ffa64d", "#7ed957", "#c77dff", "#ff6b6b"]
 
-    dark — тёмная тема (по умолчанию True). Выставляет глобальный DARK_MODE на время вызова.
-    Возвращает {ok, name, work_png, rest_png, table_png, ...}. Рабочие ветки не трогает.
-    """
+
+def _flatten_plan_steps(wkt):
+    """[{idx, stype, ttype, dist, bounds(slow,fast)|None}] в порядке исполнения.
+    Рекурсия в RepeatGroupDTO; считаются только ExecutableStepDTO (индекс = wktStepIndex)."""
+    out = []
+
+    def walk(steps):
+        for st in steps or []:
+            if not isinstance(st, dict):
+                continue
+            if st.get("type") == "RepeatGroupDTO" or (st.get("stepType") or {}).get("stepTypeKey") == "repeat":
+                walk(st.get("workoutSteps"))
+                continue
+            stype = (st.get("stepType") or {}).get("stepTypeKey")
+            ttype = (st.get("targetType") or {}).get("workoutTargetTypeKey")
+            t1 = _ms_to_sec_per_km(st.get("targetValueOne"))
+            t2 = _ms_to_sec_per_km(st.get("targetValueTwo"))
+            bounds = (max(t1, t2), min(t1, t2)) if (ttype == "pace.zone" and t1 and t2) else None
+            out.append({"idx": len(out), "stype": stype, "ttype": ttype,
+                        "dist": st.get("endConditionValue"), "bounds": bounds})
+
+    for seg in (wkt.get("workoutSegments") or []):
+        walk(seg.get("workoutSteps"))
+    return out
+
+
+def _ordered_laps(splits):
+    """Лэпы в хронологии: [{step, dist, dur, pace, intensity}]. Хвост (шаг None) — мимо."""
+    laps = (splits.get("lapDTOs") or splits.get("laps") or []) if isinstance(splits, dict) else []
+    out = []
+    for lp in laps:
+        if not isinstance(lp, dict):
+            continue
+        idx = lp.get("wktStepIndex")
+        d = lp.get("distance")
+        t = lp.get("duration") or lp.get("movingDuration")
+        p = (t / (d / 1000)) if (d and t) else None
+        if idx is None or p is None:
+            continue
+        out.append({"step": idx, "dist": d, "dur": t, "pace": p,
+                    "intensity": str(lp.get("intensityType") or "").upper()})
+    return out
+
+
+def _role_of(step, intensity, plan_steps):
+    plan = next((s for s in plan_steps if s["idx"] == step), None)
+    if plan and plan.get("stype") == "recovery":
+        return "rest"
+    if plan and plan.get("stype") == "interval":
+        return "work"
+    return "rest" if intensity in ("RECOVERY", "REST") else "work"
+
+
+def _step_label(plan_steps, st, fallback_dist):
+    plan = next((s for s in plan_steps if s["idx"] == st), None)
+    dist = int(plan["dist"]) if (plan and plan.get("dist")) else (int(fallback_dist) if fallback_dist else None)
+    return f"{dist} м" if dist else f"шаг {st}"
+
+
+def _segment_model(ordered, plan_steps):
+    """(work_roles[{step,j,label,color,bounds,xs,ys}], x_ticks[(x,'i.j')], rest_paces, S)."""
+    work_laps = [l for l in ordered if _role_of(l["step"], l["intensity"], plan_steps) == "work"]
+    rest_laps = [l for l in ordered if _role_of(l["step"], l["intensity"], plan_steps) == "rest"]
+    work_steps = sorted({l["step"] for l in work_laps})
+    j_of = {st: k + 1 for k, st in enumerate(work_steps)}
+    S = len(work_steps)
+    roles, x_ticks, occ, x = {}, [], {}, 0
+    for l in work_laps:
+        x += 1
+        st = l["step"]
+        occ[st] = occ.get(st, 0) + 1
+        i, j = occ[st], j_of[st]
+        x_ticks.append((x, f"{i}" if S == 1 else f"{i}.{j}"))
+        r = roles.setdefault(st, {"step": st, "j": j, "dist": l["dist"], "xs": [], "ys": []})
+        r["xs"].append(x)
+        r["ys"].append(l["pace"])
+    work_roles = []
+    for k, st in enumerate(work_steps):
+        r = roles[st]
+        plan = next((s for s in plan_steps if s["idx"] == st), None)
+        r["bounds"] = plan["bounds"] if plan else None
+        r["color"] = _SERIES_COLORS[k % len(_SERIES_COLORS)]
+        r["label"] = _step_label(plan_steps, st, r["dist"])
+        work_roles.append(r)
+    return work_roles, x_ticks, [l["pace"] for l in rest_laps], S
+
+
+def _stats_lines(label, paces):
+    arr = np.array(paces)
+    imin, imax = int(np.argmin(arr)), int(np.argmax(arr))
+    return [label,
+            f"  Мин:     {_pace_formatter(arr[imin])}/км (№{imin + 1})",
+            f"  Макс:    {_pace_formatter(arr[imax])}/км (№{imax + 1})",
+            f"  Среднее: {_pace_formatter(arr.mean())}/км"]
+
+
+def _plot_work_segmented(work_roles, x_ticks, title, out_path):
+    """Интервалы по сегментам: единая хронологическая ось (тики i.j), каждая
+    сегмент-роль — точки + эталон + тренд + статблок + отрезки факт↔эталон.
+    Эталон: точное значение → горизонталь+коридоры ±5/±10с; диапазон → прогрессия."""
+    work_roles = [r for r in work_roles if r["ys"]]
+    if not work_roles:
+        return None
+    th = _theme()
+    with plt.rc_context(_rc()):
+        fig, ax = plt.subplots(figsize=(15, 8))
+        for r in work_roles:
+            xs = np.array(r["xs"], dtype=float)
+            ys = np.array(r["ys"], dtype=float)
+            c = r["color"]
+            ax.scatter(xs, ys, color=c, s=75, zorder=3, label=f"{r['label']} — факт")
+            if r.get("bounds"):
+                slow, fast = r["bounds"]
+                if abs(slow - fast) <= WORK_EXACT_EPS:
+                    target = (slow + fast) / 2.0
+                    ax.axhspan(target - WORK_CORR_YELLOW, target + WORK_CORR_YELLOW,
+                               color="gold", alpha=0.15, zorder=1)
+                    ax.axhspan(target - WORK_CORR_GREEN, target + WORK_CORR_GREEN,
+                               color="green", alpha=0.18, zorder=1)
+                    ax.axhline(target, color=c, ls="--", lw=2.4, alpha=0.9, zorder=4,
+                               label=f"{r['label']} — эталон {_pace_formatter(target)} (±5/±10с)")
+                    et_pts = np.full(len(xs), target)
+                else:
+                    et_pts = np.linspace(slow, fast, len(xs))
+                    ax.plot(xs, et_pts, color=c, ls="--", lw=2.4, alpha=0.85, zorder=4,
+                            label=f"{r['label']} — эталон ({_pace_formatter(slow)}→{_pace_formatter(fast)})")
+                _draw_deltas(ax, xs, ys, et_pts)
+            if len(xs) >= 2:
+                a, b = np.polyfit(xs, ys, 1)
+                tr = a * xs + b
+                ax.plot(xs, tr, color=c, ls=":", lw=2.2, zorder=4,
+                        label=f"{r['label']} — тренд ({_pace_formatter(tr[0])}→{_pace_formatter(tr[-1])})")
+        for k, r in enumerate(work_roles):
+            ax.text(0.02, 0.98 - k * 0.20, "\n".join(_stats_lines(r["label"], r["ys"])),
+                    transform=ax.transAxes, fontsize=9, va="top", ha="left",
+                    color=r["color"], fontfamily="monospace",
+                    bbox=dict(boxstyle="round,pad=0.4", facecolor=th["box_face"],
+                              edgecolor=r["color"], alpha=0.9))
+        ax.invert_yaxis()
+        ax.set_xlabel("Повтор.сегмент", fontsize=12)
+        ax.set_ylabel("Темп (мин:сек/км)", fontsize=12)
+        ax.set_title(title, fontsize=12, fontweight="bold", pad=58)
+        ax.yaxis.set_major_formatter(FuncFormatter(_pace_formatter))
+        if x_ticks:
+            ax.set_xticks([x for x, _ in x_ticks])
+            ax.set_xticklabels([lbl for _, lbl in x_ticks], fontsize=8)
+        ax.grid(True, linestyle=":", alpha=0.6)
+        handles, labels = ax.get_legend_handles_labels()
+        ax.legend(handles, labels, loc="lower center", bbox_to_anchor=(0.5, 1.0),
+                  ncol=min(3, max(1, len(handles))), fontsize=8.5, framealpha=0.9)
+        plt.tight_layout()
+        fig.savefig(out_path, dpi=110, bbox_inches="tight")
+        plt.close(fig)
+    return out_path
+
+
+def _table_model(ordered, plan_steps):
+    """(work_steps, role_meta{st:{j,label,bounds,n}}, rows_work{i:{st:(dur,pace)}},
+        rows_rest{i:(dur,pace)}, max_i)."""
+    work_laps = [l for l in ordered if _role_of(l["step"], l["intensity"], plan_steps) == "work"]
+    rest_laps = [l for l in ordered if _role_of(l["step"], l["intensity"], plan_steps) == "rest"]
+    work_steps = sorted({l["step"] for l in work_laps})
+    j_of = {st: k + 1 for k, st in enumerate(work_steps)}
+    role_meta = {}
+    for st in work_steps:
+        plan = next((s for s in plan_steps if s["idx"] == st), None)
+        fb = next((l["dist"] for l in work_laps if l["step"] == st), None)
+        role_meta[st] = {"j": j_of[st], "label": _step_label(plan_steps, st, fb),
+                         "bounds": plan["bounds"] if plan else None,
+                         "n": sum(1 for l in work_laps if l["step"] == st)}
+    rows_work, occ = {}, {}
+    for l in work_laps:
+        st = l["step"]
+        occ[st] = occ.get(st, 0) + 1
+        rows_work.setdefault(occ[st], {})[st] = (l["dur"], l["pace"])
+    rows_rest = {}
+    for k, l in enumerate(rest_laps, 1):
+        rows_rest[k] = (l["dur"], l["pace"])
+    max_i = max(rows_work) if rows_work else 0
+    return work_steps, role_meta, rows_work, rows_rest, max_i
+
+
+def _seg_etalon(meta, i):
+    b = meta["bounds"]
+    if not b:
+        return None
+    slow, fast = b
+    if abs(slow - fast) <= WORK_EXACT_EPS or meta["n"] <= 1:
+        return (slow + fast) / 2.0
+    return slow + (fast - slow) * ((i - 1) / (meta["n"] - 1))
+
+
+def _plot_table_segmented(work_steps, role_meta, rows_work, rows_rest, max_i, has_rest, rest_target, title, out_path):
+    if not work_steps or not max_i:
+        return None
+
+    def _dev(fact, et):
+        if et is None or fact is None:
+            return "—", None
+        d = fact - et
+        sign = "+" if d > 0 else ("−" if d < 0 else "")
+        return f"{sign}{abs(int(round(d)))}", _delta_color(abs(d))
+
+    headers = ["№"]
+    for st in work_steps:
+        lbl = role_meta[st]["label"]
+        headers += [f"{lbl}\nвремя", f"{lbl}\nтемп", f"{lbl}\nоткл (сек/км)"]
+    if has_rest:
+        headers += ["Отдых\nвремя", "Отдых\nтемп", "Отдых\nоткл (сек/км)"]
+    rows, cell_colors = [], {}
+    for i in range(1, max_i + 1):
+        row = [str(i)]
+        col = 1
+        for st in work_steps:
+            cell = rows_work.get(i, {}).get(st)
+            if cell:
+                dur, pace = cell
+                dev, color = _dev(pace, _seg_etalon(role_meta[st], i))
+                row += [_fmt_time(dur), _pace_formatter(pace), dev]
+                if color:
+                    cell_colors[(i, col + 2)] = color
+            else:
+                row += ["—", "—", "—"]
+            col += 3
+        if has_rest:
+            rc = rows_rest.get(i)
+            if rc:
+                dev, color = _dev(rc[1], rest_target)
+                row += [_fmt_time(rc[0]), _pace_formatter(rc[1]), dev]
+                if color:
+                    cell_colors[(i, col + 2)] = color
+            else:
+                row += ["—", "—", "—"]
+            col += 3
+        rows.append(row)
+    th = _theme()
+    fig_h = max(2.5, 0.42 * (max_i + 2))
+    fig_w = max(6.0, 1.15 * len(headers))
+    with plt.rc_context(_rc()):
+        fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+        ax.axis("off")
+        ax.set_title(title, fontsize=12, fontweight="bold", pad=12)
+        tbl = ax.table(cellText=rows, colLabels=headers, loc="center", cellLoc="center")
+        tbl.auto_set_font_size(False)
+        tbl.set_fontsize(8.5)
+        tbl.scale(1, 1.5)
+        for (rr, cc), cell in tbl.get_celld().items():
+            cell.set_edgecolor(th["box_edge"])
+            if rr == 0:
+                cell.set_facecolor(th["box_face"])
+                cell.set_text_props(fontweight="bold", color=th["text"])
+            else:
+                cell.set_facecolor("none")
+                cell.set_text_props(color=th["text"])
+        for (rr, cc), color in cell_colors.items():
+            tbl[rr, cc].set_text_props(color=color, fontweight="bold")
+        plt.tight_layout()
+        fig.savefig(out_path, dpi=120, bbox_inches="tight")
+        plt.close(fig)
+    return out_path
+
+
+async def build_review(db_user_id: int, out_dir: str = "/tmp", dark: bool = True) -> dict:
+    """Главная точка /last: разбор последней DD-активности ПО СЕГМЕНТАМ (составные
+    повторы поддержаны). Факт группируется по wktStepIndex, план разворачивается
+    пошагово; каждый интервальный сегмент — со своим эталоном/трендом/отклонениями.
+    Возвращает {ok, name, work_png, rest_png, table_png, n_work, n_rest, msg}.
+    Ключи совместимы с прежней версией. Рабочие ветки бота не трогает."""
     global DARK_MODE
     DARK_MODE = dark
 
@@ -394,30 +664,37 @@ async def build_review(db_user_id: int, out_dir: str = "/tmp", dark: bool = True
     wkt_id = act.get("workoutId")
 
     splits = await asyncio.to_thread(client.get_activity_splits, act_id)
-    work_laps, rest_laps = _fact_laps(splits)
-    work_sec = [p for _, p in work_laps]
-    rest_sec = [p for _, p in rest_laps]
 
-    plan = {"work": None, "rest": None}
+    plan_steps = []
+    wname = name
     if wkt_id:
         try:
             wkt = await asyncio.to_thread(client.get_workout_by_id, wkt_id)
-            plan = _plan_targets(wkt)
+            plan_steps = _flatten_plan_steps(wkt)
+            wname = wkt.get("workoutName") or name
         except Exception as e:
             print(f"build_review: план {wkt_id} недоступен: {type(e).__name__}: {e}")
 
+    ordered = _ordered_laps(splits)
+    work_roles, x_ticks, rest_paces, S = _segment_model(ordered, plan_steps)
+
     base = os.path.join(out_dir, f"s4_{db_user_id}_{act_id}")
     work_png = await asyncio.to_thread(
-        _plot_work, work_sec, plan["work"], "Анализ интервальной тренировки",
-        base + "_work.png")
-    rest_png = await asyncio.to_thread(
-        _plot_rest, rest_sec, plan["rest"], "Анализ восстановительных интервалов",
-        base + "_rest.png")
-    table_png = await asyncio.to_thread(
-        _plot_table, work_laps, rest_laps, plan["work"], plan["rest"],
-        "Повторы: факт и отклонения",
-        base + "_table.png")
+        _plot_work_segmented, work_roles, x_ticks,
+        f"Тренировка: {name}\nЭталон: {wname}", base + "_work.png")
 
+    rest_plan = next((s for s in plan_steps if s["stype"] == "recovery" and s["bounds"]), None)
+    rest_target = sum(rest_plan["bounds"]) / 2.0 if rest_plan else None
+    rest_png = await asyncio.to_thread(
+        _plot_rest, rest_paces, rest_target,
+        "Анализ восстановительных интервалов", base + "_rest.png") if rest_paces else None
+
+    ws, rmeta, rw, rr, maxi = _table_model(ordered, plan_steps)
+    table_png = await asyncio.to_thread(
+        _plot_table_segmented, ws, rmeta, rw, rr, maxi, bool(rest_paces), rest_target,
+        "Повторы: время / темп / отклонение", base + "_table.png") if (ws and maxi) else None
+
+    n_work = sum(len(r["ys"]) for r in work_roles)
     return {"ok": True, "name": name, "work_png": work_png, "rest_png": rest_png,
-            "table_png": table_png, "n_work": len(work_sec), "n_rest": len(rest_sec),
+            "table_png": table_png, "n_work": n_work, "n_rest": len(rest_paces),
             "msg": ""}
