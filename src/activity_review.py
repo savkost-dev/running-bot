@@ -374,7 +374,8 @@ def _plot_table(work, rest, plan_work, plan_rest, title, out_path):
 WORK_EXACT_EPS = 3.0
 WORK_CORR_GREEN = 5
 WORK_CORR_YELLOW = 10
-_SERIES_COLORS = ["#1f77b4", "#ff7f0e", "#2ca02c", "#9467bd", "#8c564b"]
+_SERIES_COLORS = ["#1f77b4", "#2ca02c", "#17becf", "#6a3d9a", "#56b4e9"]
+_SERIES_TREND_LS = ["--", "-.", ":", (0, (3, 1, 1, 1)), "--"]
 
 
 def _flatten_plan_steps(wkt):
@@ -486,6 +487,7 @@ def _plot_work_segmented(work_roles, x_ticks, title, out_path):
             xs = np.array(r["xs"], dtype=float)
             ys = np.array(r["ys"], dtype=float)
             c = r["color"]
+            tls = _SERIES_TREND_LS[work_roles.index(r) % len(_SERIES_TREND_LS)]
             ax.scatter(xs, ys, color=c, s=75, zorder=3, label=f"{r['label']} — факт")
             if r.get("bounds"):
                 slow, fast = r["bounds"]
@@ -506,7 +508,7 @@ def _plot_work_segmented(work_roles, x_ticks, title, out_path):
             if len(xs) >= 2:
                 a, b = np.polyfit(xs, ys, 1)
                 tr = a * xs + b
-                ax.plot(xs, tr, color=c, ls="--", lw=2.4, zorder=4,
+                ax.plot(xs, tr, color=c, ls=tls, lw=2.4, zorder=4,
                         label=f"{r['label']} — тренд ({_pace_formatter(tr[0])}→{_pace_formatter(tr[-1])})")
         for k, r in enumerate(work_roles):
             ax.text(0.02, 0.98 - k * 0.20, "\n".join(_stats_lines(r["label"], r["ys"])),
