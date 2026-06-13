@@ -34,6 +34,42 @@ REST_CORRIDOR_YELLOW = 30    # жёлтая зона = плановый темп
 DELTA_GREEN = 5
 DELTA_YELLOW = 10
 
+# ── ФЛАГ: ночной (тёмный) режим всех картинок. Меняется одной строкой. ──
+DARK_MODE = True
+
+
+def _theme():
+    """Цвета темы в одном месте. Базовые цвета данных (синий/красный/зелёный/жёлтый)
+    одинаковы в обеих темах — на тёмном читаются. Меняются фон, текст, сетка,
+    цвет точек факта и фон вспомогательных боксов."""
+    if DARK_MODE:
+        return {
+            "fact": "#4da6ff",        # точки факта (светло-синий, ярче на тёмном)
+            "box_face": "#222222",    # фон текст-бокса / шапки таблицы
+            "box_edge": "#bbbbbb",
+            "text": "#e6e6e6",        # основной текст в боксах
+        }
+    return {
+        "fact": "blue",
+        "box_face": "white",
+        "box_edge": "black",
+        "text": "black",
+    }
+
+
+def _rc():
+    """matplotlib rcParams для текущей темы (для rc_context)."""
+    if DARK_MODE:
+        fg, bg = "#e6e6e6", "#1a1a1a"
+        return {
+            "figure.facecolor": bg, "axes.facecolor": bg, "savefig.facecolor": bg,
+            "text.color": fg, "axes.labelcolor": fg, "axes.edgecolor": fg,
+            "xtick.color": fg, "ytick.color": fg, "axes.titlecolor": fg,
+            "grid.color": "#555555", "legend.facecolor": "#222222",
+            "legend.edgecolor": "#777777", "legend.labelcolor": fg,
+        }
+    return {}
+
 
 def _pace_formatter(x, pos=None):
     if x <= 0:
@@ -160,10 +196,11 @@ def _info_box(ax, fact_trend, etalon):
                   f"  Макс: {_pace_formatter(max(etalon))}/км"]
     if not lines:
         return
+    th = _theme()
     ax.text(0.02, 0.98, "\n".join(lines), transform=ax.transAxes, fontsize=9,
-            verticalalignment="top", horizontalalignment="left",
-            bbox=dict(boxstyle="round,pad=0.5", facecolor="white",
-                      edgecolor="black", alpha=0.9), fontfamily="monospace")
+            verticalalignment="top", horizontalalignment="left", color=th["text"],
+            bbox=dict(boxstyle="round,pad=0.5", facecolor=th["box_face"],
+                      edgecolor=th["box_edge"], alpha=0.9), fontfamily="monospace")
 
 
 def _plot_work(work_sec, plan_work, title, out_path):
@@ -172,31 +209,33 @@ def _plot_work(work_sec, plan_work, title, out_path):
         return None
     x = np.arange(1, n + 1)
     y = np.array(work_sec)
-    fig, ax = plt.subplots(figsize=(14, 8))
-    ax.scatter(x, y, color="blue", s=80, zorder=3, label="Все интервалы")
-    etalon = None
-    if plan_work:
-        slow, fast = plan_work
-        etalon = np.linspace(slow, fast, n)
-        ax.plot(x, etalon, color="red", linewidth=4, zorder=4, alpha=0.8,
-                label=f"Эталон ({_pace_formatter(slow)} → {_pace_formatter(fast)})")
-        _draw_deltas(ax, x, y, etalon)
-    fact_trend = _draw_fact_trend(ax, x, y)
-    if WITH_GROUPS:
-        from s4_groups import draw_groups
-        draw_groups(ax, x, y)
-    _info_box(ax, fact_trend, etalon)
-    ax.invert_yaxis()
-    ax.set_xlabel("Номер интервала", fontsize=12)
-    ax.set_ylabel("Темп (мин:сек/км)", fontsize=12)
-    ax.set_title(title, fontsize=14, fontweight="bold")
-    ax.yaxis.set_major_formatter(FuncFormatter(_pace_formatter))
-    ax.set_xticks(x)
-    ax.grid(True, linestyle=":", alpha=0.6)
-    ax.legend(loc="lower right", fontsize=10)
-    plt.tight_layout()
-    fig.savefig(out_path, dpi=110)
-    plt.close(fig)
+    th = _theme()
+    with plt.rc_context(_rc()):
+        fig, ax = plt.subplots(figsize=(14, 8))
+        ax.scatter(x, y, color=th["fact"], s=80, zorder=3, label="Все интервалы")
+        etalon = None
+        if plan_work:
+            slow, fast = plan_work
+            etalon = np.linspace(slow, fast, n)
+            ax.plot(x, etalon, color="red", linewidth=4, zorder=4, alpha=0.8,
+                    label=f"Эталон ({_pace_formatter(slow)} → {_pace_formatter(fast)})")
+            _draw_deltas(ax, x, y, etalon)
+        fact_trend = _draw_fact_trend(ax, x, y)
+        if WITH_GROUPS:
+            from s4_groups import draw_groups
+            draw_groups(ax, x, y)
+        _info_box(ax, fact_trend, etalon)
+        ax.invert_yaxis()
+        ax.set_xlabel("Номер интервала", fontsize=12)
+        ax.set_ylabel("Темп (мин:сек/км)", fontsize=12)
+        ax.set_title(title, fontsize=14, fontweight="bold")
+        ax.yaxis.set_major_formatter(FuncFormatter(_pace_formatter))
+        ax.set_xticks(x)
+        ax.grid(True, linestyle=":", alpha=0.6)
+        ax.legend(loc="lower right", fontsize=10)
+        plt.tight_layout()
+        fig.savefig(out_path, dpi=110)
+        plt.close(fig)
     return out_path
 
 
@@ -206,40 +245,42 @@ def _plot_rest(rest_sec, plan_rest, title, out_path):
         return None
     x = np.arange(1, n + 1)
     y = np.array(rest_sec)
-    fig, ax = plt.subplots(figsize=(14, 8))
-    if plan_rest:
-        g_lo, g_hi = plan_rest - REST_CORRIDOR_SEC, plan_rest + REST_CORRIDOR_SEC
-        y_lo, y_hi = plan_rest - REST_CORRIDOR_YELLOW, plan_rest + REST_CORRIDOR_YELLOW
-        ax.fill_between(x, y_lo, y_hi, color="gold", alpha=0.2, zorder=1,
-                        label=f"Жёлтая ±{REST_CORRIDOR_YELLOW}с ({_pace_formatter(y_lo)}–{_pace_formatter(y_hi)})")
-        ax.fill_between(x, g_lo, g_hi, color="green", alpha=0.2, zorder=1,
-                        label=f"Зелёная ±{REST_CORRIDOR_SEC}с ({_pace_formatter(g_lo)}–{_pace_formatter(g_hi)})")
-        colors = []
-        for v in y:
-            if g_lo <= v <= g_hi:
-                colors.append("green")
-            elif y_lo <= v <= y_hi:
-                colors.append("gold")
-            else:
-                colors.append("red")
-        ax.scatter(x, y, color=colors, s=80, zorder=3, label="Отдых")
-    else:
-        ax.scatter(x, y, color="blue", s=80, zorder=3, label="Отдых")
-    _draw_fact_trend(ax, x, y)
-    if WITH_GROUPS:
-        from s4_groups import draw_groups
-        draw_groups(ax, x, y)
-    ax.invert_yaxis()
-    ax.set_xlabel("Номер интервала", fontsize=12)
-    ax.set_ylabel("Темп (мин:сек/км)", fontsize=12)
-    ax.set_title(title, fontsize=14, fontweight="bold")
-    ax.yaxis.set_major_formatter(FuncFormatter(_pace_formatter))
-    ax.set_xticks(x)
-    ax.grid(True, linestyle=":", alpha=0.6)
-    ax.legend(loc="upper right", fontsize=10)
-    plt.tight_layout()
-    fig.savefig(out_path, dpi=110)
-    plt.close(fig)
+    th = _theme()
+    with plt.rc_context(_rc()):
+        fig, ax = plt.subplots(figsize=(14, 8))
+        if plan_rest:
+            g_lo, g_hi = plan_rest - REST_CORRIDOR_SEC, plan_rest + REST_CORRIDOR_SEC
+            y_lo, y_hi = plan_rest - REST_CORRIDOR_YELLOW, plan_rest + REST_CORRIDOR_YELLOW
+            ax.fill_between(x, y_lo, y_hi, color="gold", alpha=0.2, zorder=1,
+                            label=f"Жёлтая ±{REST_CORRIDOR_YELLOW}с ({_pace_formatter(y_lo)}–{_pace_formatter(y_hi)})")
+            ax.fill_between(x, g_lo, g_hi, color="green", alpha=0.2, zorder=1,
+                            label=f"Зелёная ±{REST_CORRIDOR_SEC}с ({_pace_formatter(g_lo)}–{_pace_formatter(g_hi)})")
+            colors = []
+            for v in y:
+                if g_lo <= v <= g_hi:
+                    colors.append("green")
+                elif y_lo <= v <= y_hi:
+                    colors.append("gold")
+                else:
+                    colors.append("red")
+            ax.scatter(x, y, color=colors, s=80, zorder=3, label="Отдых")
+        else:
+            ax.scatter(x, y, color=th["fact"], s=80, zorder=3, label="Отдых")
+        _draw_fact_trend(ax, x, y)
+        if WITH_GROUPS:
+            from s4_groups import draw_groups
+            draw_groups(ax, x, y)
+        ax.invert_yaxis()
+        ax.set_xlabel("Номер интервала", fontsize=12)
+        ax.set_ylabel("Темп (мин:сек/км)", fontsize=12)
+        ax.set_title(title, fontsize=14, fontweight="bold")
+        ax.yaxis.set_major_formatter(FuncFormatter(_pace_formatter))
+        ax.set_xticks(x)
+        ax.grid(True, linestyle=":", alpha=0.6)
+        ax.legend(loc="upper right", fontsize=10)
+        plt.tight_layout()
+        fig.savefig(out_path, dpi=110)
+        plt.close(fig)
     return out_path
 
 
@@ -253,40 +294,76 @@ def _fmt_time(sec):
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
 
 
-def _plot_table(work, rest, title, out_path):
-    """Таблица-картинка: строка = повтор, колонки время/темп work и rest.
-    work/rest — списки (duration_s, pace_sec). Строк столько, сколько work-повторов."""
+def _plot_table(work, rest, plan_work, plan_rest, title, out_path):
+    """Таблица-картинка: строка = повтор, колонки время/темп + отклонение work и rest.
+    work/rest — списки (duration_s, pace_sec). Отклонение считается как на графиках:
+    work — против linspace(медленный→быстрый край) по номеру; rest — против планового темпа.
+    Цвет цифры отклонения — та же схема (_delta_color). Знак +медленнее/−быстрее."""
     n = len(work)
     if n == 0:
         return None
-    headers = ["№", "Работа время", "Работа темп", "Отдых время", "Отдых темп"]
+    # эталон work по номеру (как на графике) и единый темп rest
+    work_etalon = None
+    if plan_work:
+        slow, fast = plan_work
+        work_etalon = np.linspace(slow, fast, n)
+
+    headers = ["№", "Работа время", "Работа темп", "Работа откл",
+               "Отдых время", "Отдых темп", "Отдых откл"]
     rows = []
+    # цвета текста по ячейкам отклонений: (row, col) -> color
+    cell_colors = {}
+
+    def _dev_str(fact, etalon):
+        """Строка отклонения со знаком + цвет. None эталон → («—», None)."""
+        if etalon is None or fact is None:
+            return "—", None
+        d = fact - etalon
+        sign = "+" if d > 0 else ("−" if d < 0 else "")
+        return f"{sign}{abs(int(round(d)))}", _delta_color(abs(d))
+
     for i in range(n):
         wt, wp = work[i]
+        we = work_etalon[i] if work_etalon is not None else None
+        w_dev, w_color = _dev_str(wp, we)
         if i < len(rest):
             rt, rp = rest[i]
             rt_s, rp_s = _fmt_time(rt), _pace_formatter(rp)
+            r_dev, r_color = _dev_str(rp, plan_rest)
         else:
-            rt_s, rp_s = "—", "—"  # последний повтор без отдыха
-        rows.append([str(i + 1), _fmt_time(wt), _pace_formatter(wp), rt_s, rp_s])
+            rt_s, rp_s, r_dev, r_color = "—", "—", "—", None
+        rows.append([str(i + 1), _fmt_time(wt), _pace_formatter(wp), w_dev,
+                     rt_s, rp_s, r_dev])
+        if w_color:
+            cell_colors[(i + 1, 3)] = w_color  # +1 — строка заголовка сдвигает
+        if r_color:
+            cell_colors[(i + 1, 6)] = r_color
 
-    # высота под число строк
     fig_h = max(2.5, 0.4 * (n + 2))
-    fig, ax = plt.subplots(figsize=(7, fig_h))
-    ax.axis("off")
-    ax.set_title(title, fontsize=13, fontweight="bold", pad=12)
-    tbl = ax.table(cellText=rows, colLabels=headers, loc="center", cellLoc="center")
-    tbl.auto_set_font_size(False)
-    tbl.set_fontsize(9)
-    tbl.scale(1, 1.3)
-    # шапка жирная и с фоном
-    for j in range(len(headers)):
-        c = tbl[0, j]
-        c.set_facecolor("#dddddd")
-        c.set_text_props(fontweight="bold")
-    plt.tight_layout()
-    fig.savefig(out_path, dpi=120, bbox_inches="tight")
-    plt.close(fig)
+    th = _theme()
+    with plt.rc_context(_rc()):
+        fig, ax = plt.subplots(figsize=(8.5, fig_h))
+        ax.axis("off")
+        ax.set_title(title, fontsize=13, fontweight="bold", pad=12)
+        tbl = ax.table(cellText=rows, colLabels=headers, loc="center", cellLoc="center")
+        tbl.auto_set_font_size(False)
+        tbl.set_fontsize(9)
+        tbl.scale(1, 1.3)
+        # фон и текст ячеек по теме
+        for (r, c), cell in tbl.get_celld().items():
+            cell.set_edgecolor(th["box_edge"])
+            if r == 0:
+                cell.set_facecolor(th["box_face"])
+                cell.set_text_props(fontweight="bold", color=th["text"])
+            else:
+                cell.set_facecolor("none")
+                cell.set_text_props(color=th["text"])
+        # цвет цифр отклонений (поверх общего цвета текста)
+        for (r, col), color in cell_colors.items():
+            tbl[r, col].set_text_props(color=color, fontweight="bold")
+        plt.tight_layout()
+        fig.savefig(out_path, dpi=120, bbox_inches="tight")
+        plt.close(fig)
     return out_path
 
 
@@ -333,7 +410,8 @@ async def build_review(db_user_id: int, out_dir: str = "/tmp") -> dict:
         _plot_rest, rest_sec, plan["rest"], "Анализ восстановительных интервалов",
         base + "_rest.png")
     table_png = await asyncio.to_thread(
-        _plot_table, work_laps, rest_laps, "Повторы: факт",
+        _plot_table, work_laps, rest_laps, plan["work"], plan["rest"],
+        "Повторы: факт и отклонения",
         base + "_table.png")
 
     return {"ok": True, "name": name, "work_png": work_png, "rest_png": rest_png,
