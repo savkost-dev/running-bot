@@ -4845,6 +4845,33 @@ async def msg_user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         f"✉️ Напиши текст для {user['name']} следующим сообщением (или напиши «отмена»).")
 
 
+async def cmd_last(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/last (admin) — разбор последней выполненной DD-тренировки: графики факт vs план.
+    Не затрагивает рабочие ветки. Источник плана — Garmin workout по workoutId."""
+    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+        return
+    db_user_id = get_or_create_user(update.effective_user.id, update.effective_user.full_name)
+    msg = await update.message.reply_text("⏳ Собираю разбор последней тренировки…")
+    try:
+        from activity_review import build_review
+        res = await build_review(db_user_id)
+    except Exception as e:
+        logger.error(f"/last error for {update.effective_user.id}: {e}", exc_info=True)
+        await msg.edit_text(f"❌ Ошибка разбора: {type(e).__name__}: {e}")
+        return
+    if not res.get("ok"):
+        await msg.edit_text(f"⚠️ {res.get('msg')}")
+        return
+    await msg.edit_text(
+        f"📊 Разбор: {res['name']}\n"
+        f"рабочих отрезков: {res['n_work']}, отдыха: {res['n_rest']}")
+    for png, cap in ((res.get("work_png"), "Рабочие интервалы"),
+                     (res.get("rest_png"), "Отдых")):
+        if png:
+            with open(png, "rb") as f:
+                await context.bot.send_photo(update.effective_user.id, photo=f, caption=cap)
+
+
 def main():
     init_db()
 
@@ -4892,6 +4919,7 @@ def main():
     app.add_handler(CommandHandler("p_analyze", p_analyze_command))
     app.add_handler(CommandHandler("activity",  cmd_activity))
     app.add_handler(CommandHandler("msg_user",  cmd_msg_user))
+    app.add_handler(CommandHandler("last",      cmd_last))
     app.add_handler(CallbackQueryHandler(msg_user_callback,  pattern=r"^msgu_\d+$"))
     app.add_handler(CallbackQueryHandler(b_user_callback,   pattern=r"^b_user_\d+$"))
     app.add_handler(CallbackQueryHandler(a_user_callback,   pattern=r"^a_user_\d+$"))
