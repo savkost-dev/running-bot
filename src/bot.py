@@ -4881,6 +4881,44 @@ async def cmd_last(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                                          caption=cap, reply_markup=markup)
 
 
+async def cmd_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/ai (admin) — пакет данных тренировки для ИИ (профиль, план, факт по отрезкам,
+    утренний снимок) + промпт. Готово к вставке в ИИ. Read-only, рабочие ветки не трогает.
+    Аргумент: /ai (последняя DD) | /ai DD_20260612 (маска) | /ai 23219097987 (activityId)."""
+    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+        return
+    db_user_id = get_or_create_user(update.effective_user.id, update.effective_user.full_name)
+    selector = context.args[0] if context.args else None
+    msg = await update.message.reply_text("⏳ Собираю пакет данных для ИИ…")
+    try:
+        from ai_package import build_package, PROMPT
+        res = await build_package(db_user_id, selector)
+    except Exception as e:
+        logger.error(f"/ai error for {update.effective_user.id}: {e}", exc_info=True)
+        await msg.edit_text(f"❌ Ошибка сборки: {type(e).__name__}: {e}")
+        return
+    if not res.get("ok"):
+        await msg.edit_text(f"⚠️ {res.get('msg')}")
+        return
+    await msg.edit_text(f"📦 Пакет данных: {res['name']}")
+    import html
+    full = PROMPT + "\n\n" + res["text"]
+    # режем по строкам на куски < 3800 символов, каждый — моноширинным блоком (Telegram лимит 4096)
+    chunks, chunk, size = [], [], 0
+    for line in full.split("\n"):
+        if size + len(line) + 1 > 3800 and chunk:
+            chunks.append("\n".join(chunk))
+            chunk, size = [], 0
+        chunk.append(line)
+        size += len(line) + 1
+    if chunk:
+        chunks.append("\n".join(chunk))
+    for ch in chunks:
+        await context.bot.send_message(
+            update.effective_user.id,
+            f"<pre>{html.escape(ch)}</pre>", parse_mode="HTML")
+
+
 def main():
     init_db()
 
@@ -4929,6 +4967,7 @@ def main():
     app.add_handler(CommandHandler("activity",  cmd_activity))
     app.add_handler(CommandHandler("msg_user",  cmd_msg_user))
     app.add_handler(CommandHandler("last",      cmd_last))
+    app.add_handler(CommandHandler("ai",        cmd_ai))
     app.add_handler(CallbackQueryHandler(msg_user_callback,  pattern=r"^msgu_\d+$"))
     app.add_handler(CallbackQueryHandler(b_user_callback,   pattern=r"^b_user_\d+$"))
     app.add_handler(CallbackQueryHandler(a_user_callback,   pattern=r"^a_user_\d+$"))
