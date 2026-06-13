@@ -1938,6 +1938,43 @@ def ask_groq(prompt: str, mode: str = "smart") -> dict | None:
     return None
 
 
+def ask_text(prompt: str, mode: str = "deep") -> str:
+    """Свободный текстовый ответ модели (БЕЗ JSON-парсинга). Для свободных
+    анализов/комментариев тренера. Возвращает текст или '' при ошибке/таймауте.
+
+    mode="deep" → deepseek-v4-pro (~2-3 мин); "smart" → flash; "fast" → chat.
+    """
+    import re as _re
+    if mode == "deep":
+        model, max_tok, timeout = MODEL_DEEP, 4000, 300
+    elif mode == "fast":
+        model, max_tok, timeout = MODEL_FAST, 3000, 60
+    else:
+        model, max_tok, timeout = MODEL_SMART, 3500, 180
+    try:
+        resp = _get_client().chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=max_tok,
+            temperature=0.4,
+            timeout=timeout,
+        )
+        msg = resp.choices[0].message
+        raw = (msg.content or "").strip()
+        raw = _re.sub(r"<think>.*?</think>", "", raw, flags=_re.DOTALL).strip()
+        if not raw:
+            reasoning = getattr(msg, "reasoning_content", None)
+            if reasoning:
+                raw = reasoning.strip()
+                logger.info("ask_text: использован reasoning_content как fallback")
+        if not raw:
+            logger.warning("ask_text: пустой ответ модели")
+        return raw
+    except Exception as e:
+        logger.warning(f"ask_text error (mode={mode}): {e}")
+        return ""
+
+
 def ask_deepseek_garmin(workout: dict, group: str, pace: str) -> dict | None:
     """Просим DeepSeek сгенерировать JSON тренировки для Garmin Connect.
 

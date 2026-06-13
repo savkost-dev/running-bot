@@ -355,3 +355,17 @@ async def build_package(db_user_id: int, selector=None) -> dict:
     A("=" * 64)
 
     return {"ok": True, "name": name, "text": "\n".join(L), "msg": ""}
+
+
+async def analyze_with_ai(db_user_id: int, selector=None, mode: str = "deep") -> dict:
+    """Собирает пакет и отправляет его в DeepSeek с промптом-инструкцией.
+    Возвращает {ok, msg, name, answer, package}. answer — свободный текст анализа от ИИ."""
+    pkg = await build_package(db_user_id, selector)
+    if not pkg.get("ok"):
+        return pkg
+    import claude_advisor
+    prompt = PROMPT + "\n\n" + pkg["text"]
+    answer = await asyncio.to_thread(claude_advisor.ask_text, prompt, mode)
+    if not answer:
+        return {"ok": False, "msg": "ИИ не ответил (пустой ответ или таймаут)."}
+    return {"ok": True, "name": pkg["name"], "answer": answer, "package": pkg["text"], "msg": ""}

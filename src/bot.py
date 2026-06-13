@@ -841,6 +841,7 @@ def _build_help_text(is_admin: bool) -> str:
             "/activity — активность по дням и топ действий за 14 дней"
             "\n/msg_user <id> <текст> — написать юзеру от имени бота"
             "\n/last — разбор последней выполненной тренировки (графики факт vs план; /last dark — тёмная тема)"
+            "\n/ai — ИИ-анализ последней тренировки (/ai DD_20260612 — выбрать; /ai data — сырой пакет+промпт)"
         )
     return text
 
@@ -4882,41 +4883,67 @@ async def cmd_last(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/ai (admin) — пакет данных тренировки для ИИ (профиль, план, факт по отрезкам,
-    утренний снимок) + промпт. Готово к вставке в ИИ. Read-only, рабочие ветки не трогает.
-    Аргумент: /ai (последняя DD) | /ai DD_20260612 (маска) | /ai 23219097987 (activityId)."""
+    """/ai (admin) — ИИ-анализ тренировки: собирает пакет данных (профиль, план,
+    факт по отрезкам, утренний снимок) и шлёт в DeepSeek, возвращает разбор тренера.
+    Read-only, рабочие ветки не трогает.
+    /ai — последняя DD; /ai DD_20260612 | /ai 23219097987 — выбор тренировки;
+    /ai data [селектор] — сырой пакет данных + промпт (без вызова ИИ)."""
     if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
         return
     db_user_id = get_or_create_user(update.effective_user.id, update.effective_user.full_name)
-    selector = context.args[0] if context.args else None
-    msg = await update.message.reply_text("⏳ Собираю пакет данных для ИИ…")
+    args = list(context.args or [])
+    raw_mode = bool(args) and args[0].lower() in ("data", "raw", "данные")
+    if raw_mode:
+        args = args[1:]
+    selector = args[0] if args else None
+
+    import html
+
+    def _send_chunks(text, pre=False):
+        chunks, chunk, size = [], [], 0
+        for line in text.split("\n"):
+            if size + len(line) + 1 > 3800 and chunk:
+                chunks.append("\n".join(chunk))
+                chunk, size = [], 0
+            chunk.append(line)
+            size += len(line) + 1
+        if chunk:
+            chunks.append("\n".join(chunk))
+        return chunks
+
+    if raw_mode:
+        msg = await update.message.reply_text("⏳ Собираю пакет данных…")
+        try:
+            from ai_package import build_package, PROMPT
+            res = await build_package(db_user_id, selector)
+        except Exception as e:
+            logger.error(f"/ai data error for {update.effective_user.id}: {e}", exc_info=True)
+            await msg.edit_text(f"❌ Ошибка сборки: {type(e).__name__}: {e}")
+            return
+        if not res.get("ok"):
+            await msg.edit_text(f"⚠️ {res.get('msg')}")
+            return
+        await msg.edit_text(f"📦 Пакет данных: {res['name']}")
+        full = PROMPT + "\n\n" + res["text"]
+        for ch in _send_chunks(full):
+            await context.bot.send_message(
+                update.effective_user.id, f"<pre>{html.escape(ch)}</pre>", parse_mode="HTML")
+        return
+
+    msg = await update.message.reply_text("⏳ Собираю данные и анализирую через DeepSeek…\nМожет занять 1-3 мин.")
     try:
-        from ai_package import build_package, PROMPT
-        res = await build_package(db_user_id, selector)
+        from ai_package import analyze_with_ai
+        res = await analyze_with_ai(db_user_id, selector)
     except Exception as e:
         logger.error(f"/ai error for {update.effective_user.id}: {e}", exc_info=True)
-        await msg.edit_text(f"❌ Ошибка сборки: {type(e).__name__}: {e}")
+        await msg.edit_text(f"❌ Ошибка: {type(e).__name__}: {e}")
         return
     if not res.get("ok"):
         await msg.edit_text(f"⚠️ {res.get('msg')}")
         return
-    await msg.edit_text(f"📦 Пакет данных: {res['name']}")
-    import html
-    full = PROMPT + "\n\n" + res["text"]
-    # режем по строкам на куски < 3800 символов, каждый — моноширинным блоком (Telegram лимит 4096)
-    chunks, chunk, size = [], [], 0
-    for line in full.split("\n"):
-        if size + len(line) + 1 > 3800 and chunk:
-            chunks.append("\n".join(chunk))
-            chunk, size = [], 0
-        chunk.append(line)
-        size += len(line) + 1
-    if chunk:
-        chunks.append("\n".join(chunk))
-    for ch in chunks:
-        await context.bot.send_message(
-            update.effective_user.id,
-            f"<pre>{html.escape(ch)}</pre>", parse_mode="HTML")
+    await msg.edit_text(f"🤖 Анализ тренировки: {res['name']}")
+    for ch in _send_chunks(res["answer"]):
+        await context.bot.send_message(update.effective_user.id, ch)
 
 
 def main():
