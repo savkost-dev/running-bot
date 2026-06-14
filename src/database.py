@@ -166,6 +166,17 @@ def init_db():
                 value TEXT
             );
 
+            -- Эталоны тренировок по группам (готовый Garmin JSON для быстрой отправки).
+            -- Пишутся после вечерней рассылки в интервальные дни. Ключ: дата + группа + тип.
+            CREATE TABLE IF NOT EXISTS workout_templates (
+                workout_date TEXT NOT NULL,
+                group_number TEXT NOT NULL,
+                wtype        TEXT NOT NULL,
+                workout_json TEXT NOT NULL,
+                created_at   TEXT DEFAULT (datetime('now')),
+                PRIMARY KEY (workout_date, group_number, wtype)
+            );
+
             CREATE TABLE IF NOT EXISTS raw_service_data (
                 user_id INTEGER NOT NULL,
                 service TEXT NOT NULL,
@@ -1327,6 +1338,26 @@ def update_extra_groups(post_id: int, extra_groups_json: str) -> None:
 
 
 # ── Глобальные настройки бота ─────────────────────────────────
+
+def save_workout_template(workout_date: str, group_number: str,
+                          wtype: str, workout_json: str) -> None:
+    """Сохраняет эталон тренировки (готовый Garmin JSON) для группы.
+
+    workout_json — строка JSON (уже сериализованный воркаут). upsert по (workout_date, group_number, wtype).
+    """
+    with get_connection() as conn:
+        conn.execute("""
+            INSERT INTO workout_templates
+                (workout_date, group_number, wtype, workout_json, created_at)
+            VALUES (?, ?, ?, ?, datetime('now'))
+            ON CONFLICT(workout_date, group_number, wtype) DO UPDATE SET
+                workout_json = excluded.workout_json,
+                created_at = excluded.created_at
+        """, (workout_date, group_number, wtype, workout_json))
+    _db_logger.info(
+        f"workout_template сохранён: date={workout_date} group={group_number} type={wtype}"
+    )
+
 
 def get_preprocess_mode() -> str:
     """Режим анализа тренировок (deep/smart). Глобальная настройка."""

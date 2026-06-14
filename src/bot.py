@@ -33,6 +33,7 @@ from database import (
     get_preprocess_mode, set_preprocess_mode,
     get_users_list_for_b,
     get_morning_caught,
+    save_workout_template,
 )
 from strava import (
     get_auth_url, get_recent_runs, analyze_fitness,
@@ -3928,6 +3929,36 @@ async def scheduled_wakeup_poll(context: ContextTypes.DEFAULT_TYPE):
 
 # ── ПЛАНИРОВЩИК ──────────────────────────────────────────────
 
+def _save_workout_templates(analysis: dict | None, live: dict | None) -> None:
+    """Сохраняет эталоны (готовый Garmin JSON) по всем группам из анализа Шага 1.
+    Только интервальные. Не критично — сбой не должен ронять рассылку/отчёт.
+    """
+    import json as _json
+    if not analysis:
+        return
+    tmpl_date = live.get("workout_date") if live else None
+    if not tmpl_date:
+        return
+    try:
+        parsed = _json.loads(analysis.get("analyzed_json") or "{}")
+    except Exception as e:
+        logger.error(f"эталоны: не распарсился analyzed_json: {e}")
+        return
+    saved = 0
+    for g in (parsed.get("groups") or []):
+        gnum = str(g.get("number") or "").strip()
+        if not gnum:
+            continue
+        try:
+            wj = build_garmin_from_analysis(parsed, gnum)
+            save_workout_template(tmpl_date, gnum, "interval",
+                                  _json.dumps(wj, ensure_ascii=False))
+            saved += 1
+        except Exception as e:
+            logger.error(f"эталон группы {gnum} не сохранён: {e}")
+    logger.info(f"эталоны тренировки: {saved} групп на {tmpl_date}")
+
+
 async def scheduled_evening(context: ContextTypes.DEFAULT_TYPE):
     # return  # TEMP: рассылка отключена 2026-06-01, убрать после фикса зон
     now = datetime.now()
@@ -3941,7 +3972,7 @@ async def scheduled_evening(context: ContextTypes.DEFAULT_TYPE):
     live = await (find_next_long_run() if is_long else find_next_workout())
     cur_post = live.get("post_id") if live else None
     cur_edit = live.get("edit_date") if live else None
-    _, status = get_latest_workout_analysis(
+    analysis, status = get_latest_workout_analysis(
         wtype, cur_post, live.get("workout_date") if live else None, cur_edit)
     if status == "empty":
         logger.info(f"Вечерняя рассылка: нет анализа в кэше ({wtype}) — пропуск")
@@ -3960,6 +3991,10 @@ async def scheduled_evening(context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Evening notification error for {telegram_id}: {e}")
     logger.info(f"Вечерняя рассылка завершена ({wtype}, status={status}): {count} отправлено (кэш, без парсинга на лету)")
+
+    # Эталоны по группам в БД (только интервалы) — для последующей сверки факт/план.
+    if not is_long:
+        _save_workout_templates(analysis, live)
 
     base = (f"📨 Рассылка завершена\n"
             f"Тип: {wtype} | Отправлено: {count} пользователям")
