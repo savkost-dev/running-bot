@@ -183,6 +183,24 @@ def init_db():
                 FOREIGN KEY (user_id) REFERENCES users(id)
             );
 
+            -- История утренних слепков: структура как unified_cache, но без unified_json
+            -- и с датой в ключе (одна строка на (user_id, date), новая запись каждый день).
+            CREATE TABLE IF NOT EXISTS mornings (
+                user_id             INTEGER NOT NULL,
+                date                TEXT NOT NULL,
+                sources             TEXT,
+                morning_caught      INTEGER DEFAULT 0,
+                morning_tr          INTEGER,
+                morning_bb          INTEGER,
+                morning_hrv         REAL,
+                morning_rhr         INTEGER,
+                morning_sleep_h     REAL,
+                morning_wake_at     TEXT,
+                morning_snapshot_at TEXT,
+                PRIMARY KEY (user_id, date),
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            );
+
         """)
     # Миграции для старых БД
     with get_connection() as conn:
@@ -283,6 +301,23 @@ def init_db():
         conn.execute(
             "INSERT OR IGNORE INTO bot_settings (key, value) VALUES ('preprocess_mode', 'deep')"
         )
+
+    # Разовое копирование текущих слепков из unified_cache в mornings.
+    # INSERT OR IGNORE по PK (user_id, date) — повторные рестарты не плодят дублей
+    # и не затирают уже накопленную историю. Берём только строки с пойманной ночью.
+    with get_connection() as conn:
+        try:
+            conn.execute("""
+                INSERT OR IGNORE INTO mornings
+                    (user_id, date, sources, morning_caught, morning_tr, morning_bb,
+                     morning_hrv, morning_rhr, morning_sleep_h, morning_wake_at, morning_snapshot_at)
+                SELECT user_id, morning_date, sources, morning_caught, morning_tr, morning_bb,
+                       morning_hrv, morning_rhr, morning_sleep_h, morning_wake_at, morning_snapshot_at
+                FROM unified_cache
+                WHERE morning_date IS NOT NULL
+            """)
+        except Exception:
+            pass
 
     print("✅ База данных инициализирована")
 
@@ -1407,6 +1442,26 @@ def set_morning_caught(user_id: int, date_msk: str, snapshot: dict | None = None
                 (user_id, date_msk, s.get("tr"), s.get("bb"), s.get("hrv"),
                  s.get("rhr"), s.get("sleep_h"), s.get("wake_at"), s.get("snapshot_at"))
             )
+        # История слепков: пишем ту же запись в mornings сразу после unified_cache.
+        # sources берём из текущей строки unified_cache юзера. upsert по (user_id, date).
+        _src_row = conn.execute(
+            "SELECT sources FROM unified_cache WHERE user_id = ?", (user_id,)
+        ).fetchone()
+        _sources = _src_row[0] if _src_row else None
+        conn.execute(
+            "INSERT INTO mornings (user_id, date, sources, morning_caught, "
+            "morning_tr, morning_bb, morning_hrv, morning_rhr, morning_sleep_h, "
+            "morning_wake_at, morning_snapshot_at) "
+            "VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(user_id, date) DO UPDATE SET "
+            "sources = excluded.sources, morning_caught = excluded.morning_caught, "
+            "morning_tr = excluded.morning_tr, morning_bb = excluded.morning_bb, "
+            "morning_hrv = excluded.morning_hrv, morning_rhr = excluded.morning_rhr, "
+            "morning_sleep_h = excluded.morning_sleep_h, morning_wake_at = excluded.morning_wake_at, "
+            "morning_snapshot_at = excluded.morning_snapshot_at",
+            (user_id, date_msk, _sources, s.get("tr"), s.get("bb"), s.get("hrv"),
+             s.get("rhr"), s.get("sleep_h"), s.get("wake_at"), s.get("snapshot_at"))
+        )
     _db_logger.info(f"morning_caught: user={user_id} date={date_msk} snap={bool(snapshot)}")
 
 
