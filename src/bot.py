@@ -3934,6 +3934,7 @@ def _save_workout_templates(analysis: dict | None, live: dict | None) -> None:
     Только интервальные. Не критично — сбой не должен ронять рассылку/отчёт.
     """
     import json as _json
+    from fit_generator import build_garmin_from_analysis
     if not analysis:
         return
     tmpl_date = live.get("workout_date") if live else None
