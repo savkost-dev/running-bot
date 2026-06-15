@@ -2637,7 +2637,8 @@ async def _send_ai_variant_b(
             key=lambda x: x.get("percentage", 0),
             reverse=True,
         )[:3]
-        if _top3:
+        # Отдельное сообщение с выгрузкой в Garmin — только если Garmin подключён.
+        if _top3 and get_token(db_user_id, "garmin"):
             _fit_data[telegram_id] = {
                 "type": "b_interval",
                 "analysis": analysis,
