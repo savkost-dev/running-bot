@@ -4999,46 +4999,48 @@ async def cmd_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await msg.edit_text(f"⚠️ {res.get('msg')}")
         return
 
-    # Графики из уже добытых данных (один поход в Garmin внутри build_package).
-    await msg.edit_text(f"📊 Тренировка: {res['name']}")
+    # Графики строим всегда (пути), отправку откладываем: в полном режиме
+    # сперва дожидаемся ИИ, чтобы графики и текст пришли вместе.
     try:
         charts = await build_charts(res.get("splits"), res.get("plan_steps"),
-                                    res["name"], "/tmp", str(db_user_id))
+                                    res["name"], "/tmp", str(db_user_id), dark=False)
     except Exception as e:
         logger.error(f"/ai charts error: {e}", exc_info=True)
         charts = {}
-    for png, cap in [(charts.get("work_png"), "Рабочие интервалы"),
-                     (charts.get("rest_png"), "Отдых"),
-                     (charts.get("table_png"), "Таблица повторов")]:
-        if not png:
-            continue
+    chart_items = [(p, c) for p, c in (
+        (charts.get("work_png"), "Рабочие интервалы"),
+        (charts.get("rest_png"), "Отдых"),
+        (charts.get("table_png"), "Таблица повторов")) if p]
+
+    # Полный режим: получаем анализ ИИ ДО отправки (чтобы отдать всё разом).
+    ai_chunks = None
+    if not simple_mode:
+        await msg.edit_text(f"🤖 Анализирую через DeepSeek… ({res['name']})")
+        import claude_advisor
+        answer = await asyncio.to_thread(
+            claude_advisor.ask_text, PROMPT + "\n\n" + res["text"], "deep")
+        if answer:
+            import re as _re_md
+            _ans = _re_md.sub(r"\*\*(.+?)\*\*", r"\1", answer)
+            _ans = _re_md.sub(r"__(.+?)__", r"\1", _ans)
+            _clean = []
+            for _ln in _ans.split("\n"):
+                _s = _ln.lstrip()
+                _s = _re_md.sub(r"^#{1,6}\s*", "", _s)
+                _s = _re_md.sub(r"^[\*\-]\s+", "— ", _s)
+                _clean.append(_s)
+            ai_chunks = _send_chunks("\n".join(_clean).strip())
+        else:
+            ai_chunks = ["⚠️ ИИ не ответил."]
+
+    # Отдаём всё разом: сперва графики, затем текст анализа.
+    await msg.edit_text(f"📊 Тренировка: {res['name']}")
+    for png, cap in chart_items:
         with open(png, "rb") as f:
             await context.bot.send_photo(update.effective_user.id, photo=f, caption=cap)
-
-    if simple_mode:
-        return
-
-    # ИИ-анализ (полный режим): тот же пакет, без повторного похода в Garmin.
-    import claude_advisor
-    answer = await asyncio.to_thread(
-        claude_advisor.ask_text, PROMPT + "\n\n" + res["text"], "deep")
-    if not answer:
-        await context.bot.send_message(update.effective_user.id, "⚠️ ИИ не ответил.")
-        return
-    # Страховка: убираем остатки Markdown (отправляем как простой текст).
-    import re as _re_md
-    _ans = answer
-    _ans = _re_md.sub(r"\*\*(.+?)\*\*", r"\1", _ans)   # **жирный** → текст
-    _ans = _re_md.sub(r"__(.+?)__", r"\1", _ans)         # __жирный__ → текст
-    _clean = []
-    for _ln in _ans.split("\n"):
-        _s = _ln.lstrip()
-        _s = _re_md.sub(r"^#{1,6}\s*", "", _s)            # заголовки #
-        _s = _re_md.sub(r"^[\*\-]\s+", "— ", _s)           # маркеры *,- → —
-        _clean.append(_s)
-    _ans = "\n".join(_clean).strip()
-    for ch in _send_chunks(_ans):
-        await context.bot.send_message(update.effective_user.id, ch)
+    if ai_chunks:
+        for ch in ai_chunks:
+            await context.bot.send_message(update.effective_user.id, ch)
 
 
 def main():
