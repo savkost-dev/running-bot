@@ -4986,7 +4986,7 @@ async def cmd_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     wait = ("⏳ Собираю данные и графики…" if simple_mode else
-            "⏳ Собираю данные, графики и анализ через DeepSeek…\nМожет занять 1-3 мин.")
+            "⏳ Собираю данные, графики и анализ через ИИ…\nМожет занять 1-3 мин.")
     msg = await update.message.reply_text(wait)
     try:
         from ai_package import build_package, build_charts, PROMPT
@@ -5015,7 +5015,7 @@ async def cmd_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # Полный режим: получаем анализ ИИ ДО отправки (чтобы отдать всё разом).
     ai_chunks = None
     if not simple_mode:
-        await msg.edit_text(f"🤖 Анализирую через DeepSeek… ({res['name']})")
+        await msg.edit_text(f"🤖 Анализирую через ИИ… ({res['name']})")
         import claude_advisor
         answer = await asyncio.to_thread(
             claude_advisor.ask_text, PROMPT + "\n\n" + res["text"], "deep")
