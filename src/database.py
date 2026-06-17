@@ -1359,6 +1359,19 @@ def save_workout_template(workout_date: str, group_number: str,
     )
 
 
+def get_workout_template(workout_date: str, group_number: str,
+                         wtype: str = "interval") -> str | None:
+    """Читает сохранённый эталон (Garmin JSON-строку) по (workout_date, group_number, wtype).
+    Возвращает строку workout_json или None, если эталона нет."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT workout_json FROM workout_templates "
+            "WHERE workout_date = ? AND group_number = ? AND wtype = ?",
+            (workout_date, group_number, wtype)
+        ).fetchone()
+    return row[0] if row else None
+
+
 def get_preprocess_mode() -> str:
     """Режим анализа тренировок (deep/smart). Глобальная настройка."""
     with get_connection() as conn:

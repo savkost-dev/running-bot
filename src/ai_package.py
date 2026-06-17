@@ -271,6 +271,8 @@ async def build_package(db_user_id: int, selector=None) -> dict:
     wkt_id = act.get("workoutId")
     m = re.search(r"DD_(\d{8})", name or "")
     wdate = f"{m.group(1)[:4]}-{m.group(1)[4:6]}-{m.group(1)[6:]}" if m else None
+    mg = re.search(r"DD_\d{8}-([\d.]+)_lvl", name or "")
+    wgroup = mg.group(1) if mg else None
 
     splits = await asyncio.to_thread(client.get_activity_splits, act_id)
     plan_steps = []
@@ -280,6 +282,16 @@ async def build_package(db_user_id: int, selector=None) -> dict:
             plan_steps = ar._flatten_plan_steps(wkt)
         except Exception:
             plan_steps = []
+    # Фолбэк эталона: нет workoutId (или план пуст) → берём сохранённый
+    # эталон группы из workout_templates по дате+группе (та же маска имени).
+    if not plan_steps and wdate and wgroup:
+        import json as _json
+        tmpl = db.get_workout_template(wdate, wgroup, "interval")
+        if tmpl:
+            try:
+                plan_steps = ar._flatten_plan_steps(_json.loads(tmpl))
+            except Exception:
+                plan_steps = []
     try:
         details = await asyncio.to_thread(client.get_activity_details, act_id, 100000, 100000)
     except Exception:
@@ -363,7 +375,37 @@ async def build_package(db_user_id: int, selector=None) -> dict:
     A("\n[НЕТ ДАННЫХ] лактат, субъективная оценка (RPE), погода")
     A("=" * 64)
 
-    return {"ok": True, "name": name, "text": "\n".join(L), "msg": ""}
+    return {"ok": True, "name": name, "text": "\n".join(L), "msg": "",
+            "splits": splits, "plan_steps": plan_steps}
+
+
+async def build_charts(splits, plan_steps, name: str, out_dir: str,
+                       tag: str, dark: bool = True) -> dict:
+    """Строит 3 PNG (work/rest/table) из уже добытых splits+plan_steps.
+    Переиспользует рисовалки activity_review (без повторного похода в Garmin).
+    tag — уникальный суффикс имён файлов (напр. db_user_id_activityId).
+    Возвращает {work_png, rest_png, table_png} (любой может быть None)."""
+    ar.DARK_MODE = dark
+    ordered = ar._ordered_laps(splits)
+    work_roles, x_ticks, rest_paces, S = ar._segment_model(ordered, plan_steps)
+
+    base = os.path.join(out_dir, f"ai_{tag}")
+    work_png = await asyncio.to_thread(
+        ar._plot_work_segmented, work_roles, x_ticks,
+        f"Тренировка: {name}", base + "_work.png")
+
+    rest_plan = next((s for s in plan_steps if s["stype"] == "recovery" and s["bounds"]), None)
+    rest_target = sum(rest_plan["bounds"]) / 2.0 if rest_plan else None
+    rest_png = await asyncio.to_thread(
+        ar._plot_rest, rest_paces, rest_target,
+        "Анализ восстановительных интервалов", base + "_rest.png") if rest_paces else None
+
+    ws, rmeta, rw, rr, maxi = ar._table_model(ordered, plan_steps)
+    table_png = await asyncio.to_thread(
+        ar._plot_table_segmented, ws, rmeta, rw, rr, maxi, bool(rest_paces), rest_target,
+        "Повторы: время / темп / отклонение", base + "_table.png") if (ws and maxi) else None
+
+    return {"work_png": work_png, "rest_png": rest_png, "table_png": table_png}
 
 
 async def analyze_with_ai(db_user_id: int, selector=None, mode: str = "deep") -> dict:

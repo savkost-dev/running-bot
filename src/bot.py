@@ -4938,6 +4938,7 @@ async def cmd_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     факт по отрезкам, утренний снимок) и шлёт в DeepSeek, возвращает разбор тренера.
     Read-only, рабочие ветки не трогает.
     /ai — последняя DD; /ai DD_20260612 | /ai 23219097987 — выбор тренировки;
+    /ai simple|s [селектор] — только графики, без вызова ИИ;
     /ai data [селектор] — сырой пакет данных + промпт (без вызова ИИ)."""
     if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
         return
@@ -4945,6 +4946,9 @@ async def cmd_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     args = list(context.args or [])
     raw_mode = bool(args) and args[0].lower() in ("data", "raw", "данные")
     if raw_mode:
+        args = args[1:]
+    simple_mode = bool(args) and args[0].lower() in ("simple", "s")
+    if simple_mode:
         args = args[1:]
     selector = args[0] if args else None
 
@@ -4981,21 +4985,49 @@ async def cmd_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 update.effective_user.id, f"<pre>{html.escape(ch)}</pre>", parse_mode="HTML")
         return
 
-    msg = await update.message.reply_text("⏳ Собираю данные и анализирую через DeepSeek…\nМожет занять 1-3 мин.")
+    wait = ("⏳ Собираю данные и графики…" if simple_mode else
+            "⏳ Собираю данные, графики и анализ через DeepSeek…\nМожет занять 1-3 мин.")
+    msg = await update.message.reply_text(wait)
     try:
-        from ai_package import analyze_with_ai
-        res = await analyze_with_ai(db_user_id, selector)
+        from ai_package import build_package, build_charts, PROMPT
+        res = await build_package(db_user_id, selector)
     except Exception as e:
         logger.error(f"/ai error for {update.effective_user.id}: {e}", exc_info=True)
-        await msg.edit_text(f"❌ Ошибка: {type(e).__name__}: {e}")
+        await msg.edit_text(f"❌ Ошибка сборки: {type(e).__name__}: {e}")
         return
     if not res.get("ok"):
         await msg.edit_text(f"⚠️ {res.get('msg')}")
         return
-    await msg.edit_text(f"🤖 Анализ тренировки: {res['name']}")
+
+    # Графики из уже добытых данных (один поход в Garmin внутри build_package).
+    await msg.edit_text(f"📊 Тренировка: {res['name']}")
+    try:
+        charts = await build_charts(res.get("splits"), res.get("plan_steps"),
+                                    res["name"], "/tmp", str(db_user_id))
+    except Exception as e:
+        logger.error(f"/ai charts error: {e}", exc_info=True)
+        charts = {}
+    for png, cap in [(charts.get("work_png"), "Рабочие интервалы"),
+                     (charts.get("rest_png"), "Отдых"),
+                     (charts.get("table_png"), "Таблица повторов")]:
+        if not png:
+            continue
+        with open(png, "rb") as f:
+            await context.bot.send_photo(update.effective_user.id, photo=f, caption=cap)
+
+    if simple_mode:
+        return
+
+    # ИИ-анализ (полный режим): тот же пакет, без повторного похода в Garmin.
+    import claude_advisor
+    answer = await asyncio.to_thread(
+        claude_advisor.ask_text, PROMPT + "\n\n" + res["text"], "deep")
+    if not answer:
+        await context.bot.send_message(update.effective_user.id, "⚠️ ИИ не ответил.")
+        return
     # Страховка: убираем остатки Markdown (отправляем как простой текст).
     import re as _re_md
-    _ans = res["answer"]
+    _ans = answer
     _ans = _re_md.sub(r"\*\*(.+?)\*\*", r"\1", _ans)   # **жирный** → текст
     _ans = _re_md.sub(r"__(.+?)__", r"\1", _ans)         # __жирный__ → текст
     _clean = []
