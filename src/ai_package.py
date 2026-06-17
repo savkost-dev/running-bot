@@ -20,6 +20,7 @@ scripts/ai_data_package.py. Собирает по DD-активности всё
 text — готовый текстовый пакет (без промпта). PROMPT — инструкция для ИИ (добавляется
 вызывающим, если нужно). НЕ импортирует bot.py.
 """
+import os
 import re
 import bisect
 import asyncio
