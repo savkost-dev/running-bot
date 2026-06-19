@@ -4940,7 +4940,10 @@ async def cmd_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     /ai — последняя DD; /ai DD_20260612 | /ai 23219097987 — выбор тренировки;
     /ai simple|s [селектор] — только графики, без вызова ИИ;
     /ai data [селектор] — сырой пакет данных + промпт (без вызова ИИ)."""
-    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+    # /ai: админ + временный вайтлист тестеров по username (без @, нижний регистр).
+    _AI_TEST_USERNAMES = {"guslik_run", "kksuussha"}
+    if (update.effective_user.id not in ADMIN_TELEGRAM_IDS
+            and (update.effective_user.username or "").lower() not in _AI_TEST_USERNAMES):
         return
     db_user_id = get_or_create_user(update.effective_user.id, update.effective_user.full_name)
     args = list(context.args or [])
