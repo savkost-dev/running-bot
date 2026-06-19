@@ -253,28 +253,42 @@ def _pick_activity(acts, selector):
     return next((a for a in runs if str(selector) in str(a.get("activityName") or "")), None)
 
 
-async def build_package(db_user_id: int, selector=None) -> dict:
-    """Собирает пакет данных для ИИ по DD-активности.
-    selector: None → последняя DD; маска 'DD_YYYYMMDD'; либо activityId.
-    Возвращает {ok, msg, name, text}. text — пакет без промпта (PROMPT добавляет вызывающий)."""
-    client = await garmin._client(db_user_id)
-    if not client:
-        return {"ok": False, "msg": "Garmin не подключён или нет клиента."}
-
-    acts = await asyncio.to_thread(client.get_activities, 0, 20)
-    act = _pick_activity(acts, selector)
-    if not act:
-        sel = f" по «{selector}»" if selector else ""
-        return {"ok": False, "msg": f"DD-активность{sel} не найдена в последних 20."}
-
-    act_id = act.get("activityId")
-    name = act.get("activityName")
-    wkt_id = act.get("workoutId")
+def _date_from_name(name):
+    """(wdate 'YYYY-MM-DD', wgroup) из имени по маске DD_YYYYMMDD-<группа>_lvl."""
     m = re.search(r"DD_(\d{8})", name or "")
     wdate = f"{m.group(1)[:4]}-{m.group(1)[4:6]}-{m.group(1)[6:]}" if m else None
     mg = re.search(r"DD_\d{8}-([\d.]+)_lvl", name or "")
-    wgroup = mg.group(1) if mg else None
+    return wdate, (mg.group(1) if mg else None)
 
+
+def _template_json(wdate, wgroup):
+    """Распарсенный JSON эталона из workout_templates или None."""
+    if not (wdate and wgroup):
+        return None
+    import json as _json
+    tmpl = db.get_workout_template(wdate, wgroup, "interval")
+    if not tmpl:
+        return None
+    try:
+        return _json.loads(tmpl)
+    except Exception:
+        return None
+
+
+async def _garmin_candidate(db_user_id, selector):
+    """Кандидат из Garmin (последняя DD-активность) или None.
+    План: Garmin workout по workoutId, иначе фолбэк на workout_templates."""
+    client = await garmin._client(db_user_id)
+    if not client:
+        return None
+    acts = await asyncio.to_thread(client.get_activities, 0, 20)
+    act = _pick_activity(acts, selector)
+    if not act:
+        return None
+    name = act.get("activityName")
+    wdate, wgroup = _date_from_name(name)
+    act_id = act.get("activityId")
+    wkt_id = act.get("workoutId")
     splits = await asyncio.to_thread(client.get_activity_splits, act_id)
     plan_steps = []
     if wkt_id:
@@ -283,25 +297,83 @@ async def build_package(db_user_id: int, selector=None) -> dict:
             plan_steps = ar._flatten_plan_steps(wkt)
         except Exception:
             plan_steps = []
-    # Фолбэк эталона: нет workoutId (или план пуст) → берём сохранённый
-    # эталон группы из workout_templates по дате+группе (та же маска имени).
-    if not plan_steps and wdate and wgroup:
-        import json as _json
-        tmpl = db.get_workout_template(wdate, wgroup, "interval")
-        if tmpl:
-            try:
-                plan_steps = ar._flatten_plan_steps(_json.loads(tmpl))
-            except Exception:
-                plan_steps = []
+    if not plan_steps:
+        wkt = _template_json(wdate, wgroup)
+        if wkt:
+            plan_steps = ar._flatten_plan_steps(wkt)
     try:
         details = await asyncio.to_thread(client.get_activity_details, act_id, 100000, 100000)
     except Exception:
         details = None
-    pts = _parse_details(details)
+    return {"source": "garmin", "name": name, "act_id": act_id,
+            "display_date": act.get("startTimeLocal"), "wdate": wdate, "wgroup": wgroup,
+            "wtype_key": (act.get("activityType") or {}).get("typeKey"),
+            "splits": splits, "plan_steps": plan_steps, "pts": _parse_details(details)}
+
+
+async def _strava_candidate(db_user_id, selector):
+    """Кандидат из Strava (последняя DD-активность) или None.
+    План берётся из workout_templates (без него размечать лэпы нечем → None).
+    pts нет (Strava не отдаёт 1 Гц через этот путь) — ЧСС-перед/сплиты-200 будут пусты."""
+    import strava
+    token = await strava.ensure_valid_token(db_user_id)
+    if not token:
+        return None
+    acts = await strava.get_recent_activities(token, days=30)
+    runs = [a for a in (acts or [])
+            if a.get("type") == "Run" and "DD_" in str(a.get("name") or "")]
+    if selector is None:
+        act = runs[0] if runs else None
+    elif str(selector).isdigit():
+        act = next((a for a in (acts or []) if str(a.get("id")) == str(selector)), None)
+    else:
+        act = next((a for a in runs if str(selector) in str(a.get("name") or "")), None)
+    if not act:
+        return None
+    name = act.get("name")
+    wdate, wgroup = _date_from_name(name)
+    plan_wkt = _template_json(wdate, wgroup)
+    if not plan_wkt:
+        return None
+    plan_steps = ar._flatten_plan_steps(plan_wkt)
+    splits = await strava.get_activity_splits(token, act.get("id"), plan_wkt)
+    return {"source": "strava", "name": name, "act_id": act.get("id"),
+            "display_date": act.get("start_date_local"), "wdate": wdate, "wgroup": wgroup,
+            "wtype_key": "running", "splits": splits, "plan_steps": plan_steps, "pts": None}
+
+
+def _choose_candidate(g, s):
+    """Более новый по дате-из-имени; при равенстве — Garmin."""
+    if g and not s:
+        return g
+    if s and not g:
+        return s
+    if not g and not s:
+        return None
+    return s if (s["wdate"] or "") > (g["wdate"] or "") else g
+
+
+async def build_package(db_user_id: int, selector=None) -> dict:
+    """Собирает пакет данных для ИИ по DD-активности.
+    selector: None → последняя DD; маска 'DD_YYYYMMDD'; либо activityId.
+    Возвращает {ok, msg, name, text}. text — пакет без промпта (PROMPT добавляет вызывающий)."""
+    g = await _garmin_candidate(db_user_id, selector)
+    s = await _strava_candidate(db_user_id, selector)
+    cand = _choose_candidate(g, s)
+    if not cand:
+        sel = f" по «{selector}»" if selector else ""
+        return {"ok": False, "msg": f"DD-активность{sel} не найдена (Garmin/Strava)."}
+
+    name = cand["name"]
+    act_id = cand["act_id"]
+    wdate = cand["wdate"]
+    splits = cand["splits"]
+    plan_steps = cand["plan_steps"]
+    pts = cand["pts"]
 
     prof = db.get_user_profile(db_user_id) or {}
     snap = db.get_morning_caught(db_user_id)
-    s4 = _s4_by_date(wdate, act.get("activityType", {}).get("typeKey"))
+    s4 = _s4_by_date(wdate, cand["wtype_key"])
     rows, S = _enrich_laps(splits, plan_steps, pts)
 
     L = []
@@ -310,7 +382,7 @@ async def build_package(db_user_id: int, selector=None) -> dict:
     A("ПАКЕТ ДАННЫХ ДЛЯ АНАЛИЗА ТРЕНИРОВКИ")
     A("=" * 64)
     A(f"Тренировка: {name}")
-    A(f"Дата: {act.get('startTimeLocal')}   activityId: {act_id}")
+    A(f"Дата: {cand['display_date']}   activityId: {act_id}   источник: {cand['source']}")
 
     A("\n[СПОРТСМЕН]")
     A(f"  Пол: {prof.get('gender') or '—'}   Возраст: {_age(prof.get('birthdate')) or '—'}")
@@ -330,7 +402,7 @@ async def build_package(db_user_id: int, selector=None) -> dict:
     else:
         A("  нет анализа за эту дату")
 
-    A("\n[ПЛАН] (эталон из Garmin workout)")
+    A("\n[ПЛАН] (эталон)")
     A(_plan_text(plan_steps))
 
     work = [r for r in rows if r["role"] == "work"]

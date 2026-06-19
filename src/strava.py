@@ -126,6 +126,79 @@ async def get_activity_detail(access_token: str, activity_id: int) -> dict | Non
             return await resp.json()
 
 
+# ── Лэпы в Garmin-формате для разбора тренировки (/ai) ───────────
+
+def _expand_plan_roles(plan_wkt: dict) -> list:
+    """Разворачивает эталон (Garmin workout JSON) в последовательность ролей
+    по факту исполнения: [(step_idx, stype)]. Повторы умножены на numberOfIterations,
+    step_idx совпадает с idx из activity_review._flatten_plan_steps (повторы свёрнуты),
+    чтобы рисовалки сопоставили факт с планом. skipLastRestStep — финальный recovery
+    последнего повтора убирается."""
+    next_idx = [0]
+
+    def walk(steps):
+        res = []
+        for st in steps or []:
+            if not isinstance(st, dict):
+                continue
+            is_rep = st.get("type") == "RepeatGroupDTO" or \
+                (st.get("stepType") or {}).get("stepTypeKey") == "repeat"
+            if is_rep:
+                iters = int(st.get("numberOfIterations") or 1)
+                inner = walk(st.get("workoutSteps"))
+                expanded = inner * iters
+                if st.get("skipLastRestStep") and expanded and \
+                        expanded[-1][1] in ("recovery", "rest"):
+                    expanded = expanded[:-1]
+                res.extend(expanded)
+                continue
+            stype = (st.get("stepType") or {}).get("stepTypeKey")
+            idx = next_idx[0]
+            next_idx[0] += 1
+            res.append((idx, stype))
+        return res
+
+    seq = []
+    for seg in (plan_wkt.get("workoutSegments") or []):
+        seq.extend(walk(seg.get("workoutSteps")))
+    return seq
+
+
+async def get_activity_splits(access_token: str, activity_id: int,
+                              plan_wkt: dict) -> dict | None:
+    """Лэпы Strava в Garmin-формате ({"lapDTOs": [...]}) для рисовалок activity_review.
+
+    Каждый лэп получает wktStepIndex + intensityType: лэпы Strava накладываются
+    ПО ПОРЯДКУ с первого на развёрнутую последовательность шагов эталона (разминки/заминки
+    в DD-тренировке нет). Лэпы сверх плана → wktStepIndex None (рисовалки их отбросят).
+    plan_wkt — распарсенный JSON эталона (из workout_templates или Garmin workout)."""
+    detail = await get_activity_detail(access_token, activity_id)
+    if not detail:
+        return None
+    laps = detail.get("laps") or []
+    roles = _expand_plan_roles(plan_wkt) if plan_wkt else []
+    out = []
+    for i, lp in enumerate(laps):
+        if i < len(roles):
+            idx, stype = roles[i]
+            intensity = "ACTIVE" if stype == "interval" else "RECOVERY"
+        else:
+            idx, intensity = None, ""
+        out.append({
+            "wktStepIndex": idx,
+            "distance": lp.get("distance"),
+            "duration": lp.get("moving_time") or lp.get("elapsed_time"),
+            "intensityType": intensity,
+            # Прокидываем в Garmin-имена полей, что Strava отдаёт по лэпу.
+            "averageHR": lp.get("average_heartrate"),
+            "maxHR": lp.get("max_heartrate"),
+            "averageRunCadence": (lp.get("average_cadence") * 2
+                                  if lp.get("average_cadence") else None),
+            "averagePower": lp.get("average_watts"),
+        })
+    return {"lapDTOs": out}
+
+
 async def get_recent_48h_load(access_token: str) -> dict:
     """Острая нагрузка за последние 48 часов — всегда свежие данные (1 запрос к API)."""
     after = int((datetime.now() - timedelta(hours=48)).timestamp())
