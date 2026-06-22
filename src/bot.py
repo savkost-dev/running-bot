@@ -5043,12 +5043,31 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     # Отдаём всё разом: сперва графики, затем текст анализа.
     await msg.edit_text(f"📊 Тренировка: {res['name']}")
-    for png, cap in chart_items:
+    # Кнопку «Главное меню» вешаем на последнее сообщение: в полном режиме —
+    # на последний чанк анализа, в simple-режиме — на последнюю фотографию.
+    menu_btn = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu_new")]])
+    btn_on_last_photo = not ai_chunks
+    menu_sent = False
+    for idx, (png, cap) in enumerate(chart_items):
+        attach = btn_on_last_photo and idx == len(chart_items) - 1
         with open(png, "rb") as f:
-            await context.bot.send_photo(update.effective_user.id, photo=f, caption=cap)
+            await context.bot.send_photo(
+                update.effective_user.id, photo=f, caption=cap,
+                reply_markup=menu_btn if attach else None)
+        if attach:
+            menu_sent = True
     if ai_chunks:
-        for ch in ai_chunks:
-            await context.bot.send_message(update.effective_user.id, ch)
+        for i, ch in enumerate(ai_chunks):
+            attach = i == len(ai_chunks) - 1
+            await context.bot.send_message(
+                update.effective_user.id, ch,
+                reply_markup=menu_btn if attach else None)
+            if attach:
+                menu_sent = True
+    if not menu_sent:
+        await context.bot.send_message(
+            update.effective_user.id, "Готово.", reply_markup=menu_btn)
 
 
 async def report_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
