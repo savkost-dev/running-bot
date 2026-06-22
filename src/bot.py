@@ -823,7 +823,7 @@ def _build_help_text(is_admin: bool) -> str:
             "/debug_long — разбор последнего Long Run\n"
             "/ratings — последние оценки рекомендаций\n"
             "/feedbacks — последние сообщения обратной связи\n"
-            "/analyze — анализ последней тренировки через DeepSeek\n"
+            "/analyze — анализ последней тренировки через ИИ\n"
             "/preprocess_mode — режим анализа тренировок (deep/smart)\n"
             "/test_workout — тест Шага 2 (рекомендация группы) на твоих данных\n"
             "/test_long — тест Шага 2 для длительной на твоих данных\n"
@@ -842,7 +842,7 @@ def _build_help_text(is_admin: bool) -> str:
             "/activity — активность по дням и топ действий за 14 дней"
             "\n/msg_user <id> <текст> — написать юзеру от имени бота"
             "\n/last — разбор последней выполненной тренировки (графики факт vs план; /last dark — тёмная тема)"
-            "\n/ai — ИИ-анализ последней тренировки (/ai DD_20260612 — выбрать; /ai data — сырой пакет+промпт)"
+            "\n/report — ИИ-анализ последней тренировки (/report DD_20260612 — выбрать; /report data — сырой пакет+промпт)"
         )
     return text
 
@@ -4934,18 +4934,18 @@ async def cmd_last(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/report (admin+тестеры) — ИИ-анализ тренировки: собирает пакет данных (профиль,
+    """/report — ИИ-анализ тренировки: собирает пакет данных (профиль,
     план, факт по отрезкам, утренний снимок) и шлёт в ИИ, возвращает разбор тренера.
     Read-only, рабочие ветки не трогает.
     /report — последняя DD; /report DD_20260612 | /report 23219097987 — выбор тренировки;
     /report simple|s [селектор] — только графики, без вызова ИИ;
     /report data [селектор] — сырой пакет данных + промпт (без вызова ИИ)."""
-    # /report: админ + временный вайтлист тестеров по username (без @, нижний регистр).
-    _AI_TEST_USERNAMES = {"guslik_run", "kksuussha"}
-    if (update.effective_user.id not in ADMIN_TELEGRAM_IDS
-            and (update.effective_user.username or "").lower() not in _AI_TEST_USERNAMES):
-        return
     db_user_id = get_or_create_user(update.effective_user.id, update.effective_user.full_name)
+    # /report доступен любому, у кого подключён Garmin или Strava (источник разбора).
+    if not (get_token(db_user_id, "garmin") or get_token(db_user_id, "strava")):
+        await update.message.reply_text(
+            "Для разбора тренировки нужен подключённый Garmin или Strava.")
+        return
     args = list(context.args or [])
     raw_mode = bool(args) and args[0].lower() in ("data", "raw", "данные")
     if raw_mode:
