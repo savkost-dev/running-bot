@@ -4933,14 +4933,14 @@ async def cmd_last(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                                          caption=cap, reply_markup=markup)
 
 
-async def cmd_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/ai (admin) — ИИ-анализ тренировки: собирает пакет данных (профиль, план,
-    факт по отрезкам, утренний снимок) и шлёт в DeepSeek, возвращает разбор тренера.
+async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/report (admin+тестеры) — ИИ-анализ тренировки: собирает пакет данных (профиль,
+    план, факт по отрезкам, утренний снимок) и шлёт в ИИ, возвращает разбор тренера.
     Read-only, рабочие ветки не трогает.
-    /ai — последняя DD; /ai DD_20260612 | /ai 23219097987 — выбор тренировки;
-    /ai simple|s [селектор] — только графики, без вызова ИИ;
-    /ai data [селектор] — сырой пакет данных + промпт (без вызова ИИ)."""
-    # /ai: админ + временный вайтлист тестеров по username (без @, нижний регистр).
+    /report — последняя DD; /report DD_20260612 | /report 23219097987 — выбор тренировки;
+    /report simple|s [селектор] — только графики, без вызова ИИ;
+    /report data [селектор] — сырой пакет данных + промпт (без вызова ИИ)."""
+    # /report: админ + временный вайтлист тестеров по username (без @, нижний регистр).
     _AI_TEST_USERNAMES = {"guslik_run", "kksuussha"}
     if (update.effective_user.id not in ADMIN_TELEGRAM_IDS
             and (update.effective_user.username or "").lower() not in _AI_TEST_USERNAMES):
@@ -4975,7 +4975,7 @@ async def cmd_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             from ai_package import build_package, PROMPT
             res = await build_package(db_user_id, selector)
         except Exception as e:
-            logger.error(f"/ai data error for {update.effective_user.id}: {e}", exc_info=True)
+            logger.error(f"/report data error for {update.effective_user.id}: {e}", exc_info=True)
             await msg.edit_text(f"❌ Ошибка сборки: {type(e).__name__}: {e}")
             return
         if not res.get("ok"):
@@ -4995,7 +4995,7 @@ async def cmd_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         from ai_package import build_package, build_charts, PROMPT
         res = await build_package(db_user_id, selector)
     except Exception as e:
-        logger.error(f"/ai error for {update.effective_user.id}: {e}", exc_info=True)
+        logger.error(f"/report error for {update.effective_user.id}: {e}", exc_info=True)
         await msg.edit_text(f"❌ Ошибка сборки: {type(e).__name__}: {e}")
         return
     if not res.get("ok"):
@@ -5008,7 +5008,7 @@ async def cmd_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         charts = await build_charts(res.get("splits"), res.get("plan_steps"),
                                     res["name"], "/tmp", str(db_user_id), dark=False)
     except Exception as e:
-        logger.error(f"/ai charts error: {e}", exc_info=True)
+        logger.error(f"/report charts error: {e}", exc_info=True)
         charts = {}
     chart_items = [(p, c) for p, c in (
         (charts.get("work_png"), "Рабочие интервалы"),
@@ -5094,7 +5094,7 @@ def main():
     app.add_handler(CommandHandler("activity",  cmd_activity))
     app.add_handler(CommandHandler("msg_user",  cmd_msg_user))
     app.add_handler(CommandHandler("last",      cmd_last))
-    app.add_handler(CommandHandler("ai",        cmd_ai))
+    app.add_handler(CommandHandler("report",    cmd_report))
     app.add_handler(CallbackQueryHandler(msg_user_callback,  pattern=r"^msgu_\d+$"))
     app.add_handler(CallbackQueryHandler(b_user_callback,   pattern=r"^b_user_\d+$"))
     app.add_handler(CallbackQueryHandler(a_user_callback,   pattern=r"^a_user_\d+$"))

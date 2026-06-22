@@ -245,7 +245,7 @@ def _avg(vals):
 def _pick_activity(acts, selector):
     runs = [a for a in (acts or [])
             if "running" in str((a.get("activityType") or {}).get("typeKey", ""))
-            and "DD_" in str(a.get("activityName") or "")]
+            and re.search(r"DD[-_]", str(a.get("activityName") or ""))]
     if selector is None:
         return runs[0] if runs else None
     if str(selector).isdigit():
@@ -254,10 +254,11 @@ def _pick_activity(acts, selector):
 
 
 def _date_from_name(name):
-    """(wdate 'YYYY-MM-DD', wgroup) из имени по маске DD_YYYYMMDD-<группа>_lvl."""
-    m = re.search(r"DD_(\d{8})", name or "")
+    """(wdate 'YYYY-MM-DD', wgroup) из имени по маске DD<разд>YYYYMMDD<разд><группа><разд>lvl.
+    Разделители '-' и '_' считаются эквивалентными."""
+    m = re.search(r"DD[-_](\d{8})", name or "")
     wdate = f"{m.group(1)[:4]}-{m.group(1)[4:6]}-{m.group(1)[6:]}" if m else None
-    mg = re.search(r"DD_\d{8}-([\d.]+)_lvl", name or "")
+    mg = re.search(r"DD[-_]\d{8}[-_]([\d.]+)[-_]lvl", name or "")
     return wdate, (mg.group(1) if mg else None)
 
 
@@ -321,7 +322,7 @@ async def _strava_candidate(db_user_id, selector):
         return None
     acts = await strava.get_recent_activities(token, days=30)
     runs = [a for a in (acts or [])
-            if a.get("type") == "Run" and "DD_" in str(a.get("name") or "")]
+            if a.get("type") == "Run" and re.search(r"DD[-_]", str(a.get("name") or ""))]
     if selector is None:
         act = runs[0] if runs else None
     elif str(selector).isdigit():
