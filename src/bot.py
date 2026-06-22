@@ -158,6 +158,7 @@ def _build_screen1_keyboard() -> InlineKeyboardMarkup:
          InlineKeyboardButton("🕐 Long Run",   callback_data="get_long_run")],
         [InlineKeyboardButton("☀️ Утро",       callback_data="get_morning"),
          InlineKeyboardButton("👤 Профиль",   callback_data="my_profile")],
+        [InlineKeyboardButton("📊 Разбор тренировки", callback_data="get_report")],
         [InlineKeyboardButton("💬 Обратная связь", callback_data="feedback_show"),
          InlineKeyboardButton("❓ Справка",        callback_data="help")],
         [InlineKeyboardButton("⚙️ Настройки →",   callback_data="show_settings")],
@@ -796,6 +797,7 @@ def _build_help_text(is_admin: bool) -> str:
         "/workout — рекомендация группы для вт/пт тренировки\n"
         "/long — рекомендация для воскресного Long Run\n"
         "/morning — утренняя проверка восстановления\n"
+        "/report — разбор прошедшей тренировки: графики и анализ от ИИ\n"
         "/status — статус подключённых сервисов\n"
         "/refresh — обновить данные из Strava\n"
         "/profile — профиль (VO2max, лактатный порог)\n"
@@ -4940,11 +4942,12 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     /report — последняя DD; /report DD_20260612 | /report 23219097987 — выбор тренировки;
     /report simple|s [селектор] — только графики, без вызова ИИ;
     /report data [селектор] — сырой пакет данных + промпт (без вызова ИИ)."""
+    chat_id = update.effective_user.id
     db_user_id = get_or_create_user(update.effective_user.id, update.effective_user.full_name)
     # /report доступен любому, у кого подключён Garmin или Strava (источник разбора).
     if not (get_token(db_user_id, "garmin") or get_token(db_user_id, "strava")):
-        await update.message.reply_text(
-            "Для разбора тренировки нужен подключённый Garmin или Strava.")
+        await context.bot.send_message(
+            chat_id, "Для разбора тренировки нужен подключённый Garmin или Strava.")
         return
     args = list(context.args or [])
     raw_mode = bool(args) and args[0].lower() in ("data", "raw", "данные")
@@ -4970,7 +4973,7 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return chunks
 
     if raw_mode:
-        msg = await update.message.reply_text("⏳ Собираю пакет данных…")
+        msg = await context.bot.send_message(chat_id, "⏳ Собираю пакет данных…")
         try:
             from ai_package import build_package, PROMPT
             res = await build_package(db_user_id, selector)
@@ -4990,7 +4993,7 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     wait = ("⏳ Собираю данные и графики…" if simple_mode else
             "⏳ Собираю данные, графики и анализ через ИИ…\nМожет занять 1-3 мин.")
-    msg = await update.message.reply_text(wait)
+    msg = await context.bot.send_message(chat_id, wait)
     try:
         from ai_package import build_package, build_charts, PROMPT
         res = await build_package(db_user_id, selector)
@@ -5044,6 +5047,13 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if ai_chunks:
         for ch in ai_chunks:
             await context.bot.send_message(update.effective_user.id, ch)
+
+
+async def report_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Кнопка меню «Разбор» → тот же разбор, что /report (без аргументов)."""
+    query = update.callback_query
+    await query.answer()
+    await cmd_report(update, context)
 
 
 def main():
@@ -5103,6 +5113,7 @@ def main():
     app.add_handler(CallbackQueryHandler(pb_user_callback,  pattern=r"^pb_user_\d+$"))
     app.add_handler(CallbackQueryHandler(pa_user_callback,  pattern=r"^pa_user_\d+$"))
     app.add_handler(CallbackQueryHandler(panalyze_callback, pattern=r"^panalyze_(interval|long)$"))
+    app.add_handler(CallbackQueryHandler(report_callback,   pattern=r"^get_report$"))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     app.add_error_handler(global_error_handler)
