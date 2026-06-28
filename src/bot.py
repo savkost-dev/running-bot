@@ -895,7 +895,8 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Запросы за 7 дней:\n"
         f"📋 /workout: {s['workout_7d']}\n"
         f"🕐 /long: {s['long_7d']}\n"
-        f"☀️ /morning: {s['morning_7d']}\n\n"
+        f"☀️ /morning: {s['morning_7d']}\n"
+        f"📊 /report: {s.get('report_7d', 0)}\n\n"
         f"⭐ Средняя оценка: {s.get('avg_rating') or '—'}/10 (за 30 дней)\n"
         f"📊 Оценок получено: {s.get('ratings_30d', 0)}\n"
         f"💬 Обратной связи: {s.get('feedback_total', 0)} "
@@ -4775,6 +4776,7 @@ _BTN_TO_CMD = {
     "get_workout":  "/workout",
     "get_long_run": "/long",
     "get_morning":  "/morning",
+    "get_report":   "/report",
 }
 
 
