@@ -25,7 +25,7 @@ from database import (
     get_users_for_notification,
     get_garmin_recovery_cache, save_garmin_recovery_cache,
     user_exists, log_activity, get_bot_stats, count_users_with_service,
-    get_activity_daily, get_activity_top, get_activity_users,
+    get_activity_daily, get_activity_top, get_activity_users, get_activity_report,
     delete_token,
     get_all_users_with_details, get_users_with_service_full, get_users_with_profile_full,
     save_feedback, save_rating, get_recent_ratings, get_recent_feedbacks,
@@ -4819,9 +4819,11 @@ async def cmd_activity(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         lines += ["", "Топ действий:"]
         for cmd, cnt, uniq in top:
             lines.append(f"  {cmd}: {cnt} (юзеров: {uniq})")
+    rep_cnt, rep_uniq = get_activity_report(days)
+    lines += ["", f"📊 /report: {rep_cnt} (юзеров: {rep_uniq})"]
     who = get_activity_users(days)
     if who:
-        lines += ["", f"Кто активен ({len(who)}):"]
+        lines += ["", f"Кто активен ({len(who)}, по дате последней активности):"]
         for name, username, cnt, last_d in who:
             nick = f" (@{username})" if username else ""
             lines.append(f"  {name}{nick}: {cnt} действий, посл. {last_d}")
