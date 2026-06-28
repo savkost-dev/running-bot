@@ -618,23 +618,23 @@ def get_bot_stats() -> dict:
         profile = conn.execute(
             "SELECT COUNT(*) FROM user_profile WHERE vo2max IS NOT NULL"
         ).fetchone()[0]
-        workout_7d = conn.execute(
-            "SELECT COUNT(*) FROM user_activity "
+        workout_7d, workout_users_7d = conn.execute(
+            "SELECT COUNT(*), COUNT(DISTINCT user_id) FROM user_activity "
             "WHERE command = '/workout' AND created_at >= datetime('now', '-7 days')"
-        ).fetchone()[0]
-        long_7d = conn.execute(
-            "SELECT COUNT(*) FROM user_activity "
+        ).fetchone()
+        long_7d, long_users_7d = conn.execute(
+            "SELECT COUNT(*), COUNT(DISTINCT user_id) FROM user_activity "
             "WHERE command = '/long' AND created_at >= datetime('now', '-7 days')"
-        ).fetchone()[0]
-        morning_7d = conn.execute(
-            "SELECT COUNT(*) FROM user_activity "
+        ).fetchone()
+        morning_7d, morning_users_7d = conn.execute(
+            "SELECT COUNT(*), COUNT(DISTINCT user_id) FROM user_activity "
             "WHERE command = '/morning' AND created_at >= datetime('now', '-7 days')"
-        ).fetchone()[0]
-        report_7d = conn.execute(
-            "SELECT COUNT(*) FROM user_activity "
+        ).fetchone()
+        report_7d, report_users_7d = conn.execute(
+            "SELECT COUNT(*), COUNT(DISTINCT user_id) FROM user_activity "
             "WHERE command IN ('/report', 'btn:get_report') "
             "AND created_at >= datetime('now', '-7 days')"
-        ).fetchone()[0]
+        ).fetchone()
         avg_rating_row = conn.execute(
             "SELECT AVG(rating), COUNT(*) FROM recommendation_ratings "
             "WHERE created_at >= datetime('now', '-30 days')"
@@ -655,6 +655,8 @@ def get_bot_stats() -> dict:
         "profile": profile,
         "workout_7d": workout_7d, "long_7d": long_7d, "morning_7d": morning_7d,
         "report_7d": report_7d,
+        "workout_users_7d": workout_users_7d, "long_users_7d": long_users_7d,
+        "morning_users_7d": morning_users_7d, "report_users_7d": report_users_7d,
         "avg_rating": avg_rating, "ratings_30d": ratings_30d,
         "feedback_total": feedback_total, "feedback_bugs": feedback_bugs,
         "feedback_features": feedback_features,
