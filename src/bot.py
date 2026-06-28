@@ -967,9 +967,15 @@ async def cmd_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     nothing      = [(tid, n, u) for tid, n, u in all_tids_ordered
                     if tid not in profile_tids and tid not in any_service_tids]
 
+    # Неактивных (заблокировавших бота) исключаем из всех категорий выше.
+    inactive = get_inactive_users()
+    inactive_tids = {row[0] for row in inactive}
+    only_profile = [r for r in only_profile if r[0] not in inactive_tids]
+    nothing = [r for r in nothing if r[0] not in inactive_tids]
+
     lines = ["📊 Пользователи по сервисам:\n"]
     for svc, label in service_defs:
-        rows = service_users[svc]
+        rows = [r for r in service_users[svc] if r[0] not in inactive_tids]
         refs = ", ".join(_fmt_user_ref(n, u) for _, n, u in rows)
         lines.append(f"{label} ({len(rows)}): {refs or '—'}")
 
@@ -979,7 +985,6 @@ async def cmd_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     refs = ", ".join(_fmt_user_ref(n, u) for _, n, u in nothing)
     lines.append(f"❌ Ничего не подключено ({len(nothing)}): {refs or '—'}")
 
-    inactive = get_inactive_users()
     if inactive:
         refs = ", ".join(_fmt_user_ref(n, u) for _, n, u in inactive)
         lines.append(f"\n💤 Неактивных (заблокировали бота) ({len(inactive)}): {refs}")
