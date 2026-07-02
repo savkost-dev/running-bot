@@ -837,6 +837,7 @@ def _build_help_text(is_admin: bool) -> str:
             "/b_user — вариант B для выбранного пользователя\n"
             "/a_user — вариант A для выбранного пользователя\n"
             "/w_user — реальный путь пользователя (его ai_mode: B или A)\n"
+            "/report_user — разбор тренировки выбранного пользователя\n"
             "/l_user — лонг для выбранного пользователя\n"
             "/p_b — промпт варианта B для себя\n"
             "/p_b_user — промпт варианта B для выбранного пользователя\n"
@@ -4946,7 +4947,8 @@ async def cmd_last(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                                          caption=cap, reply_markup=markup)
 
 
-async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                     target_db_user_id: int | None = None) -> None:
     """/report — ИИ-анализ тренировки: собирает пакет данных (профиль,
     план, факт по отрезкам, утренний снимок) и шлёт в ИИ, возвращает разбор тренера.
     Read-only, рабочие ветки не трогает.
@@ -4954,7 +4956,7 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     /report simple|s [селектор] — только графики, без вызова ИИ;
     /report data [селектор] — сырой пакет данных + промпт (без вызова ИИ)."""
     chat_id = update.effective_user.id
-    db_user_id = get_or_create_user(update.effective_user.id, update.effective_user.full_name)
+    db_user_id = target_db_user_id or get_or_create_user(update.effective_user.id, update.effective_user.full_name)
     # /report доступен любому, у кого подключён Garmin или Strava (источник разбора).
     if not (get_token(db_user_id, "garmin") or get_token(db_user_id, "strava")):
         await context.bot.send_message(
@@ -5079,6 +5081,38 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             update.effective_user.id, "Готово.", reply_markup=menu_btn)
 
 
+async def report_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/report_user (admin) — разбор тренировки выбранного пользователя."""
+    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+        return
+    users = get_users_list_for_b()
+    if not users:
+        await update.message.reply_text("Нет пользователей.")
+        return
+    keyboard = [
+        [InlineKeyboardButton(
+            u["name"] + (f" (@{u['username']})" if u.get("username") else ""),
+            callback_data=f"report_user_{u['db_user_id']}"
+        )]
+        for u in users
+    ]
+    await update.message.reply_text(
+        "Выбери пользователя для разбора тренировки:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+async def report_user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Выбор пользователя → разбор его тренировки (вывод админу)."""
+    query = update.callback_query
+    if query.from_user.id not in ADMIN_TELEGRAM_IDS:
+        await query.answer("Нет доступа.")
+        return
+    await query.answer()
+    target = int(query.data.rsplit("_", 1)[1])
+    await cmd_report(update, context, target_db_user_id=target)
+
+
 async def report_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Кнопка меню «Разбор» → тот же разбор, что /report (без аргументов)."""
     query = update.callback_query
@@ -5135,10 +5169,12 @@ def main():
     app.add_handler(CommandHandler("msg_user",  cmd_msg_user))
     app.add_handler(CommandHandler("last",      cmd_last))
     app.add_handler(CommandHandler("report",    cmd_report))
+    app.add_handler(CommandHandler("report_user", report_user_command))
     app.add_handler(CallbackQueryHandler(msg_user_callback,  pattern=r"^msgu_\d+$"))
     app.add_handler(CallbackQueryHandler(b_user_callback,   pattern=r"^b_user_\d+$"))
     app.add_handler(CallbackQueryHandler(a_user_callback,   pattern=r"^a_user_\d+$"))
     app.add_handler(CallbackQueryHandler(w_user_callback,   pattern=r"^w_user_\d+$"))
+    app.add_handler(CallbackQueryHandler(report_user_callback, pattern=r"^report_user_\d+$"))
     app.add_handler(CallbackQueryHandler(l_user_callback,   pattern=r"^l_user_\d+$"))
     app.add_handler(CallbackQueryHandler(pb_user_callback,  pattern=r"^pb_user_\d+$"))
     app.add_handler(CallbackQueryHandler(pa_user_callback,  pattern=r"^pa_user_\d+$"))
