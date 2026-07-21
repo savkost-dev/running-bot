@@ -482,6 +482,221 @@ async def build_charts(splits, plan_steps, name: str, out_dir: str,
     return {"work_png": work_png, "rest_png": rest_png, "table_png": table_png}
 
 
+async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source: str,
+                            s4: dict | None, out_dir: str, tag: str,
+                            dark: bool = False) -> str | None:
+    """Вертикальная карточка разбора под телефон (портрет, три зоны сверху вниз):
+    1) шапка — заголовок, название/дата/группа, суть, структура плана;
+    2) факт — таблица повторов (зебра, заливка отклонений, строка «ср.»);
+    3) итоги — плашки (ср. темп работы vs цель, ср. отдых, повторы).
+    ПАРАЛЛЕЛЬНАЯ боевой _plot_table_segmented — activity_review не меняет.
+    Возвращает путь к PNG или None."""
+    import textwrap
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import FancyBboxPatch, Rectangle
+
+    ar.DARK_MODE = dark
+    ordered = ar._ordered_laps(splits)
+    ws, rmeta, rw, rr, maxi = ar._table_model(ordered, plan_steps)
+    if not ws or not maxi:
+        return None
+    rest_laps = [l for l in ordered
+                 if ar._role_of(l["step"], l["intensity"], plan_steps) == "rest"]
+    work_laps = [l for l in ordered
+                 if ar._role_of(l["step"], l["intensity"], plan_steps) == "work"]
+    rest_plan = next((s for s in plan_steps if s["stype"] == "recovery" and s["bounds"]), None)
+    rest_target = sum(rest_plan["bounds"]) / 2.0 if rest_plan else None
+    has_rest = bool(rest_laps)
+
+    def _dev(fact, et):
+        if et is None or fact is None:
+            return "—", None
+        d = int(round(fact - et))
+        if d == 0:
+            return "0", None
+        sign = "+" if d > 0 else "−"
+        return f"{sign}{abs(d)}", ar._delta_color(abs(d))
+
+    # ── Данные таблицы (зона 2) ──
+    headers = ["№"]
+    for st in ws:
+        lbl = rmeta[st]["label"]
+        headers += [f"{lbl}\nвремя", f"{lbl}\nтемп", f"{lbl}\nоткл"]
+    if has_rest:
+        headers += ["Отдых\nвремя", "Отдых\nтемп", "Отдых\nоткл"]
+
+    rows, cell_fill = [], {}
+    _FILL = {"green": "#2e7d32", "gold": "#b8860b", "red": "#c62828"}
+    for i in range(1, maxi + 1):
+        row = [str(i)]
+        col = 1
+        for st in ws:
+            cell = rw.get(i, {}).get(st)
+            if cell:
+                dur, pace = cell
+                dev, color = _dev(pace, ar._seg_etalon(rmeta[st], i))
+                row += [_fmt_time(dur), _fmt_pace(pace), dev]
+                if color:
+                    cell_fill[(i, col + 2)] = _FILL[color]
+            else:
+                row += ["—", "—", "—"]
+            col += 3
+        if has_rest:
+            rc = rr.get(i)
+            if rc:
+                dev, color = _dev(rc[1], rest_target)
+                row += [_fmt_time(rc[0]), _fmt_pace(rc[1]), dev]
+                if color:
+                    cell_fill[(i, col + 2)] = _FILL[color]
+            else:
+                row += ["—", "—", "—"]
+        rows.append(row)
+
+    avg_row = ["ср."]
+    for st in ws:
+        cells = [rw[i][st] for i in rw if st in rw[i]]
+        durs = [c[0] for c in cells if c[0] is not None]
+        pcs = [c[1] for c in cells if c[1] is not None]
+        avg_row += [_fmt_time(sum(durs) / len(durs)) if durs else "—",
+                    _fmt_pace(sum(pcs) / len(pcs)) if pcs else "—", ""]
+    if has_rest:
+        durs = [v[0] for v in rr.values() if v[0] is not None]
+        pcs = [v[1] for v in rr.values() if v[1] is not None]
+        avg_row += [_fmt_time(sum(durs) / len(durs)) if durs else "—",
+                    _fmt_pace(sum(pcs) / len(pcs)) if pcs else "—", ""]
+    rows.append(avg_row)
+    avg_r = maxi + 1
+
+    # ── Шапка (зона 1) ──
+    meta_bits = [b for b in (wdate, f"группа {wgroup}" if wgroup else None, source) if b]
+    meta_line = "  ·  ".join(meta_bits)
+    summary = ""
+    if s4:
+        summary = (s4.get("summary") or s4.get("overall_purpose") or "").strip()
+    sum_lines = textwrap.wrap(summary, width=62)[:3] if summary else []
+    if summary and len(textwrap.wrap(summary, width=62)) > 3:
+        sum_lines[-1] = sum_lines[-1].rstrip(".,;… ") + "…"
+    # Структура плана: «7 × 600 м @ 3:52→3:59  ·  отдых 200 м @ 6:10»
+    plan_bits = []
+    for st in ws:
+        m = rmeta[st]
+        b = m["bounds"]
+        if b:
+            slow, fast = b
+            tgt = (_fmt_pace((slow + fast) / 2) if abs(slow - fast) <= ar.WORK_EXACT_EPS
+                   else f"{_fmt_pace(slow)}→{_fmt_pace(fast)}")
+            plan_bits.append(f"{m['n']} × {m['label']} @ {tgt}")
+        else:
+            plan_bits.append(f"{m['n']} × {m['label']}")
+    if rest_plan:
+        rd = f"{int(rest_plan['dist'])} м " if rest_plan.get("dist") else ""
+        plan_bits.append(f"отдых {rd}@ {_fmt_pace(rest_target)}")
+    plan_line = "  ·  ".join(plan_bits)
+
+    # ── Итоги (зона 3) ──
+    work_avg = _avg([l["pace"] for l in work_laps])
+    rest_avg = _avg([l["pace"] for l in rest_laps]) if has_rest else None
+    b0 = rmeta[ws[0]]["bounds"]
+    if b0:
+        s0, f0 = b0
+        work_goal = (_fmt_pace((s0 + f0) / 2) if abs(s0 - f0) <= ar.WORK_EXACT_EPS
+                     else f"{_fmt_pace(s0)}→{_fmt_pace(f0)}")
+    else:
+        work_goal = "—"
+    plaques = [("СР. ТЕМП РАБОТЫ", _fmt_pace(work_avg) if work_avg else "—",
+                f"цель: {work_goal}", "#1f77b4")]
+    if has_rest:
+        plaques.append(("СР. ТЕМП ОТДЫХА", _fmt_pace(rest_avg) if rest_avg else "—",
+                        f"цель: {_fmt_pace(rest_target) if rest_target else '—'}", "#ff8c00"))
+    plaques.append(("ПОВТОРЫ", str(len(work_laps)),
+                    "выполнено", "#2e7d32"))
+
+    # ── Компоновка: портрет, три зоны ──
+    th = ar._theme()
+    accent = "#ff8c00"
+    n_hdr_lines = 3 + len(sum_lines) + (1 if plan_line else 0)
+    hdr_in = 0.42 * n_hdr_lines + 0.5
+    tbl_in = 0.46 * (maxi + 2)
+    tot_in = 1.9
+    fig_h = hdr_in + tbl_in + tot_in + 0.6
+    fig_w = 9.0
+    with plt.rc_context(ar._rc()):
+        fig = plt.figure(figsize=(fig_w, fig_h))
+        gs = fig.add_gridspec(3, 1, height_ratios=[hdr_in, tbl_in, tot_in],
+                              hspace=0.04, left=0.03, right=0.97, top=0.985, bottom=0.02)
+        ax_h = fig.add_subplot(gs[0]); ax_h.axis("off")
+        ax_t = fig.add_subplot(gs[1]); ax_t.axis("off")
+        ax_b = fig.add_subplot(gs[2]); ax_b.axis("off")
+
+        # Зона 1: шапка
+        y = 1.0
+        dy = 1.0 / max(n_hdr_lines + 1, 4)
+        ax_h.text(0, y, "РАЗБОР ТРЕНИРОВКИ", fontsize=20, fontweight="bold",
+                  color=accent, va="top", ha="left", transform=ax_h.transAxes)
+        y -= dy * 1.25
+        ax_h.text(0, y, name or "", fontsize=13, fontweight="bold",
+                  va="top", ha="left", transform=ax_h.transAxes)
+        y -= dy
+        ax_h.text(0, y, meta_line, fontsize=10.5, alpha=0.8,
+                  va="top", ha="left", transform=ax_h.transAxes)
+        y -= dy
+        for ln in sum_lines:
+            ax_h.text(0, y, ln, fontsize=10.5, style="italic",
+                      va="top", ha="left", transform=ax_h.transAxes)
+            y -= dy
+        if plan_line:
+            ax_h.text(0, y, "ПЛАН: " + plan_line, fontsize=11, fontweight="bold",
+                      va="top", ha="left", transform=ax_h.transAxes)
+
+        # Зона 2: таблица (bbox на всю зону — без разрывов)
+        tbl = ax_t.table(cellText=rows, colLabels=headers,
+                         cellLoc="center", bbox=[0, 0, 1, 1])
+        tbl.auto_set_font_size(False)
+        tbl.set_fontsize(10)
+        zebra = "#2a2a2a" if dark else "#f2f2f2"
+        hdr_bg = "#333333" if not dark else "#3a3a3a"
+        for (r, c), cell in tbl.get_celld().items():
+            cell.set_edgecolor("#999999")
+            if r == 0:
+                cell.set_facecolor(hdr_bg)
+                cell.set_text_props(fontweight="bold", color="white")
+            elif r == avg_r:
+                cell.set_facecolor(th["box_face"])
+                cell.set_text_props(fontweight="bold", color=th["text"])
+            else:
+                cell.set_facecolor(zebra if r % 2 == 0 else "none")
+                cell.set_text_props(color=th["text"])
+        for (r, c), fill in cell_fill.items():
+            tbl[r, c].set_facecolor(fill)
+            tbl[r, c].set_text_props(color="white", fontweight="bold")
+
+        # Зона 3: плашки итогов
+        ax_b.set_xlim(0, 1); ax_b.set_ylim(0, 1)
+        k = len(plaques)
+        pw = min(0.30, 0.96 / k - 0.02)
+        gap = (1.0 - k * pw) / (k + 1)
+        for idx, (title, big, small, color) in enumerate(plaques):
+            x0 = gap + idx * (pw + gap)
+            ax_b.add_patch(FancyBboxPatch((x0, 0.12), pw, 0.74,
+                           boxstyle="round,pad=0.015", linewidth=2,
+                           edgecolor=color, facecolor="none",
+                           transform=ax_b.transAxes))
+            cx = x0 + pw / 2
+            ax_b.text(cx, 0.74, title, fontsize=10, fontweight="bold", color=color,
+                      ha="center", va="center", transform=ax_b.transAxes)
+            ax_b.text(cx, 0.47, big, fontsize=22, fontweight="bold", color=color,
+                      ha="center", va="center", transform=ax_b.transAxes)
+            ax_b.text(cx, 0.22, small, fontsize=9.5, alpha=0.85,
+                      ha="center", va="center", transform=ax_b.transAxes)
+        ax_b.text(0.99, 0.0, "DoDick · @DD_adviser_bot", fontsize=8.5, alpha=0.6,
+                  ha="right", va="bottom", transform=ax_b.transAxes)
+
+        out_path = os.path.join(out_dir, f"card_{tag}.png")
+        fig.savefig(out_path, dpi=120)
+        plt.close(fig)
+    return out_path
+
+
 async def analyze_with_ai(db_user_id: int, selector=None, mode: str = "deep") -> dict:
     """Собирает пакет и отправляет его в DeepSeek с промптом-инструкцией.
     Возвращает {ok, msg, name, answer, package}. answer — свободный текст анализа от ИИ."""

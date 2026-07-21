@@ -537,13 +537,22 @@ async def cmd_connect_strava(update: Update, context: ContextTypes.DEFAULT_TYPE)
     _mark_user_active_if_needed(user.id, user.full_name, user.username)
     auth_url = get_auth_url(user.id)
     keyboard = [[InlineKeyboardButton("🔗 Войти в Strava", url=auth_url)]]
-    await update.message.reply_text(
-        "⚠️ Strava временно ограничена — подключение новых пользователей на проверке у Strava.\n"
-        "Используй Garmin или COROS (/connect_garmin, /connect_coros) для полноценной работы.\n\n"
+    caption = (
         "Нажми кнопку и авторизуйся в Strava.\n\n"
-        "После авторизации ты автоматически получишь сообщение в Telegram — ничего копировать не нужно.",
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        "После авторизации ты автоматически получишь сообщение в Telegram — ничего копировать не нужно.\n\n"
+        "⚠️ Strava временно ограничена — подключение новых пользователей на проверке у Strava. "
+        "Пока можно использовать Garmin или COROS (/connect_garmin, /connect_coros)."
     )
+    badge = os.path.join(os.path.dirname(__file__), "..", "img",
+                         "btn_strava_connect_with_orange_x2.png")
+    try:
+        with open(badge, "rb") as f:
+            await update.message.reply_photo(
+                photo=f, caption=caption,
+                reply_markup=InlineKeyboardMarkup(keyboard))
+    except FileNotFoundError:
+        await update.message.reply_text(
+            caption, reply_markup=InlineKeyboardMarkup(keyboard))
 
 
 async def cmd_connect_whoop(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -837,7 +846,7 @@ def _build_help_text(is_admin: bool) -> str:
             "/b_user — вариант B для выбранного пользователя\n"
             "/a_user — вариант A для выбранного пользователя\n"
             "/w_user — реальный путь пользователя (его ai_mode: B или A)\n"
-            "/report_user — разбор тренировки выбранного пользователя\n"
+            "/report_user — разбор тренировки выбранного пользователя (/report_user 18886572975 — конкретная по id/маске)\n"
             "/l_user — лонг для выбранного пользователя\n"
             "/p_b — промпт варианта B для себя\n"
             "/p_b_user — промпт варианта B для выбранного пользователя\n"
@@ -4948,7 +4957,8 @@ async def cmd_last(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
-                     target_db_user_id: int | None = None) -> None:
+                     target_db_user_id: int | None = None,
+                     selector_override: str | None = None) -> None:
     """/report — ИИ-анализ тренировки: собирает пакет данных (профиль,
     план, факт по отрезкам, утренний снимок) и шлёт в ИИ, возвращает разбор тренера.
     Read-only, рабочие ветки не трогает.
@@ -4969,7 +4979,7 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
     simple_mode = bool(args) and args[0].lower() in ("simple", "s")
     if simple_mode:
         args = args[1:]
-    selector = args[0] if args else None
+    selector = selector_override if selector_override else (args[0] if args else None)
 
     import html
 
@@ -5082,9 +5092,12 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
 
 async def report_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/report_user (admin) — разбор тренировки выбранного пользователя."""
+    """/report_user (admin) — разбор тренировки выбранного пользователя.
+    /report_user — последняя DD; /report_user 18886572975 | /report_user DD_20260612 — конкретная."""
     if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
         return
+    selector = context.args[0] if context.args else None
+    context.user_data["report_user_selector"] = selector
     users = get_users_list_for_b()
     if not users:
         await update.message.reply_text("Нет пользователей.")
@@ -5096,8 +5109,10 @@ async def report_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         )]
         for u in users
     ]
+    title = (f"Разбор тренировки «{selector}» — выбери пользователя:" if selector
+             else "Выбери пользователя для разбора тренировки:")
     await update.message.reply_text(
-        "Выбери пользователя для разбора тренировки:",
+        title,
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
@@ -5110,7 +5125,8 @@ async def report_user_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         return
     await query.answer()
     target = int(query.data.rsplit("_", 1)[1])
-    await cmd_report(update, context, target_db_user_id=target)
+    sel = context.user_data.pop("report_user_selector", None)
+    await cmd_report(update, context, target_db_user_id=target, selector_override=sel)
 
 
 async def report_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
