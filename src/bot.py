@@ -30,6 +30,7 @@ from database import (
     get_all_users_with_details, get_users_with_service_full, get_users_with_profile_full,
     save_feedback, save_rating, get_recent_ratings, get_recent_feedbacks,
     save_workout_analysis, get_workout_analysis, get_latest_workout_analysis,
+    save_vo2max_device, save_vo2max_manual,
     get_preprocess_mode, set_preprocess_mode,
     get_users_list_for_b,
     get_morning_caught,
@@ -1691,6 +1692,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 profile = get_user_profile(db_user_id)
                 garmin_parts = []
                 if not isinstance(vo2max_val, Exception) and vo2max_val is not None:
+                    save_vo2max_device(db_user_id, float(vo2max_val), "garmin")
                     if not (profile or {}).get("vo2max_locked"):
                         save_user_profile(db_user_id, vo2max=float(vo2max_val), vo2max_source="auto")
                     garmin_parts.append(f"VO2max {float(vo2max_val):.0f}")
@@ -1721,6 +1723,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 coros_vo2max = (coros_data or {}).get("fitness", {}).get("vo2max")
                 if coros_vo2max is not None:
                     profile = get_user_profile(db_user_id)
+                    save_vo2max_device(db_user_id, float(coros_vo2max), "coros")
                     if not (profile or {}).get("vo2max_locked"):
                         save_user_profile(db_user_id, vo2max=float(coros_vo2max), vo2max_source="auto")
                     coros_parts.append(f"VO2max {float(coros_vo2max):.0f}")
@@ -1738,6 +1741,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 polar_parts = []
                 if polar_vo2max is not None:
                     profile = get_user_profile(db_user_id)
+                    save_vo2max_device(db_user_id, float(polar_vo2max), "polar")
                     if not (profile or {}).get("vo2max_locked"):
                         save_user_profile(db_user_id, vo2max=float(polar_vo2max), vo2max_source="auto")
                     polar_parts.append(f"VO2max {float(polar_vo2max):.0f}")
@@ -2187,6 +2191,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         vo2max = float(text.replace(',', '.'))
         db_user_id = get_or_create_user(user.id, user.full_name, user.username)
         save_user_profile(db_user_id, vo2max=vo2max, vo2max_source="manual")
+        save_vo2max_manual(db_user_id, vo2max)
         try:
             zones.recalculate_and_save(db_user_id)
         except Exception as e:
@@ -2276,6 +2281,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             if garmin_vo2max_found:
                 save_user_profile(db_user_id, vo2max=vo2max, vo2max_source="garmin")
+                save_vo2max_device(db_user_id, float(vo2max), "garmin")
             if garmin_lt_found:
                 save_user_profile(db_user_id,
                     lactate_threshold_pace=lt["pace"],
@@ -2378,6 +2384,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             if coros_vo2max_found:
                 save_user_profile(db_user_id, vo2max=vo2max, vo2max_source="coros")
+                save_vo2max_device(db_user_id, float(vo2max), "coros")
                 try:
                     zones.recalculate_and_save(db_user_id)
                 except Exception as e:
@@ -4098,6 +4105,7 @@ async def scheduled_cache_refresh(context: ContextTypes.DEFAULT_TYPE):
         # ── VO2max из трекера (тихо) ───────────────────────────
         new_vo2max, tracker_key, tracker_name = await _get_vo2max_from_tracker(db_user_id)
         if new_vo2max is not None:
+            save_vo2max_device(db_user_id, float(new_vo2max), tracker_key or "auto")
             profile = get_user_profile(db_user_id)
             if not (profile or {}).get("vo2max_locked"):
                 old_vo2max = (profile or {}).get("vo2max")
@@ -4176,6 +4184,7 @@ async def scheduled_data_refresh(context: ContextTypes.DEFAULT_TYPE):
                         return_exceptions=True,
                     )
                     if not isinstance(vo2max, Exception) and vo2max:
+                        save_vo2max_device(db_user_id, float(vo2max), "garmin")
                         if not (profile or {}).get("vo2max_locked"):
                             save_user_profile(db_user_id, vo2max=vo2max, vo2max_source="garmin")
                             vo2max_ok += 1

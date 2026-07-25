@@ -363,6 +363,8 @@ async def _notify_polar(telegram_id: int, db_user_id: int,
 
         polar_vo2max_found = not isinstance(vo2max, Exception) and vo2max is not None
         if polar_vo2max_found:
+            from database import save_vo2max_device
+            save_vo2max_device(db_user_id, float(vo2max), "polar")
             save_user_profile(db_user_id, vo2max=vo2max, vo2max_source="polar")
             try:
                 import zones as _zones

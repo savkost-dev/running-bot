@@ -252,7 +252,13 @@ def init_db():
                 "vo2max_locked INTEGER DEFAULT 0",
                 "lactate_locked INTEGER DEFAULT 0",
                 "birthdate TEXT",
-                "coros_region TEXT"):
+                "coros_region TEXT",
+                "vo2max_device REAL",
+                "vo2max_device_source TEXT",
+                "vo2max_device_at TEXT",
+                "vo2max_manual REAL",
+                "vo2max_manual_at TEXT",
+                "vo2max_priority TEXT"):
         with get_connection() as conn:
             try:
                 conn.execute(f"ALTER TABLE user_profile ADD COLUMN {col}")
@@ -1236,6 +1242,79 @@ def get_recent_ratings(limit: int = 20) -> list:
             ORDER BY r.created_at DESC
             LIMIT ?
         """, (limit,)).fetchall()
+
+
+# ── VO2max v2: device/manual + приоритет ────────────────────
+# Новая схема хранения (пока никем не вызывается, боевые ветки не тронуты):
+# значение из систем и ручное живут в разных полях, приоритет решает чтение.
+
+def save_vo2max_device(user_id: int, value: float, source: str) -> None:
+    """Запись VO2max из трекера (garmin/coros/polar). Всегда, без порогов и lock —
+    приоритет решается при чтении, а не при записи."""
+    now = datetime.now().isoformat()
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE user_profile SET vo2max_device = ?, vo2max_device_source = ?, "
+            "vo2max_device_at = ? WHERE user_id = ?",
+            (float(value), source, now, user_id))
+
+
+def save_vo2max_manual(user_id: int, value: float) -> None:
+    """Запись ручного VO2max (кнопка в профиле). Ставит приоритет manual —
+    явный ввод означает «используй моё», пока пользователь не переключит."""
+    now = datetime.now().isoformat()
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE user_profile SET vo2max_manual = ?, vo2max_manual_at = ?, "
+            "vo2max_priority = 'manual' WHERE user_id = ?",
+            (float(value), now, user_id))
+
+
+def set_vo2max_priority(user_id: int, priority: str) -> None:
+    """Переключатель 'manual' | 'device' (будущая замена замка 🔒)."""
+    with get_connection() as conn:
+        conn.execute("UPDATE user_profile SET vo2max_priority = ? WHERE user_id = ?",
+                     (priority, user_id))
+
+
+def get_vo2max_resolved(user_id: int) -> dict | None:
+    """Единая точка чтения VO2max.
+    Приоритет из vo2max_priority (дефолт device); если выбранного значения нет —
+    фолбэк на второе (только ручное без трекера — штатный случай).
+    Возвращает {value, source, kind, at, age_days, device, manual, priority}
+    или None, если нет ни одного значения. Свежесть (age_days) интерпретирует
+    вызывающий."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT vo2max_device, vo2max_device_source, vo2max_device_at, "
+            "vo2max_manual, vo2max_manual_at, vo2max_priority "
+            "FROM user_profile WHERE user_id = ?", (user_id,)).fetchone()
+    if not row:
+        return None
+    dev_v, dev_src, dev_at, man_v, man_at, prio = row
+
+    def _age(ts):
+        if not ts:
+            return None
+        try:
+            return (datetime.now() - datetime.fromisoformat(ts)).days
+        except Exception:
+            return None
+
+    device = {"value": dev_v, "source": dev_src, "at": dev_at, "age_days": _age(dev_at)}
+    manual = {"value": man_v, "at": man_at, "age_days": _age(man_at)}
+    prio = prio or "device"
+    order = ("manual", "device") if prio == "manual" else ("device", "manual")
+    for kind in order:
+        v = man_v if kind == "manual" else dev_v
+        if v is not None:
+            return {"value": float(v),
+                    "source": "вручную" if kind == "manual" else (dev_src or "трекер"),
+                    "kind": kind,
+                    "at": man_at if kind == "manual" else dev_at,
+                    "age_days": manual["age_days"] if kind == "manual" else device["age_days"],
+                    "device": device, "manual": manual, "priority": prio}
+    return None
 
 
 # ── workout_analysis ──────────────────────────────────────────
