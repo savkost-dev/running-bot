@@ -39,6 +39,10 @@ async def main():
         cand["wdate"], cand["wgroup"], cand["source"],
         s4, ".", f"probe_{uid}", dark=False)
     print(f"Карточка: {out or 'не построилась (нет work-лэпов?)'}")
+    charts = await ai_package.build_charts_stacked(
+        cand["splits"], cand["plan_steps"], cand["name"],
+        ".", f"probe_{uid}", dark=False)
+    print(f"Графики (одна картинка): {charts or 'не построились'}")
 
 
 if __name__ == "__main__":

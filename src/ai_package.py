@@ -276,13 +276,36 @@ def _template_json(wdate, wgroup):
         return None
 
 
+def _assign_button_laps(splits, plan_wkt, plan_steps, use_plan_dist):
+    """Кнопочные лэпы Garmin (у всех wktStepIndex=None) при наличии плана:
+    раздаёт wktStepIndex/intensityType по порядку исполнения (strava._expand_plan_roles),
+    лишние лэпы-хвосты остаются без шага.
+    use_plan_dist=True (тренажёр/манеж без GPS): дистанция лэпа заменяется плановой
+    (датчик врёт) — темп станет факт-время / план-дистанция.
+    Мутирует splits. Ничего не делает, если индексы уже есть."""
+    laps = (splits.get("lapDTOs") or []) if isinstance(splits, dict) else []
+    laps = [l for l in laps if isinstance(l, dict)]
+    if not laps or not plan_wkt or not plan_steps:
+        return
+    if any(l.get("wktStepIndex") is not None for l in laps):
+        return
+    import strava as _sv
+    seq = _sv._expand_plan_roles(plan_wkt)
+    dist_of = {p["idx"]: p.get("dist") for p in plan_steps}
+    for lap, (idx, stype) in zip(laps, seq):
+        lap["wktStepIndex"] = idx
+        lap["intensityType"] = "REST" if stype in ("recovery", "rest") else "INTERVAL"
+        if use_plan_dist and dist_of.get(idx):
+            lap["distance"] = float(dist_of[idx])
+
+
 async def _garmin_candidate(db_user_id, selector):
     """Кандидат из Garmin (последняя DD-активность) или None.
     План: Garmin workout по workoutId, иначе фолбэк на workout_templates."""
     client = await garmin._client(db_user_id)
     if not client:
         return None
-    acts = await asyncio.to_thread(client.get_activities, 0, 20)
+    acts = await asyncio.to_thread(client.get_activities, 0, 60)
     act = _pick_activity(acts, selector)
     if not act:
         return None
@@ -291,17 +314,21 @@ async def _garmin_candidate(db_user_id, selector):
     act_id = act.get("activityId")
     wkt_id = act.get("workoutId")
     splits = await asyncio.to_thread(client.get_activity_splits, act_id)
+    plan_wkt = None
     plan_steps = []
     if wkt_id:
         try:
-            wkt = await asyncio.to_thread(client.get_workout_by_id, wkt_id)
-            plan_steps = ar._flatten_plan_steps(wkt)
+            plan_wkt = await asyncio.to_thread(client.get_workout_by_id, wkt_id)
+            plan_steps = ar._flatten_plan_steps(plan_wkt)
         except Exception:
-            plan_steps = []
+            plan_wkt, plan_steps = None, []
     if not plan_steps:
-        wkt = _template_json(wdate, wgroup)
-        if wkt:
-            plan_steps = ar._flatten_plan_steps(wkt)
+        plan_wkt = _template_json(wdate, wgroup)
+        if plan_wkt:
+            plan_steps = ar._flatten_plan_steps(plan_wkt)
+    _assign_button_laps(
+        splits, plan_wkt, plan_steps,
+        use_plan_dist=("treadmill" in str((act.get("activityType") or {}).get("typeKey") or "")))
     try:
         details = await asyncio.to_thread(client.get_activity_details, act_id, 100000, 100000)
     except Exception:
@@ -416,11 +443,16 @@ async def build_package(db_user_id: int, selector=None) -> dict:
         A(f"  {r['label'] or '·':>5} {r['role']:<6} {_num(r['dist']):>4}м "
           f"{_fmt_time(r['dur']):>6} {_fmt_pace(r['pace']):>6} "
           f"{_num(r['avg_hr']):>5} {_num(r['max_hr']):>7} {_num(r['hr_before']):>8}")
+    def _wpace(rr_):
+        d = sum(r["dist"] for r in rr_ if r["dist"])
+        t = sum(r["dur"] for r in rr_ if r["dur"])
+        return (t / (d / 1000)) if (d and t) else None
+
     if work:
-        A(f"  средн. работа: темп {_fmt_pace(_avg([r['pace'] for r in work]))}  "
+        A(f"  средн. работа: темп {_fmt_pace(_wpace(work))}  "
           f"ЧССср {_num(_avg([r['avg_hr'] for r in work]))}")
     if rest:
-        A(f"  средн. отдых:  темп {_fmt_pace(_avg([r['pace'] for r in rest]))}  "
+        A(f"  средн. отдых:  темп {_fmt_pace(_wpace(rest))}  "
           f"ЧССср {_num(_avg([r['avg_hr'] for r in rest]))}")
 
     A("\n[ФАКТ — БИОМЕХАНИКА И МОЩНОСТЬ ПО ОТРЕЗКАМ]")
@@ -450,7 +482,8 @@ async def build_package(db_user_id: int, selector=None) -> dict:
     A("=" * 64)
 
     return {"ok": True, "name": name, "text": "\n".join(L), "msg": "",
-            "splits": splits, "plan_steps": plan_steps}
+            "splits": splits, "plan_steps": plan_steps,
+            "wdate": wdate, "wgroup": cand["wgroup"], "source": cand["source"], "s4": s4}
 
 
 async def build_charts(splits, plan_steps, name: str, out_dir: str,
@@ -480,6 +513,272 @@ async def build_charts(splits, plan_steps, name: str, out_dir: str,
         "Повторы: время / темп / отклонение", base + "_table.png") if (ws and maxi) else None
 
     return {"work_png": work_png, "rest_png": rest_png, "table_png": table_png}
+
+
+def _series_model(ordered, plan_steps):
+    """Хронологическая модель «блоки → серии». Границы блоков — по номеру
+    repeat-группы плана (поле grp в plan_steps): серия закрывается при повторе
+    шага ВНУТРИ серии ИЛИ при смене группы (переход в новый блок без отдыха
+    тоже ловится). Одиночный rest-блок МЕЖДУ блоками (топ-уровневый отдых)
+    приклеивается колонкой к последней серии предыдущего блока.
+    Возвращает [{steps: [idx...], series: [{idx: lap}, ...]}]."""
+    grp_of = {p["idx"]: p.get("grp") for p in plan_steps}
+    blocks = []
+    cur, cur_steps, cur_grp = {}, [], None
+
+    def flush():
+        nonlocal cur, cur_steps
+        if not cur:
+            return
+        last = blocks[-1] if blocks else None
+        same = last and last["steps"] == cur_steps
+        prefix = (last and len(cur_steps) < len(last["steps"])
+                  and last["steps"][:len(cur_steps)] == cur_steps)
+        if same or prefix:
+            last["series"].append(cur)
+        else:
+            blocks.append({"steps": list(cur_steps), "series": [cur]})
+        cur, cur_steps = {}, []
+
+    for l in ordered:
+        st = l["step"]
+        g = grp_of.get(st)
+        if cur and (st in cur or g != cur_grp):
+            flush()
+        cur_grp = g
+        if st not in cur_steps:
+            cur_steps.append(st)
+        cur[st] = l
+    flush()
+
+    # Одиночный rest-only блок (отдых между блоками) → колонкой в предыдущий.
+    merged = []
+    for b in blocks:
+        rest_only = all(
+            ar._role_of(st, next((s[st]["intensity"] for s in b["series"] if st in s), ""),
+                        plan_steps) == "rest"
+            for st in b["steps"])
+        if rest_only and merged and len(b["series"]) == 1:
+            prev = merged[-1]
+            for st in b["steps"]:
+                if st not in prev["steps"]:
+                    prev["steps"].append(st)
+                prev["series"][-1][st] = b["series"][0][st]
+        else:
+            merged.append(b)
+    return merged
+
+
+async def build_charts_stacked(splits, plan_steps, name: str, out_dir: str,
+                               tag: str, dark: bool = False) -> str | None:
+    """Оба графика (работа + отдых) на ОДНОЙ вертикальной картинке под телефон:
+    сверху интервалы (сегменты/эталон/тренд/дельты), снизу отдых (коридоры).
+    Логика отрисовки повторяет activity_review._plot_work_segmented/_plot_rest,
+    но на переданных осях — боевые функции не трогает. Статблоки опущены
+    (на телефоне тесно), средние есть в карточке-таблице. Возвращает путь или None."""
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from matplotlib.ticker import FuncFormatter
+
+    ar.DARK_MODE = dark
+    ordered = ar._ordered_laps(splits)
+    work_roles, x_ticks, rest_paces, S = ar._segment_model(ordered, plan_steps)
+    work_roles = [r for r in work_roles if r["ys"]]
+    if not work_roles:
+        return None
+    # Метки тиков — по СЕРИЯМ в хронологии (номер_серии.позиция_work-шага);
+    # x-позиции не меняются. Если везде по одному work-шагу — просто номер серии.
+    blocks = _series_model(ordered, plan_steps)
+    _lbls, s_no = [], 0
+    for blk in blocks:
+        for ser in blk["series"]:
+            s_no += 1
+            wpos = 0
+            for st in blk["steps"]:
+                if st not in ser:
+                    continue
+                if ar._role_of(st, ser[st]["intensity"], plan_steps) != "work":
+                    continue
+                wpos += 1
+                _lbls.append((s_no, wpos))
+    if len(_lbls) == len(x_ticks):
+        multi = max(w for _, w in _lbls) > 1
+        x_ticks = [(x, f"{s}.{w}" if multi else f"{s}")
+                   for (x, _), (s, w) in zip(x_ticks, _lbls)]
+    rest_plan = next((s for s in plan_steps if s["stype"] == "recovery" and s["bounds"]), None)
+    rest_target = sum(rest_plan["bounds"]) / 2.0 if rest_plan else None
+    has_rest = bool(rest_paces)
+
+    th = ar._theme()
+    n_rows = 2 if has_rest else 1
+    fig_h = 6.2 * n_rows + 1.0
+    with plt.rc_context(ar._rc()):
+        fig = plt.figure(figsize=(9, fig_h))
+        gs = fig.add_gridspec(n_rows, 1, hspace=0.30,
+                              left=0.10, right=0.97, top=0.90, bottom=0.06)
+        ax = fig.add_subplot(gs[0])
+        fig.suptitle(f"Тренировка: {name}", fontsize=13, fontweight="bold")
+
+        # ── верх: рабочие интервалы (как _plot_work_segmented, без статблоков) ──
+        for ri, r in enumerate(work_roles):
+            xs = np.array(r["xs"], dtype=float)
+            ys = np.array(r["ys"], dtype=float)
+            c = r["color"]
+            tls = ar._SERIES_TREND_LS[ri % len(ar._SERIES_TREND_LS)]
+            ax.scatter(xs, ys, color=c, s=60, zorder=3, label=f"{r['label']} — факт")
+            if r.get("bounds"):
+                slow, fast = r["bounds"]
+                if abs(slow - fast) <= ar.WORK_EXACT_EPS:
+                    target = (slow + fast) / 2.0
+                    ax.axhspan(target - ar.WORK_CORR_YELLOW, target + ar.WORK_CORR_YELLOW,
+                               color="gold", alpha=0.15, zorder=1)
+                    ax.axhspan(target - ar.WORK_CORR_GREEN, target + ar.WORK_CORR_GREEN,
+                               color="green", alpha=0.18, zorder=1)
+                    ax.axhline(target, color="red", ls="-", lw=2.6, alpha=0.85, zorder=4,
+                               label=f"{r['label']} — эталон {ar._pace_formatter(target)}")
+                    et_pts = np.full(len(xs), target)
+                else:
+                    et_pts = np.linspace(slow, fast, len(xs))
+                    ax.plot(xs, et_pts, color="red", ls="-", lw=3.0, alpha=0.85, zorder=4,
+                            label=f"{r['label']} — эталон ({ar._pace_formatter(slow)}→{ar._pace_formatter(fast)})")
+                ar._draw_deltas(ax, xs, ys, et_pts)
+            if len(xs) >= 2:
+                a, b = np.polyfit(xs, ys, 1)
+                tr = a * xs + b
+                ax.plot(xs, tr, color=c, ls=tls, lw=2.0, zorder=4,
+                        label=f"{r['label']} — тренд ({ar._pace_formatter(tr[0])}→{ar._pace_formatter(tr[-1])})")
+        ax.invert_yaxis()
+        ax.set_ylabel("Темп (мин:сек/км)", fontsize=10)
+        ax.set_title("Рабочие интервалы", fontsize=11, fontweight="bold")
+        ax.yaxis.set_major_formatter(FuncFormatter(ar._pace_formatter))
+        if x_ticks:
+            ax.set_xticks([x for x, _ in x_ticks])
+            ax.set_xticklabels([lbl for _, lbl in x_ticks], fontsize=7)
+        ax.grid(True, linestyle=":", alpha=0.6)
+        ax.legend(loc="best", fontsize=7.5, framealpha=0.9)
+
+        # ── низ: отдых (как _plot_rest) ──
+        if has_rest:
+            ax2 = fig.add_subplot(gs[1])
+            x2 = np.arange(1, len(rest_paces) + 1)
+            y2 = np.array(rest_paces)
+            if rest_target:
+                g_lo = rest_target - ar.REST_CORRIDOR_SEC
+                g_hi = rest_target + ar.REST_CORRIDOR_SEC
+                y_lo = rest_target - ar.REST_CORRIDOR_YELLOW
+                y_hi = rest_target + ar.REST_CORRIDOR_YELLOW
+                ax2.fill_between(x2, y_lo, y_hi, color="gold", alpha=0.2, zorder=1,
+                                 label=f"Жёлтая ±{ar.REST_CORRIDOR_YELLOW}с")
+                ax2.fill_between(x2, g_lo, g_hi, color="green", alpha=0.2, zorder=1,
+                                 label=f"Зелёная ±{ar.REST_CORRIDOR_SEC}с")
+                colors = ["green" if g_lo <= v <= g_hi else
+                          ("gold" if y_lo <= v <= y_hi else "red") for v in y2]
+                ax2.scatter(x2, y2, color=colors, s=60, zorder=3, label="Отдых")
+            else:
+                ax2.scatter(x2, y2, color=th["fact"], s=60, zorder=3, label="Отдых")
+            if len(x2) >= 2:
+                from scipy import stats as _st
+                slope, intercept, *_ = _st.linregress(x2, y2)
+                tr2 = slope * x2 + intercept
+                ax2.plot(x2, tr2, "b--", linewidth=2.0, zorder=4,
+                         label=f"Тренд ({ar._pace_formatter(tr2[0])}→{ar._pace_formatter(tr2[-1])})")
+            ax2.invert_yaxis()
+            ax2.set_xlabel("Номер интервала", fontsize=10)
+            ax2.set_ylabel("Темп (мин:сек/км)", fontsize=10)
+            ax2.set_title("Восстановительные интервалы", fontsize=11, fontweight="bold")
+            ax2.yaxis.set_major_formatter(FuncFormatter(ar._pace_formatter))
+            ax2.set_xticks(x2)
+            ax2.tick_params(axis="x", labelsize=7)
+            ax2.grid(True, linestyle=":", alpha=0.6)
+            ax2.legend(loc="best", fontsize=7.5, framealpha=0.9)
+
+        fig.text(0.985, 0.005, "DoDick · @DD_adviser_bot", fontsize=8, alpha=0.6,
+                 ha="right", va="bottom")
+        out_path = os.path.join(out_dir, f"charts_{tag}.png")
+        fig.savefig(out_path, dpi=120)
+        plt.close(fig)
+    return out_path
+
+
+def _plan_diagram(ax, blocks, plan_steps):
+    """Схема структуры работы: блоки → прямоугольники шагов в хронологии.
+    Ширина ∝ дистанции, высота ∝ интенсивности (быстрее — выше), отдых — низкий серый.
+    Быстрый шаг внутри блока (ускорение) — оранжевый. Под блоком — «×N».
+    Данные — blocks из _series_model + plan_steps. Ничего не возвращает."""
+    from matplotlib.patches import Rectangle
+    ax.axis("off")
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+
+    def _plan(st):
+        return next((q for q in plan_steps if q["idx"] == st), None)
+
+    def _mid(st):
+        p = _plan(st)
+        return (sum(p["bounds"]) / 2.0) if (p and p["bounds"]) else None
+
+    def _dist(st, blk):
+        p = _plan(st)
+        if p and p.get("dist"):
+            return float(p["dist"])
+        lap = next((s[st] for s in blk["series"] if st in s), None)
+        return float(lap["dist"]) if (lap and lap.get("dist")) else 100.0
+
+    def _role(st, blk):
+        lap = next((s[st] for s in blk["series"] if st in s), None)
+        return ar._role_of(st, lap["intensity"] if lap else "", plan_steps)
+
+    mids = [m for blk in blocks for st in blk["steps"]
+            if _role(st, blk) == "work" and (m := _mid(st)) is not None]
+    lo, hi = (min(mids), max(mids)) if mids else (None, None)
+    total = sum(_dist(st, blk) for blk in blocks for st in blk["steps"])
+    if not total:
+        return
+    GAP_STEP, GAP_BLK = 0.006, 0.035
+    n_sgaps = sum(max(len(b["steps"]) - 1, 0) for b in blocks)
+    usable = 1.0 - GAP_BLK * max(len(blocks) - 1, 0) - GAP_STEP * n_sgaps
+    y0 = 0.34
+    x = 0.0
+    for bi, blk in enumerate(blocks):
+        wmids = [m for st in blk["steps"]
+                 if _role(st, blk) == "work" and (m := _mid(st)) is not None]
+        slowest = max(wmids) if wmids else None
+        bx0 = x
+        for si, st in enumerate(blk["steps"]):
+            w = usable * _dist(st, blk) / total
+            rl = _role(st, blk)
+            m = _mid(st)
+            if rl == "rest":
+                h, fc = 0.18, "#9e9e9e"
+            else:
+                k = 0.5 if (hi is None or hi == lo or m is None) else (hi - m) / (hi - lo)
+                h = 0.22 + 0.22 * k
+                fast = (slowest is not None and m is not None and m < slowest - 1.0)
+                fc = "#ff8c00" if fast else "#1f77b4"
+            ax.add_patch(Rectangle((x, y0), w, h, facecolor=fc, edgecolor="none"))
+            d = _dist(st, blk)
+            dlab = f"{int(d)} м"
+            if w >= 0.055:
+                ax.text(x + w / 2, y0 + h / 2, dlab, fontsize=9, fontweight="bold",
+                        color="white", ha="center", va="center")
+            else:
+                ax.text(x + w / 2, y0 + h / 2, dlab, fontsize=7.5, fontweight="bold",
+                        color="white", ha="center", va="center", rotation=90)
+            if rl == "work" and m is not None:
+                ax.text(x + w / 2, y0 - 0.05, _fmt_pace(m), fontsize=8.5, alpha=0.85,
+                        ha="center", va="top")
+            x += w
+            if si < len(blk["steps"]) - 1:
+                x += GAP_STEP
+        n = len(blk["series"])
+        ax.plot([bx0, x], [0.84, 0.84], color="#666666", lw=1.2)
+        ax.plot([bx0, bx0], [0.84, 0.74], color="#666666", lw=1.2)
+        ax.plot([x, x], [0.84, 0.74], color="#666666", lw=1.2)
+        ax.text((bx0 + x) / 2, 1.0, f"× {n}", fontsize=11, fontweight="bold",
+                ha="center", va="top")
+        if bi < len(blocks) - 1:
+            x += GAP_BLK
+    ax.add_patch(Rectangle((0, 0.10), 1.0, 0.07, facecolor="#e0e0e0", edgecolor="none"))
 
 
 async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source: str,
@@ -517,65 +816,75 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
         sign = "+" if d > 0 else "−"
         return f"{sign}{abs(d)}", ar._delta_color(abs(d))
 
-    # ── Данные таблицы (зона 2) ──
-    headers = ["№"]
-    for st in ws:
-        lbl = rmeta[st]["label"]
-        headers += [f"{lbl}\nвремя", f"{lbl}\nтемп", f"{lbl}\nоткл"]
-    if has_rest:
-        headers += ["Отдых\nвремя", "Отдых\nтемп", "Отдых\nоткл"]
-
-    rows, cell_fill = [], {}
+    # ── Данные таблицы (зона 2): секции по блокам, строки = серии в хронологии ──
+    blocks = _series_model(ordered, plan_steps)
     _FILL = {"green": "#2e7d32", "gold": "#b8860b", "red": "#c62828"}
-    for i in range(1, maxi + 1):
-        row = [str(i)]
-        col = 1
-        for st in ws:
-            cell = rw.get(i, {}).get(st)
-            if cell:
-                dur, pace = cell
-                dev, color = _dev(pace, ar._seg_etalon(rmeta[st], i))
-                row += [_fmt_time(dur), _fmt_pace(pace), dev]
-                if color:
-                    cell_fill[(i, col + 2)] = _FILL[color]
-            else:
-                row += ["—", "—", "—"]
-            col += 3
-        if has_rest:
-            rc = rr.get(i)
-            if rc:
-                dev, color = _dev(rc[1], rest_target)
-                row += [_fmt_time(rc[0]), _fmt_pace(rc[1]), dev]
-                if color:
-                    cell_fill[(i, col + 2)] = _FILL[color]
-            else:
-                row += ["—", "—", "—"]
-        rows.append(row)
-
-    avg_row = ["ср."]
-    for st in ws:
-        cells = [rw[i][st] for i in rw if st in rw[i]]
-        durs = [c[0] for c in cells if c[0] is not None]
-        pcs = [c[1] for c in cells if c[1] is not None]
-        avg_row += [_fmt_time(sum(durs) / len(durs)) if durs else "—",
-                    _fmt_pace(sum(pcs) / len(pcs)) if pcs else "—", ""]
-    if has_rest:
-        durs = [v[0] for v in rr.values() if v[0] is not None]
-        pcs = [v[1] for v in rr.values() if v[1] is not None]
-        avg_row += [_fmt_time(sum(durs) / len(durs)) if durs else "—",
-                    _fmt_pace(sum(pcs) / len(pcs)) if pcs else "—", ""]
-    rows.append(avg_row)
-    avg_r = maxi + 1
+    sections = []
+    for blk in blocks:
+        n_series = len(blk["series"])
+        metas = {}
+        for st in blk["steps"]:
+            plan = next((p for p in plan_steps if p["idx"] == st), None)
+            lap0 = next((s[st] for s in blk["series"] if st in s), None)
+            role = ar._role_of(st, lap0["intensity"] if lap0 else "", plan_steps)
+            label = ("Отдых" if role == "rest"
+                     else ar._step_label(plan_steps, st, lap0["dist"] if lap0 else None))
+            metas[st] = {"role": role, "label": label,
+                         "bounds": plan["bounds"] if plan else None, "n": n_series}
+        sec_headers = ["№"]
+        for st in blk["steps"]:
+            lbl = metas[st]["label"]
+            sec_headers += [f"{lbl}\nвремя", f"{lbl}\nтемп", f"{lbl}\nоткл"]
+        sec_rows, sec_fill = [], {}
+        for i, ser in enumerate(blk["series"], 1):
+            row = [str(i)]
+            col = 1
+            for st in blk["steps"]:
+                lap = ser.get(st)
+                if lap:
+                    m = metas[st]
+                    et = (ar._seg_etalon(m, i) if m["role"] == "work"
+                          else (sum(m["bounds"]) / 2.0 if m["bounds"] else None))
+                    dev, color = _dev(lap["pace"], et)
+                    row += [_fmt_time(lap["dur"]), _fmt_pace(lap["pace"]), dev]
+                    if color:
+                        sec_fill[(i, col + 2)] = _FILL[color]
+                else:
+                    row += ["—", "—", "—"]
+                col += 3
+            sec_rows.append(row)
+        avg_row = ["ср."]
+        for st in blk["steps"]:
+            durs = [s[st]["dur"] for s in blk["series"] if st in s]
+            dists = [s[st]["dist"] for s in blk["series"] if st in s and s[st]["dist"]]
+            # Средний темп — взвешенный: Σвремя / Σдистанция (не среднее темпов).
+            wpace = (sum(durs) / (sum(dists) / 1000)) if (durs and dists) else None
+            avg_row += [_fmt_time(sum(durs) / len(durs)) if durs else "—",
+                        _fmt_pace(wpace) if wpace else "—", ""]
+        sec_rows.append(avg_row)
+        work_lbls = [metas[st]["label"] for st in blk["steps"] if metas[st]["role"] == "work"]
+        sec_title = f"{n_series} × (" + " + ".join(work_lbls) + ")"
+        sections.append({"headers": sec_headers, "rows": sec_rows, "fill": sec_fill,
+                         "avg_r": n_series + 1, "title": sec_title,
+                         "n_rows": n_series + 2})
 
     # ── Шапка (зона 1) ──
     meta_bits = [b for b in (wdate, f"группа {wgroup}" if wgroup else None, source) if b]
     meta_line = "  ·  ".join(meta_bits)
-    summary = ""
+
+    def _rcs_wrap(label, text, style):
+        """Строки «Метка: текст» с переносом → [(строка, style), ...]; style: 'bold'|'italic'."""
+        text = (text or "").strip()
+        if not text:
+            return []
+        wrapped = textwrap.wrap(f"{label}: {text}", width=90, subsequent_indent="   ")
+        return [(ln, style) for ln in wrapped]
+
+    rcs_lines = []
     if s4:
-        summary = (s4.get("summary") or s4.get("overall_purpose") or "").strip()
-    sum_lines = textwrap.wrap(summary, width=62)[:3] if summary else []
-    if summary and len(textwrap.wrap(summary, width=62)) > 3:
-        sum_lines[-1] = sum_lines[-1].rstrip(".,;… ") + "…"
+        rcs_lines += _rcs_wrap("Работа", s4.get("work_text"), "bold")
+        rcs_lines += _rcs_wrap("Цель", s4.get("overall_purpose"), "italic")
+        rcs_lines += _rcs_wrap("Суть", s4.get("summary"), "italic")
     # Структура плана: «7 × 600 м @ 3:52→3:59  ·  отдых 200 м @ 6:10»
     plan_bits = []
     for st in ws:
@@ -593,16 +902,29 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
         plan_bits.append(f"отдых {rd}@ {_fmt_pace(rest_target)}")
     plan_line = "  ·  ".join(plan_bits)
 
-    # ── Итоги (зона 3) ──
-    work_avg = _avg([l["pace"] for l in work_laps])
-    rest_avg = _avg([l["pace"] for l in rest_laps]) if has_rest else None
-    b0 = rmeta[ws[0]]["bounds"]
-    if b0:
-        s0, f0 = b0
+    # ── Итоги (зона 3): средний темп взвешенный (Σвремя/Σдистанция) ──
+    def _wavg(laps):
+        d = sum(l["dist"] for l in laps if l["dist"])
+        t = sum(l["dur"] for l in laps if l["dur"])
+        return (t / (d / 1000)) if (d and t) else None
+
+    work_avg = _wavg(work_laps)
+    rest_avg = _wavg(rest_laps) if has_rest else None
+    uniq_b = {tuple(p["bounds"]) for p in plan_steps
+              if p.get("stype") == "interval" and p.get("bounds")}
+    if len(uniq_b) == 1:
+        s0, f0 = next(iter(uniq_b))
         work_goal = (_fmt_pace((s0 + f0) / 2) if abs(s0 - f0) <= ar.WORK_EXACT_EPS
                      else f"{_fmt_pace(s0)}→{_fmt_pace(f0)}")
     else:
-        work_goal = "—"
+        # Разные цели шагов → взвешенная по дистанции целевая (как и факт).
+        def _pmid(st):
+            p = next((q for q in plan_steps if q["idx"] == st), None)
+            return (sum(p["bounds"]) / 2.0) if (p and p["bounds"]) else None
+        md = [(_pmid(l["step"]), l["dist"]) for l in work_laps]
+        md = [(m, d) for m, d in md if m and d]
+        work_goal = ("≈ " + _fmt_pace(sum(m * d for m, d in md) / sum(d for _, d in md))
+                     if md else "—")
     plaques = [("СР. ТЕМП РАБОТЫ", _fmt_pace(work_avg) if work_avg else "—",
                 f"цель: {work_goal}", "#1f77b4")]
     if has_rest:
@@ -614,79 +936,90 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
     # ── Компоновка: портрет, три зоны ──
     th = ar._theme()
     accent = "#ff8c00"
-    n_hdr_lines = 3 + len(sum_lines) + (1 if plan_line else 0)
-    hdr_in = 0.42 * n_hdr_lines + 0.5
-    tbl_in = 0.46 * (maxi + 2)
-    tot_in = 1.9
-    fig_h = hdr_in + tbl_in + tot_in + 0.6
+    n_hdr_lines = 2 + len(rcs_lines) + (1 if plan_line else 0)
+    hdr_in = 0.26 * n_hdr_lines + 0.18
+    tbl_in = sum(0.46 * s["n_rows"] for s in sections) + \
+        (0.14 * len(sections) if len(sections) > 1 else 0)
+    tot_in = 1.05
+    diag_in = 1.08
+    fig_h = hdr_in + diag_in + tbl_in + tot_in + 0.6
     fig_w = 9.0
     with plt.rc_context(ar._rc()):
         fig = plt.figure(figsize=(fig_w, fig_h))
-        gs = fig.add_gridspec(3, 1, height_ratios=[hdr_in, tbl_in, tot_in],
+        gs = fig.add_gridspec(4, 1, height_ratios=[hdr_in, diag_in, tbl_in, tot_in],
                               hspace=0.04, left=0.03, right=0.97, top=0.985, bottom=0.02)
         ax_h = fig.add_subplot(gs[0]); ax_h.axis("off")
-        ax_t = fig.add_subplot(gs[1]); ax_t.axis("off")
-        ax_b = fig.add_subplot(gs[2]); ax_b.axis("off")
+        ax_d = fig.add_subplot(gs[1])
+        _plan_diagram(ax_d, blocks, plan_steps)
+        sub = gs[2].subgridspec(len(sections), 1,
+                                hspace=0.16 if len(sections) > 1 else 0.0,
+                                height_ratios=[s["n_rows"] for s in sections])
+        ax_b = fig.add_subplot(gs[3]); ax_b.axis("off")
 
         # Зона 1: шапка
         y = 1.0
-        dy = 1.0 / max(n_hdr_lines + 1, 4)
+        dy = 1.0 / max(n_hdr_lines + 0.1, 4)
         ax_h.text(0, y, "РАЗБОР ТРЕНИРОВКИ", fontsize=20, fontweight="bold",
                   color=accent, va="top", ha="left", transform=ax_h.transAxes)
+        ax_h.text(1, y, name or "", fontsize=13, fontweight="bold",
+                  va="top", ha="right", transform=ax_h.transAxes)
         y -= dy * 1.25
-        ax_h.text(0, y, name or "", fontsize=13, fontweight="bold",
-                  va="top", ha="left", transform=ax_h.transAxes)
-        y -= dy
         ax_h.text(0, y, meta_line, fontsize=10.5, alpha=0.8,
                   va="top", ha="left", transform=ax_h.transAxes)
         y -= dy
-        for ln in sum_lines:
-            ax_h.text(0, y, ln, fontsize=10.5, style="italic",
+        for ln, st in rcs_lines:
+            ax_h.text(0, y, ln, fontsize=10.5,
+                      style="italic" if st == "italic" else "normal",
+                      fontweight="bold" if st == "bold" else "normal",
                       va="top", ha="left", transform=ax_h.transAxes)
             y -= dy
         if plan_line:
             ax_h.text(0, y, "ПЛАН: " + plan_line, fontsize=11, fontweight="bold",
                       va="top", ha="left", transform=ax_h.transAxes)
 
-        # Зона 2: таблица (bbox на всю зону — без разрывов)
-        tbl = ax_t.table(cellText=rows, colLabels=headers,
-                         cellLoc="center", bbox=[0, 0, 1, 1])
-        tbl.auto_set_font_size(False)
-        tbl.set_fontsize(10)
+        # Зона 2: секции-таблицы по блокам (bbox на всю под-зону)
         zebra = "#2a2a2a" if dark else "#f2f2f2"
         hdr_bg = "#333333" if not dark else "#3a3a3a"
-        for (r, c), cell in tbl.get_celld().items():
-            cell.set_edgecolor("#999999")
-            if r == 0:
-                cell.set_facecolor(hdr_bg)
-                cell.set_text_props(fontweight="bold", color="white")
-            elif r == avg_r:
-                cell.set_facecolor(th["box_face"])
-                cell.set_text_props(fontweight="bold", color=th["text"])
-            else:
-                cell.set_facecolor(zebra if r % 2 == 0 else "none")
-                cell.set_text_props(color=th["text"])
-        for (r, c), fill in cell_fill.items():
-            tbl[r, c].set_facecolor(fill)
-            tbl[r, c].set_text_props(color="white", fontweight="bold")
+        for si, sec in enumerate(sections):
+            ax_t = fig.add_subplot(sub[si]); ax_t.axis("off")
+            if len(sections) > 1:
+                ax_t.set_title(sec["title"], fontsize=10.5, fontweight="bold", pad=3)
+            tbl = ax_t.table(cellText=sec["rows"], colLabels=sec["headers"],
+                             cellLoc="center", bbox=[0, 0, 1, 1])
+            tbl.auto_set_font_size(False)
+            tbl.set_fontsize(10)
+            for (r, c), cell in tbl.get_celld().items():
+                cell.set_edgecolor("#999999")
+                if r == 0:
+                    cell.set_facecolor(hdr_bg)
+                    cell.set_text_props(fontweight="bold", color="white")
+                elif r == sec["avg_r"]:
+                    cell.set_facecolor(th["box_face"])
+                    cell.set_text_props(fontweight="bold", color=th["text"])
+                else:
+                    cell.set_facecolor(zebra if r % 2 == 0 else "none")
+                    cell.set_text_props(color=th["text"])
+            for (r, c), fill in sec["fill"].items():
+                tbl[r, c].set_facecolor(fill)
+                tbl[r, c].set_text_props(color="white", fontweight="bold")
 
         # Зона 3: плашки итогов
         ax_b.set_xlim(0, 1); ax_b.set_ylim(0, 1)
         k = len(plaques)
-        pw = min(0.30, 0.96 / k - 0.02)
+        pw = min(0.22, 0.84 / k - 0.03)
         gap = (1.0 - k * pw) / (k + 1)
         for idx, (title, big, small, color) in enumerate(plaques):
             x0 = gap + idx * (pw + gap)
-            ax_b.add_patch(FancyBboxPatch((x0, 0.12), pw, 0.74,
-                           boxstyle="round,pad=0.015", linewidth=2,
+            ax_b.add_patch(FancyBboxPatch((x0, 0.14), pw, 0.72,
+                           boxstyle="round,pad=0.008", linewidth=1.6,
                            edgecolor=color, facecolor="none",
                            transform=ax_b.transAxes))
             cx = x0 + pw / 2
-            ax_b.text(cx, 0.74, title, fontsize=10, fontweight="bold", color=color,
+            ax_b.text(cx, 0.72, title, fontsize=8.5, fontweight="bold", color=color,
                       ha="center", va="center", transform=ax_b.transAxes)
-            ax_b.text(cx, 0.47, big, fontsize=22, fontweight="bold", color=color,
+            ax_b.text(cx, 0.48, big, fontsize=15, fontweight="bold", color=color,
                       ha="center", va="center", transform=ax_b.transAxes)
-            ax_b.text(cx, 0.22, small, fontsize=9.5, alpha=0.85,
+            ax_b.text(cx, 0.26, small, fontsize=8.5, alpha=0.85,
                       ha="center", va="center", transform=ax_b.transAxes)
         ax_b.text(0.99, 0.0, "DoDick · @DD_adviser_bot", fontsize=8.5, alpha=0.6,
                   ha="right", va="bottom", transform=ax_b.transAxes)

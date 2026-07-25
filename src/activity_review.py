@@ -380,23 +380,36 @@ _SERIES_TREND_LS = ["--", "-.", ":", (0, (3, 1, 1, 1)), "--"]
 
 def _flatten_plan_steps(wkt):
     """[{idx, stype, ttype, dist, bounds(slow,fast)|None}] в порядке исполнения.
-    Рекурсия в RepeatGroupDTO; считаются только ExecutableStepDTO (индекс = wktStepIndex)."""
+    Рекурсия в RepeatGroupDTO. idx — сквозной счётчик по правилу Garmin
+    wktStepIndex: дети группы получают номера, затем сама RepeatGroupDTO
+    занимает ОДИН номер ПОСЛЕ детей (в out не попадает, только счётчик += 1).
+    Пример 2×(600+400)+2×(800+200) → 600=0,400=1,[группа=2],800=3,200=4,[группа=5]."""
     out = []
+    next_idx = [0]
+    next_grp = [0]
 
-    def walk(steps):
+    def walk(steps, grp=None):
         for st in steps or []:
             if not isinstance(st, dict):
                 continue
             if st.get("type") == "RepeatGroupDTO" or (st.get("stepType") or {}).get("stepTypeKey") == "repeat":
-                walk(st.get("workoutSteps"))
+                g = next_grp[0]
+                next_grp[0] += 1
+                walk(st.get("workoutSteps"), g)
+                next_idx[0] += 1  # группа занимает свой номер ПОСЛЕ детей
                 continue
             stype = (st.get("stepType") or {}).get("stepTypeKey")
             ttype = (st.get("targetType") or {}).get("workoutTargetTypeKey")
             t1 = _ms_to_sec_per_km(st.get("targetValueOne"))
             t2 = _ms_to_sec_per_km(st.get("targetValueTwo"))
             bounds = (max(t1, t2), min(t1, t2)) if (ttype == "pace.zone" and t1 and t2) else None
-            out.append({"idx": len(out), "stype": stype, "ttype": ttype,
+            g = grp
+            if g is None:  # топ-уровневый шаг — своя «группа» из одного шага
+                g = next_grp[0]
+                next_grp[0] += 1
+            out.append({"idx": next_idx[0], "grp": g, "stype": stype, "ttype": ttype,
                         "dist": st.get("endConditionValue"), "bounds": bounds})
+            next_idx[0] += 1
 
     for seg in (wkt.get("workoutSegments") or []):
         walk(seg.get("workoutSteps"))

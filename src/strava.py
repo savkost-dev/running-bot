@@ -133,7 +133,11 @@ def _expand_plan_roles(plan_wkt: dict) -> list:
     по факту исполнения: [(step_idx, stype)]. Повторы умножены на numberOfIterations,
     step_idx совпадает с idx из activity_review._flatten_plan_steps (повторы свёрнуты),
     чтобы рисовалки сопоставили факт с планом. skipLastRestStep — финальный recovery
-    последнего повтора убирается."""
+    последнего повтора убирается.
+
+    Нумерация зеркалит _flatten_plan_steps: дети группы получают номера, затем
+    сама RepeatGroupDTO занимает ОДИН номер ПОСЛЕ детей (в res не попадает, только
+    счётчик += 1). У повторов одного шага idx остаётся тем же (inner * iters)."""
     next_idx = [0]
 
     def walk(steps):
@@ -146,6 +150,7 @@ def _expand_plan_roles(plan_wkt: dict) -> list:
             if is_rep:
                 iters = int(st.get("numberOfIterations") or 1)
                 inner = walk(st.get("workoutSteps"))
+                next_idx[0] += 1  # группа занимает свой номер ПОСЛЕ детей (зеркало flatten)
                 expanded = inner * iters
                 if st.get("skipLastRestStep") and expanded and \
                         expanded[-1][1] in ("recovery", "rest"):

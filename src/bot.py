@@ -1270,6 +1270,7 @@ async def _run_analyze_and_show(workout: dict, query, context: ContextTypes.DEFA
     # Сохраняем результат в БД
     try:
         import json as _json
+        result["work_text"] = (workout.get("work_text") or "").strip()
         save_workout_analysis(
             post_id=post_id,
             workout_date=result.get("workout_date", ""),
@@ -1443,6 +1444,7 @@ async def _reanalyze_one(workout: dict, mode: str) -> str:
         result["is_valid"] = False
         result["reject_reason"] = "нет групп с темпами — не анонс"
 
+    result["work_text"] = (workout.get("work_text") or "").strip()
     save_workout_analysis(
         post_id=workout.get("post_id"),
         workout_date=result.get("workout_date", ""),
@@ -3603,6 +3605,7 @@ async def _autoanalyze_post(workout: dict, context=None) -> None:
                 result["is_valid"] = False
                 result["reject_reason"] = "нет групп с темпами — не анонс"
                 logger.info(f"autoanalyze: post_id={post_id} is_valid сброшен (нет групп с темпами)")
+        result["work_text"] = (workout.get("work_text") or "").strip()
         save_workout_analysis(
             post_id=post_id,
             workout_date=result.get("workout_date", ""),
@@ -5018,7 +5021,7 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
             "⏳ Собираю данные, графики и анализ через ИИ…\nМожет занять 1-3 мин.")
     msg = await context.bot.send_message(chat_id, wait)
     try:
-        from ai_package import build_package, build_charts, PROMPT
+        from ai_package import build_package, PROMPT
         res = await build_package(db_user_id, selector)
     except Exception as e:
         logger.error(f"/report error for {update.effective_user.id}: {e}", exc_info=True)
@@ -5028,18 +5031,35 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
         await msg.edit_text(f"⚠️ {res.get('msg')}")
         return
 
-    # Графики строим всегда (пути), отправку откладываем: в полном режиме
-    # сперва дожидаемся ИИ, чтобы графики и текст пришли вместе.
+    # Картинки: карточка разбора + графики одной вертикальной PNG.
+    # Фолбэк на старые 3 PNG, если карточка не построилась.
+    chart_items = []
     try:
-        charts = await build_charts(res.get("splits"), res.get("plan_steps"),
-                                    res["name"], "/tmp", str(db_user_id), dark=False)
+        from ai_package import build_report_card, build_charts_stacked
+        card = await build_report_card(
+            res.get("splits"), res.get("plan_steps"), res["name"],
+            res.get("wdate"), res.get("wgroup"), res.get("source"),
+            res.get("s4"), "/tmp", str(db_user_id), dark=False)
+        if card:
+            stacked = await build_charts_stacked(
+                res.get("splits"), res.get("plan_steps"), res["name"],
+                "/tmp", str(db_user_id), dark=False)
+            chart_items = [(p, c) for p, c in (
+                (card, None), (stacked, "Графики")) if p]
     except Exception as e:
-        logger.error(f"/report charts error: {e}", exc_info=True)
-        charts = {}
-    chart_items = [(p, c) for p, c in (
-        (charts.get("work_png"), "Рабочие интервалы"),
-        (charts.get("rest_png"), "Отдых"),
-        (charts.get("table_png"), "Таблица повторов")) if p]
+        logger.error(f"/report card error: {e}", exc_info=True)
+    if not chart_items:
+        try:
+            from ai_package import build_charts
+            charts = await build_charts(res.get("splits"), res.get("plan_steps"),
+                                        res["name"], "/tmp", str(db_user_id), dark=False)
+        except Exception as e:
+            logger.error(f"/report charts error: {e}", exc_info=True)
+            charts = {}
+        chart_items = [(p, c) for p, c in (
+            (charts.get("work_png"), "Рабочие интервалы"),
+            (charts.get("rest_png"), "Отдых"),
+            (charts.get("table_png"), "Таблица повторов")) if p]
 
     # Полный режим: получаем анализ ИИ ДО отправки (чтобы отдать всё разом).
     ai_chunks = None
