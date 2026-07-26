@@ -1979,7 +1979,7 @@ def ask_text(prompt: str, mode: str = "deep") -> str:
     """
     import re as _re
     if mode == "deep":
-        model, max_tok, timeout = MODEL_DEEP, 4000, 300
+        model, max_tok, timeout = MODEL_DEEP, 12000, 300
     elif mode == "fast":
         model, max_tok, timeout = MODEL_FAST, 3000, 60
     else:
@@ -1997,9 +1997,13 @@ def ask_text(prompt: str, mode: str = "deep") -> str:
         raw = _re.sub(r"<think>.*?</think>", "", raw, flags=_re.DOTALL).strip()
         if not raw:
             reasoning = getattr(msg, "reasoning_content", None)
-            if reasoning:
+            # Фолбэк только на КОРОТКИЙ reasoning: длинный — это обрезанный поток размышлений
+            # (модель съела лимит до ответа), такое пользователю не отдаём.
+            if reasoning and len(reasoning.strip()) <= 2000:
                 raw = reasoning.strip()
-                logger.info("ask_text: использован reasoning_content как fallback")
+                logger.info("ask_text: использован короткий reasoning_content как fallback")
+            elif reasoning:
+                logger.warning(f"ask_text: content пуст, reasoning {len(reasoning)} симв. — отброшен (обрезан)")
         if not raw:
             logger.warning("ask_text: пустой ответ модели")
         return raw
