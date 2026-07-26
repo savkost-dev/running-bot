@@ -84,6 +84,8 @@ def format_brief(result: dict, modes: list | None) -> str:
         lines.append(f"🏁 Цель: {result['overall_purpose']}")
     if result.get("summary"):
         lines.append(f"💡 Суть: {result['summary']}")
+    lines.append("\n⚠️ Если у тебя есть тренер — его задание главнее: он знает твою форму и цели. "
+                 "Для всех остальных ориентиром послужит рекомендация ниже.")
     if modes:
         lines.append("\n📊 Рекомендуемые режимы:")
         for m in modes:
