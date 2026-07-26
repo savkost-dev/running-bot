@@ -3668,6 +3668,18 @@ async def _autoanalyze_post(workout: dict, context=None) -> None:
                 f"Тип: {result.get('workout_type', '—')} | Дата: {result.get('workout_date', '—')}\n"
                 f"{valid_mark} | групп: {n_groups}, доп.групп: {n_extra} | режим {mode}"
             )
+            # Бриф режимов (Шаг 1.5) — только при ПЕРВОМ анализе анонса (доп. группы/правки
+            # не дублируют). Изолированно: ошибка не роняет автоанализ.
+            if reason == "новый анонс":
+                try:
+                    import announce_brief
+                    brief = await asyncio.to_thread(
+                        announce_brief.build_admin_brief, result, post_id, "deep")
+                    if brief:
+                        for i in range(0, len(brief), 4096):
+                            await _notify_admin(context.bot, brief[i:i + 4096])
+                except Exception as e:
+                    logger.warning(f"autoanalyze: announce_brief error: {e}")
     except Exception as e:
         logger.error(f"autoanalyze error for post {workout.get('post_id')}: {e}")
 
