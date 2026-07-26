@@ -47,8 +47,13 @@ last_prompt: str = ""
 def _estimate_vo2max(fitness: dict, recovery: dict | None) -> tuple[float | None, str]:
     """
     Возвращает (vo2max, source).
-    Приоритет: явное поле из устройства → оценка из Strava по VDOT (Jack Daniels).
+    VO2max v2: если в fitness уже подставлено разрешённое значение из базы
+    (vo2max_resolved) — оно главное, recovery/оценки его не перебивают.
+    Иначе приоритет: устройство → оценка из Strava по VDOT (Jack Daniels).
     """
+    if fitness.get("vo2max_resolved") and fitness.get("vo2max"):
+        return float(fitness["vo2max"]), fitness.get("vo2max_source", "профиль")
+
     if recovery:
         v = recovery.get("vo2max")
         if v:
@@ -2706,6 +2711,9 @@ def format_evening_message(advice: dict, workout: dict, stats: dict | None = Non
         pace_str = f" — {_html.escape(pace)}" if pace else ""
         group_header = f"🎯 <b>Группа {group}{pace_str}</b>"
     lines.append(group_header)
+    _ath = advice.get("athlete_line")
+    if _ath:
+        lines.append(f"📈 <i>{_html.escape(_ath)}</i>")
     if reason:
         lines.append(f"<i>{reason}</i>")
 

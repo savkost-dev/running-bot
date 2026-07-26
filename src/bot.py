@@ -30,7 +30,8 @@ from database import (
     get_all_users_with_details, get_users_with_service_full, get_users_with_profile_full,
     save_feedback, save_rating, get_recent_ratings, get_recent_feedbacks,
     save_workout_analysis, get_workout_analysis, get_latest_workout_analysis,
-    save_vo2max_device, save_vo2max_manual,
+    save_vo2max_device, save_vo2max_manual, set_vo2max_priority,
+    save_lt_device, save_lt_manual, set_lt_priority,
     get_preprocess_mode, set_preprocess_mode,
     get_users_list_for_b,
     get_morning_caught,
@@ -626,6 +627,21 @@ async def cmd_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(text[i:i + 4096])
 
 
+def _athlete_line(db_user_id: int) -> str:
+    """Строка «МПК X · ПАНО Y/км @ Z» для рекомендации — из профиля (VO2max resolved).
+    Пустая строка, если данных нет — блок тогда не рендерится."""
+    p = get_user_profile(db_user_id) or {}
+    parts = []
+    if p.get("vo2max"):
+        parts.append(f"МПК {p['vo2max']}")
+    if p.get("lactate_threshold_pace"):
+        lt = f"ПАНО {p['lactate_threshold_pace']}/км"
+        if p.get("lactate_threshold_hr"):
+            lt += f" @ {p['lactate_threshold_hr']}"
+        parts.append(lt)
+    return " · ".join(parts)
+
+
 def _vo2max_tag(profile: dict) -> str:
     source = profile.get("vo2max_source")
     updated = profile.get("vo2max_updated_at") or profile.get("updated_at") or ""
@@ -662,7 +678,8 @@ def _build_profile_text(profile: dict | None) -> str:
         lines.append(f"Пол: {'Мужской' if profile['gender'] == 'male' else 'Женский'}")
     if profile.get("vo2max"):
         tag = _vo2max_tag(profile)
-        lock_icon = " 🔒" if profile.get("vo2max_locked") else ""
+        _prio = (profile.get("vo2max_resolved") or {}).get("priority") or "device"
+        lock_icon = " 📌" if _prio == "manual" else ""
         lines.append(f"VO2max: {profile['vo2max']} мл/кг/мин{f'  ({tag})' if tag else ''}{lock_icon}")
     if profile.get("lactate_threshold_pace"):
         lt = f"Лактатный порог: {profile['lactate_threshold_pace']} мин/км"
@@ -693,10 +710,12 @@ def _build_profile_keyboard(profile: dict | None = None) -> InlineKeyboardMarkup
     ]
     lock_row = []
     if p.get("vo2max") is not None:
-        lbl = "🔒 VO2max заблокирован" if p.get("vo2max_locked") else "🔓 VO2max (обновлять)"
+        _prio = (p.get("vo2max_resolved") or {}).get("priority") or "device"
+        lbl = "📌 VO2max: вручную" if _prio == "manual" else "📡 VO2max: из систем"
         lock_row.append(InlineKeyboardButton(lbl, callback_data="profile_toggle_vo2max_lock"))
     if p.get("lactate_threshold_pace"):
-        lbl = "🔒 ЛП заблокирован" if p.get("lactate_locked") else "🔓 ЛП (обновлять)"
+        _lprio = (p.get("lt_resolved") or {}).get("priority") or "device"
+        lbl = "📌 ЛП: вручную" if _lprio == "manual" else "📡 ЛП: из систем"
         lock_row.append(InlineKeyboardButton(lbl, callback_data="profile_toggle_lactate_lock"))
     if lock_row:
         rows.append(lock_row)
@@ -1697,6 +1716,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         save_user_profile(db_user_id, vo2max=float(vo2max_val), vo2max_source="auto")
                     garmin_parts.append(f"VO2max {float(vo2max_val):.0f}")
                 if not isinstance(lt, Exception) and lt:
+                    save_lt_device(db_user_id, lt["pace"], lt.get("hr"), "garmin")
                     if not (profile or {}).get("lactate_locked"):
                         save_user_profile(db_user_id,
                             lactate_threshold_pace=lt["pace"],
@@ -1819,13 +1839,27 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db_user_id = get_or_create_user(user.id, user.full_name, user.username)
         profile = get_user_profile(db_user_id)
         if query.data == "profile_toggle_vo2max_lock":
-            new_val = 0 if (profile or {}).get("vo2max_locked") else 1
-            save_user_profile(db_user_id, vo2max_locked=new_val)
-            note = "🔒 VO2max защищён — сервисы не перепишут." if new_val else "🔓 VO2max будет обновляться из сервисов."
+            cur = ((profile or {}).get("vo2max_resolved") or {}).get("priority") or "device"
+            new_prio = "device" if cur == "manual" else "manual"
+            set_vo2max_priority(db_user_id, new_prio)
+            if new_prio == "manual" and not (((profile or {}).get("vo2max_resolved") or {})
+                                             .get("manual", {}) or {}).get("value"):
+                note = ("📌 Приоритет: вручную. Ручное значение ещё не задано — введи через "
+                        "«Указать VO2max», пока используется значение из систем.")
+            else:
+                note = ("📌 Используется значение, введённое вручную." if new_prio == "manual"
+                        else "📡 Используется значение из систем (Garmin/COROS/Polar).")
         else:
-            new_val = 0 if (profile or {}).get("lactate_locked") else 1
-            save_user_profile(db_user_id, lactate_locked=new_val)
-            note = "🔒 Лактатный порог защищён — сервисы не перепишут." if new_val else "🔓 Лактатный порог будет обновляться из сервисов."
+            cur = ((profile or {}).get("lt_resolved") or {}).get("priority") or "device"
+            new_prio = "device" if cur == "manual" else "manual"
+            set_lt_priority(db_user_id, new_prio)
+            if new_prio == "manual" and not (((profile or {}).get("lt_resolved") or {})
+                                             .get("manual", {}) or {}).get("pace"):
+                note = ("📌 Приоритет ЛП: вручную. Ручное значение ещё не задано — введи через "
+                        "«Лактатный порог», пока используется значение из систем.")
+            else:
+                note = ("📌 ЛП: используется значение, введённое вручную." if new_prio == "manual"
+                        else "📡 ЛП: используется значение из систем (Garmin).")
         profile = get_user_profile(db_user_id)
         await query.edit_message_text(
             f"{note}\n\n{_build_profile_text(profile)}",
@@ -2212,6 +2246,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pace = pace_match.group(1)
         db_user_id = get_or_create_user(user.id, user.full_name, user.username)
         save_user_profile(db_user_id, lactate_threshold_pace=pace, lactate_source="manual")
+        save_lt_manual(db_user_id, pace, None)
         try:
             zones.recalculate_and_save(db_user_id)
         except Exception as e:
@@ -2230,6 +2265,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         hr = int(text.strip())
         db_user_id = get_or_create_user(user.id, user.full_name, user.username)
         save_user_profile(db_user_id, lactate_threshold_hr=hr, lactate_source="manual")
+        save_lt_manual(db_user_id, None, hr)
         pace = context.user_data.pop("lactate_pace", "")
         context.user_data.pop("awaiting_profile")
         profile = get_user_profile(db_user_id)
@@ -2283,6 +2319,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 save_user_profile(db_user_id, vo2max=vo2max, vo2max_source="garmin")
                 save_vo2max_device(db_user_id, float(vo2max), "garmin")
             if garmin_lt_found:
+                save_lt_device(db_user_id, lt["pace"], lt.get("hr"), "garmin")
                 save_user_profile(db_user_id,
                     lactate_threshold_pace=lt["pace"],
                     lactate_threshold_hr=lt["hr"],
@@ -2623,7 +2660,7 @@ async def _send_ai_variant_b(
                 "work_text": analysis.get("work_text", ""),
             }
         msg_text = claude_advisor.format_evening_message(
-            advice, workout_for_render, stats, weather_line=weather_line
+            advice | {"athlete_line": _athlete_line(db_user_id)}, workout_for_render, stats, weather_line=weather_line
         )
         msg_text = scenario_ctx["user_text"] + "\n\n" + msg_text
         _rating_data[telegram_id] = {
@@ -2918,7 +2955,8 @@ async def _send_recommendation(
             advice, workout_dict, stats=stats2, weather_line=weather_line, has_tracker=has_tracker)
     else:
         body = claude_advisor.format_evening_message(
-            advice, workout_dict, stats=stats2, weather_line=weather_line, has_tracker=has_tracker)
+            advice | {"athlete_line": _athlete_line(db_user_id)}, workout_dict,
+            stats=stats2, weather_line=weather_line, has_tracker=has_tracker)
 
     # Сохранять для утренней — только при плановой рассылке (is_broadcast=True)
     if is_broadcast:
@@ -3027,19 +3065,10 @@ async def _send_workout_recommendation(
     # 3. Профиль спортсмена (VO2max / лактатный порог из ручного ввода)
     profile = get_user_profile(db_user_id)
     if profile:
-        if profile.get("vo2max") and not fitness.get("vo2max"):
-            source = profile.get("vo2max_source")
-            updated = profile.get("vo2max_updated_at") or ""
-            stale = False
-            if source in ("garmin", "coros") and updated:
-                try:
-                    from datetime import datetime as _dt
-                    stale = (_dt.now() - _dt.fromisoformat(updated)).days > 30
-                except Exception:
-                    stale = True
-            if not stale:
-                fitness["vo2max"] = profile["vo2max"]
-                fitness["vo2max_source"] = source or "профиль"
+        if profile.get("vo2max"):
+            fitness["vo2max"] = profile["vo2max"]
+            fitness["vo2max_source"] = profile.get("vo2max_source") or "профиль"
+            fitness["vo2max_resolved"] = True
         if profile.get("lactate_threshold_pace"):
             fitness["lactate_threshold_pace"] = profile["lactate_threshold_pace"]
         if profile.get("lactate_threshold_hr"):
@@ -3089,7 +3118,7 @@ async def _send_workout_recommendation(
         get_token(db_user_id, "polar") or
         get_token(db_user_id, "strava")
     )
-    text = format_evening_message(advice, workout, stats=stats, weather_line=weather_line, profile_only=_profile_only, has_tracker=has_tracker)
+    text = format_evening_message(advice | {"athlete_line": _athlete_line(db_user_id)}, workout, stats=stats, weather_line=weather_line, profile_only=_profile_only, has_tracker=has_tracker)
 
     if advice:
         try:
@@ -3325,19 +3354,10 @@ async def _send_long_run_recommendation(
 
     profile = get_user_profile(db_user_id)
     if profile:
-        if profile.get("vo2max") and not fitness.get("vo2max"):
-            source = profile.get("vo2max_source")
-            updated = profile.get("vo2max_updated_at") or ""
-            stale = False
-            if source in ("garmin", "coros") and updated:
-                try:
-                    from datetime import datetime as _dt
-                    stale = (_dt.now() - _dt.fromisoformat(updated)).days > 30
-                except Exception:
-                    stale = True
-            if not stale:
-                fitness["vo2max"] = profile["vo2max"]
-                fitness["vo2max_source"] = source or "профиль"
+        if profile.get("vo2max"):
+            fitness["vo2max"] = profile["vo2max"]
+            fitness["vo2max_source"] = profile.get("vo2max_source") or "профиль"
+            fitness["vo2max_resolved"] = True
         if profile.get("lactate_threshold_pace"):
             fitness["lactate_threshold_pace"] = profile["lactate_threshold_pace"]
         if profile.get("lactate_threshold_hr"):
@@ -4189,6 +4209,7 @@ async def scheduled_data_refresh(context: ContextTypes.DEFAULT_TYPE):
                             save_user_profile(db_user_id, vo2max=vo2max, vo2max_source="garmin")
                             vo2max_ok += 1
                     if not isinstance(lt, Exception) and lt:
+                        save_lt_device(db_user_id, lt["pace"], lt.get("hr"), "garmin")
                         if not (profile or {}).get("lactate_locked"):
                             save_user_profile(db_user_id,
                                               lactate_threshold_pace=lt["pace"],

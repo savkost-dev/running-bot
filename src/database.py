@@ -258,7 +258,15 @@ def init_db():
                 "vo2max_device_at TEXT",
                 "vo2max_manual REAL",
                 "vo2max_manual_at TEXT",
-                "vo2max_priority TEXT"):
+                "vo2max_priority TEXT",
+                "lt_pace_device TEXT",
+                "lt_hr_device INTEGER",
+                "lt_device_source TEXT",
+                "lt_device_at TEXT",
+                "lt_pace_manual TEXT",
+                "lt_hr_manual INTEGER",
+                "lt_manual_at TEXT",
+                "lt_priority TEXT"):
         with get_connection() as conn:
             try:
                 conn.execute(f"ALTER TABLE user_profile ADD COLUMN {col}")
@@ -924,6 +932,37 @@ def save_user_profile(user_id: int, vo2max: float | None = None,
 
 
 def get_user_profile(user_id: int) -> dict | None:
+    """Профиль спортсмена с VO2max v2: поля vo2max/vo2max_source/vo2max_updated_at
+    берутся из get_vo2max_resolved (device/manual + приоритет) — единая точка
+    чтения для всех потребителей (промт, зоны, экран профиля, /report).
+    Полный resolved-словарь доступен в ключе vo2max_resolved."""
+    prof = _get_user_profile_row(user_id)
+    if not prof:
+        return None
+    try:
+        res = get_vo2max_resolved(user_id)
+    except Exception:
+        res = None
+    if res:
+        prof["vo2max"] = res["value"]
+        prof["vo2max_source"] = ("manual" if res["kind"] == "manual"
+                                 else (res["device"].get("source") or "auto"))
+        prof["vo2max_updated_at"] = res["at"]
+        prof["vo2max_resolved"] = res
+    try:
+        lres = get_lt_resolved(user_id)
+    except Exception:
+        lres = None
+    if lres:
+        prof["lactate_threshold_pace"] = lres["pace"]
+        prof["lactate_threshold_hr"] = lres["hr"]
+        prof["lactate_source"] = ("manual" if lres["kind"] == "manual"
+                                  else (lres["device"].get("source") or "auto"))
+        prof["lt_resolved"] = lres
+    return prof
+
+
+def _get_user_profile_row(user_id: int) -> dict | None:
     """Возвращает профиль спортсмена или None если не заполнен."""
     with get_connection() as conn:
         row = conn.execute("""
@@ -1312,6 +1351,80 @@ def get_vo2max_resolved(user_id: int) -> dict | None:
                     "source": "вручную" if kind == "manual" else (dev_src or "трекер"),
                     "kind": kind,
                     "at": man_at if kind == "manual" else dev_at,
+                    "age_days": manual["age_days"] if kind == "manual" else device["age_days"],
+                    "device": device, "manual": manual, "priority": prio}
+    return None
+
+
+# ── Лактатный порог v2: device/manual + приоритет (зеркало VO2max v2) ──
+
+def save_lt_device(user_id: int, pace: str, hr, source: str) -> None:
+    """Запись ЛП из трекера (темп обязателен, пульс может быть None).
+    Всегда, без порогов и lock — приоритет решается при чтении."""
+    now = datetime.now().isoformat()
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE user_profile SET lt_pace_device = ?, lt_hr_device = ?, "
+            "lt_device_source = ?, lt_device_at = ? WHERE user_id = ?",
+            (str(pace), int(hr) if hr is not None else None, source, now, user_id))
+
+
+def save_lt_manual(user_id: int, pace, hr) -> None:
+    """Запись ручного ЛП. Ставит приоритет manual (явный ввод = «используй моё»).
+    Ввод в боте двухшаговый (темп, потом пульс), поэтому None не затирает
+    вторую половину — COALESCE оставляет прежнее значение."""
+    now = datetime.now().isoformat()
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE user_profile SET "
+            "lt_pace_manual = COALESCE(?, lt_pace_manual), "
+            "lt_hr_manual = COALESCE(?, lt_hr_manual), "
+            "lt_manual_at = ?, lt_priority = 'manual' WHERE user_id = ?",
+            (str(pace) if pace is not None else None,
+             int(hr) if hr is not None else None, now, user_id))
+
+
+def set_lt_priority(user_id: int, priority: str) -> None:
+    """Переключатель 'manual' | 'device' для ЛП."""
+    with get_connection() as conn:
+        conn.execute("UPDATE user_profile SET lt_priority = ? WHERE user_id = ?",
+                     (priority, user_id))
+
+
+def get_lt_resolved(user_id: int) -> dict | None:
+    """Единая точка чтения лактатного порога (pace+hr).
+    Приоритет из lt_priority (дефолт device); фолбэк на второе значение.
+    Значение считается заданным, если есть темп (пульс опционален).
+    Возвращает {pace, hr, source, kind, at, age_days, device, manual, priority} или None."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT lt_pace_device, lt_hr_device, lt_device_source, lt_device_at, "
+            "lt_pace_manual, lt_hr_manual, lt_manual_at, lt_priority "
+            "FROM user_profile WHERE user_id = ?", (user_id,)).fetchone()
+    if not row:
+        return None
+    dp, dh, dsrc, dat, mp, mh, mat, prio = row
+
+    def _age(ts):
+        if not ts:
+            return None
+        try:
+            return (datetime.now() - datetime.fromisoformat(ts)).days
+        except Exception:
+            return None
+
+    device = {"pace": dp, "hr": dh, "source": dsrc, "at": dat, "age_days": _age(dat)}
+    manual = {"pace": mp, "hr": mh, "at": mat, "age_days": _age(mat)}
+    prio = prio or "device"
+    order = ("manual", "device") if prio == "manual" else ("device", "manual")
+    for kind in order:
+        pace = mp if kind == "manual" else dp
+        if pace:
+            return {"pace": pace,
+                    "hr": mh if kind == "manual" else dh,
+                    "source": "вручную" if kind == "manual" else (dsrc or "трекер"),
+                    "kind": kind,
+                    "at": mat if kind == "manual" else dat,
                     "age_days": manual["age_days"] if kind == "manual" else device["age_days"],
                     "device": device, "manual": manual, "priority": prio}
     return None
