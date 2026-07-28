@@ -14,3 +14,4 @@ temp/
 *.gpx
 .ipynb_checkpoints/
 data/
+*.bak*
