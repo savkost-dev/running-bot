@@ -82,6 +82,17 @@ async def ensure_valid_token(db_user_id: int) -> str | None:
                         str(new["expires_at"])
                     )
                     return new["access_token"]
+                # Runtime-deauth: refresh отвергнут (доступ отозван, а вебхук-событие
+                # могло не дойти). Сеть/5xx сюда не попадают (исключение выше) —
+                # чистим только явный отказ, старый протухший токен не возвращаем.
+                if new.get("errors") or "invalid" in str(new).lower():
+                    from database import purge_strava_data
+                    import logging
+                    purge_strava_data(db_user_id)
+                    logging.getLogger(__name__).warning(
+                        f"strava: refresh отвергнут для uid={db_user_id}, "
+                        f"токен удалён ({str(new)[:120]})")
+                    return None
         except (ValueError, TypeError):
             pass
 

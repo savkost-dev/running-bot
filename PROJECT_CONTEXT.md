@@ -214,6 +214,9 @@ _W_FORM_NB/_W_REC_NB = 0.58/0.42  # веса форма/восстановлен
 ## Таблицы БД (ключевые)
 ```
 users, user_tokens, user_preferences (ai_mode DEFAULT 'smart', is_active, deactivated_at)
+Токены внешних сервисов — в user_tokens(user_id, service, access/refresh, expires_at);
+service ∈ strava/whoop/polar/coros. Аудит живости strava-токенов: scripts/probe_strava_audit.py
+(пробует refresh каждого, классифицирует OK/REVOKED/ERROR, ничего не пишет).
 user_profile (VO2max, ЛП, пол, источники, specialization, vo2max_locked, lactate_locked)  ⚠ ЕД.Ч.!
 athlete_cache (CTL/ATL/TSB, Риегель, + pace_zones_json/zones_source/zones_updated_at)
 garmin_recovery_cache (Body Battery, HRV, Training Readiness, TTL 20ч)

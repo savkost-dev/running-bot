@@ -13,9 +13,13 @@ Endpoints:
 import asyncio
 import json
 import logging
+import os
 import time as _time
 
 from aiohttp import web
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -131,7 +135,7 @@ async def _strava_callback(request: web.Request) -> web.Response:
         logger.error(f"Strava exchange bad response: {token_data}")
         return _err("Strava не вернул токен. Попробуй авторизоваться заново.")
 
-    from database import get_or_create_user, save_token
+    from database import get_or_create_user, save_token, set_strava_athlete_id
     db_user_id = get_or_create_user(telegram_id, "")
     save_token(
         db_user_id, "strava",
@@ -139,6 +143,10 @@ async def _strava_callback(request: web.Request) -> web.Response:
         token_data["refresh_token"],
         str(token_data.get("expires_at", "")),
     )
+    # Для вебхуков: события приходят с owner_id (athlete id) — запоминаем связку сразу
+    _ath_id = (token_data.get("athlete") or {}).get("id")
+    if _ath_id:
+        set_strava_athlete_id(db_user_id, _ath_id)
     logger.info(f"Strava OAuth OK: telegram_id={telegram_id} db_user_id={db_user_id}")
 
     if _telegram_app:
@@ -415,6 +423,58 @@ async def _notify_polar(telegram_id: int, db_user_id: int,
         logger.warning(f"Admin notify polar error: {e}")
 
 
+# ── Strava webhook ────────────────────────────────────────
+# GET — рукопожатие при создании подписки (эхо hub.challenge),
+# POST — события: activity create/update/delete и athlete deauthorize.
+# Требование Strava: отвечать 200 быстро (<2 сек), обработка — неблокирующая.
+
+STRAVA_WEBHOOK_VERIFY = os.getenv("STRAVA_WEBHOOK_VERIFY_TOKEN", "dodick-strava-hook")
+
+
+async def _strava_webhook_verify(request: web.Request) -> web.Response:
+    """Валидация подписки: Strava шлёт hub.mode/hub.verify_token/hub.challenge."""
+    if request.query.get("hub.verify_token") != STRAVA_WEBHOOK_VERIFY:
+        return web.Response(status=403, text="bad verify_token")
+    return web.Response(
+        text=json.dumps({"hub.challenge": request.query.get("hub.challenge", "")}),
+        content_type="application/json",
+    )
+
+
+async def _strava_webhook_event(request: web.Request) -> web.Response:
+    """События Strava. deauth (athlete + authorized=false) → чистка токена
+    и уведомление админа (слот освободился). activity — пока только лог."""
+    try:
+        event = await request.json()
+    except Exception:
+        return web.Response(text="ok")
+    logger.info(f"strava webhook: {event}")
+    try:
+        if (event.get("object_type") == "athlete"
+                and str((event.get("updates") or {}).get("authorized")).lower() == "false"):
+            from database import get_user_by_strava_athlete_id, purge_strava_data
+            uid = get_user_by_strava_athlete_id(event.get("owner_id"))
+            if uid:
+                purge_strava_data(uid)
+                logger.info(f"strava webhook: deauth uid={uid} "
+                            f"(athlete {event.get('owner_id')}) — токен удалён")
+                if _telegram_app:
+                    try:
+                        await _telegram_app.bot.send_message(
+                            273726778,
+                            f"🔌 Strava: uid={uid} отозвал доступ — токен удалён, "
+                            f"слот освобождён",
+                        )
+                    except Exception:
+                        pass
+            else:
+                logger.warning(
+                    f"strava webhook: deauth неизвестного athlete {event.get('owner_id')}")
+    except Exception as e:
+        logger.error(f"strava webhook processing error: {e}")
+    return web.Response(text="ok")
+
+
 # ── Health check ──────────────────────────────────────────────
 
 async def _health(request: web.Request) -> web.Response:
@@ -430,6 +490,8 @@ async def _health(request: web.Request) -> web.Response:
 def create_web_app() -> web.Application:
     app = web.Application()
     app.router.add_get("/strava/callback", _strava_callback)
+    app.router.add_get("/strava/webhook", _strava_webhook_verify)
+    app.router.add_post("/strava/webhook", _strava_webhook_event)
     app.router.add_get("/whoop/callback",  _whoop_callback)
     app.router.add_get("/polar/callback",  _polar_callback)
     app.router.add_get("/health",          _health)

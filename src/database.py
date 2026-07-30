@@ -278,6 +278,12 @@ def init_db():
                 conn.execute(f"ALTER TABLE athlete_cache ADD COLUMN {col}")
             except Exception:
                 pass
+    # Strava webhooks: связка событий (owner_id = athlete id) с нашим user_id
+    with get_connection() as conn:
+        try:
+            conn.execute("ALTER TABLE user_tokens ADD COLUMN strava_athlete_id TEXT")
+        except Exception:
+            pass
     with get_connection() as conn:
         try:
             conn.execute("ALTER TABLE workout_analysis ADD COLUMN edit_date TEXT")
@@ -396,6 +402,44 @@ def get_active_users() -> list:
             LEFT JOIN user_preferences p ON u.id = p.user_id
             WHERE p.is_active IS NULL OR p.is_active = 1
         """).fetchall()
+
+
+# ── Strava webhooks: маппинг athlete_id ↔ user_id ──────────────────
+
+def set_strava_athlete_id(user_id: int, athlete_id) -> None:
+    """Запоминает Strava athlete id для пользователя (нужен вебхукам:
+    события приходят с owner_id, без нашего user_id)."""
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE user_tokens SET strava_athlete_id = ? "
+            "WHERE user_id = ? AND service = 'strava'",
+            (str(athlete_id), user_id))
+
+
+def get_user_by_strava_athlete_id(athlete_id) -> int | None:
+    """user_id по Strava athlete id (для событий вебхука). None если не знаем."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT user_id FROM user_tokens "
+            "WHERE service = 'strava' AND strava_athlete_id = ?",
+            (str(athlete_id),)).fetchone()
+    return row[0] if row else None
+
+
+def purge_strava_data(user_id: int) -> None:
+    """Полная очистка Strava-данных пользователя при деавторизации
+    (Strava API Policy 7.4: удалять не только токен, а все Strava Data
+    и производные). Удаляет: токен; athlete_cache (CTL/ATL/TSB и прогнозы
+    считаны из strava-активностей); raw_service_data('strava'); строку
+    unified_cache (смешанные источники — пересоберётся ночным джобом
+    из оставшихся сервисов без strava)."""
+    with get_connection() as conn:
+        conn.execute("DELETE FROM user_tokens WHERE user_id = ? AND service = 'strava'",
+                     (user_id,))
+        conn.execute("DELETE FROM athlete_cache WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM raw_service_data WHERE user_id = ? AND service = 'strava'",
+                     (user_id,))
+        conn.execute("DELETE FROM unified_cache WHERE user_id = ?", (user_id,))
 
 
 def get_inactive_users() -> list:

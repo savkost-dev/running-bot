@@ -72,6 +72,7 @@ data_normalizer.py уже написан и протестирован, оста
 | Polar Running Index (VO2max) | в профиле нет, лежит в детализации тренировки. Пока МПК вручную |
 | Polar physical-info в fetch_raw | get_physical_info готова, но physical-info — событийный pull (отдаётся 1 раз). Вызывать в fetch_raw и сразу сохранять vo2max/ЛП в user_profile, иначе данные теряются |
 | Мультимодельность (DeepSeek + Anthropic) | спланировано, не сделано |
+| Strava: лимит атлетов 10/10 | Расширение дадут только после webhooks + deauth-чистки (письмо Strava, июль 2026). План: GET/POST /strava/webhook в oauth_server (hub.challenge при подписке; события activity и authorized=false → чистка токена), подписка через push_subscriptions API, обработка invalid refresh → деактивация, переподача с описанием изменений. Аудит токенов: scripts/probe_strava_audit.py (28.07.2026: все 10 живы, чистить нечего) |
 
 ---
 
