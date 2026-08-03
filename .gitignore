@@ -15,3 +15,5 @@ temp/
 .ipynb_checkpoints/
 data/
 *.bak*
+img/
+tmp/
