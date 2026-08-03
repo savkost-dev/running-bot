@@ -2162,7 +2162,7 @@ def ask_groq(prompt: str, mode: str = "smart") -> dict | None:
     return None
 
 
-def ask_text(prompt: str, mode: str = "deep") -> str:
+def ask_text(prompt: str, mode: str = "deep", temperature: float = 0.4) -> str:
     """Свободный текстовый ответ модели (БЕЗ JSON-парсинга). Для свободных
     анализов/комментариев тренера. Возвращает текст или '' при ошибке/таймауте.
 
@@ -2180,7 +2180,7 @@ def ask_text(prompt: str, mode: str = "deep") -> str:
             model=model,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=max_tok,
-            temperature=0.4,
+            temperature=temperature,
             timeout=timeout,
         )
         msg = resp.choices[0].message
