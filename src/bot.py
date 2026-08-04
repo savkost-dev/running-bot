@@ -670,7 +670,38 @@ SPECIALIZATIONS = {
 }
 
 
-def _build_profile_text(profile: dict | None) -> str:
+def _speed_lines(db_user_id: int | None) -> list:
+    """Строки со скоростями атлета: ПАНО, МПК, повторный, предел (200/400м).
+    Пустой список, если зон ещё нет — блок тогда не рендерится."""
+    if not db_user_id:
+        return []
+    try:
+        z = zones.get_pace_zones(db_user_id)
+    except Exception as e:
+        logger.warning(f"Зоны для профиля uid={db_user_id} не получены: {e}")
+        return []
+    zz = (z or {}).get("zones") or {}
+    if not zz:
+        return []
+    out = ["\nТвои скорости:"]
+    if zz.get("threshold"):
+        out.append(f"ПАНО (порог): {zz['threshold']} мин/км")
+    if zz.get("interval"):
+        out.append(f"МПК (интервальный): {zz['interval']} мин/км")
+    if zz.get("repetition"):
+        out.append(f"Повторный: {zz['repetition']} мин/км")
+    k100 = (z or {}).get("speed_k100")
+    if zz.get("repetition") and k100:
+        c200 = zones.speed_ceiling_for_distance(zz["repetition"], k100, 200)
+        c400 = zones.speed_ceiling_for_distance(zz["repetition"], k100, 400)
+        if c200 or c400:
+            parts = [p for p in (f"200м {c200}" if c200 else "",
+                                 f"400м {c400}" if c400 else "") if p]
+            out.append("Предел скорости: " + " · ".join(parts) + " мин/км")
+    return out
+
+
+def _build_profile_text(profile: dict | None, db_user_id: int | None = None) -> str:
     if not profile or not any([profile.get("vo2max"), profile.get("lactate_threshold_pace"), profile.get("gender")]):
         return "Профиль не заполнен. Используй кнопки ниже чтобы добавить данные."
     lines = ["Твой профиль:\n"]
@@ -692,6 +723,7 @@ def _build_profile_text(profile: dict | None) -> str:
         elif lt_lock:
             lt += f"  {lt_lock.strip()}"
         lines.append(lt)
+    lines += _speed_lines(db_user_id)
     spec = profile.get("specialization")
     spec_label = SPECIALIZATIONS.get(spec) if spec else None
     lines.append(f"Специализация: {spec_label or 'Полумарафон (по умолчанию)'}")
@@ -739,7 +771,7 @@ async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db_user_id = _mark_user_active_if_needed(user.id, user.full_name, user.username)
     profile = get_user_profile(db_user_id)
     await update.message.reply_text(
-        _build_profile_text(profile),
+        _build_profile_text(profile, db_user_id),
         reply_markup=_build_profile_keyboard(profile)
     )
 
@@ -856,11 +888,11 @@ def _build_help_text(is_admin: bool) -> str:
             "/debug_long — разбор последнего Long Run\n"
             "/ratings — последние оценки рекомендаций\n"
             "/feedbacks — последние сообщения обратной связи\n"
-            "/analyze — анализ последней тренировки через ИИ\n"
+            "/analyze_test — тестовый разбор анонса (без записи в базу)\n"
             "/preprocess_mode — режим анализа тренировок (deep/smart)\n"
             "/test_workout — тест Шага 2 (рекомендация группы) на твоих данных\n"
             "/test_long — тест Шага 2 для длительной на твоих данных\n"
-            "/reanalyze — форс переанализа свежих анонсов (обновить кэш)\n"
+            "/reanalyze — боевой переразбор анонса (запись в базу + эталоны + бриф)\n"
             "/show_analyze — показать последний Шаг 1 из базы\n"
             "/b — вариант B для себя\n"
             "/b_user — вариант B для выбранного пользователя\n"
@@ -1249,61 +1281,42 @@ def _format_analysis_result(result: dict, mode: str) -> str:
     return "\n".join(lines)
 
 
-async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Выбор типа тренировки для анализа через DeepSeek (только для админов)."""
+async def cmd_analyze_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Тестовый прогон Шага 1 без записи в БД (только для админов)."""
     if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
         await update.message.reply_text("Нет доступа.")
         return
     await update.message.reply_text(
-        "Какую тренировку проанализировать?",
+        "🧪 Тестовый разбор — результат НЕ сохраняется в базу.\n"
+        "Какую тренировку разобрать?",
         reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("⚡ Интервальная (вт/пт)", callback_data="analyze_interval"),
-            InlineKeyboardButton("🕐 Long Run (вс)",        callback_data="analyze_long"),
+            InlineKeyboardButton("⚡ Интервальная (вт/пт)", callback_data="analyze_test_interval"),
+            InlineKeyboardButton("🕐 Long Run (вс)",        callback_data="analyze_test_long"),
         ]])
     )
 
 
-async def _run_analyze_and_show(workout: dict, query, context: ContextTypes.DEFAULT_TYPE):
-    """Анализирует найденный пост тренировки и показывает результат админу."""
-    raw_text = workout.get("raw_text", "")
-    comments_text = workout.get("comments_text", "")
-    post_id = workout.get("post_id")
-
-    if not raw_text:
-        await query.edit_message_text("❌ Не удалось получить текст поста для анализа.")
+async def _run_analyze_test(workout: dict, query, context: ContextTypes.DEFAULT_TYPE):
+    """Тестовый прогон Шага 1: тот же разбор и тот же вывод, НО БЕЗ ЗАПИСИ в БД.
+    Боевые пути (шедулер, /reanalyze) используют то же ядро + _store_analysis.
+    """
+    if not (workout.get("raw_text") or ""):
+        await query.edit_message_text("❌ Не удалось получить текст поста для разбора.")
         return
 
     mode = get_preprocess_mode()
     await query.edit_message_text(
-        f"⏳ Анализирую через DeepSeek (режим {mode})...\nМожет занять 1-2 минуты."
+        f"🧪 Тестовый разбор через DeepSeek (режим {mode})...\nМожет занять 1-2 минуты."
     )
 
-    import functools
-    result = await asyncio.get_event_loop().run_in_executor(
-        None, functools.partial(analyze_workout, raw_text, comments_text, mode)
-    )
-
+    result = await _analyze_core(workout, mode)
     if not result:
-        await query.edit_message_text("❌ Анализ не удался (пустой ответ модели). Попробуй ещё раз.")
+        await query.edit_message_text("❌ Разбор не удался (пустой ответ модели). Попробуй ещё раз.")
         return
 
-    # Сохраняем результат в БД
-    try:
-        import json as _json
-        result["work_text"] = (workout.get("work_text") or "").strip()
-        save_workout_analysis(
-            post_id=post_id,
-            workout_date=result.get("workout_date", ""),
-            workout_type=result.get("workout_type", ""),
-            is_valid=1 if result.get("is_valid") else 0,
-            raw_text=raw_text,
-            analyzed_json=_json.dumps(result, ensure_ascii=False),
-            analysis_mode=mode,
-        )
-    except Exception as e:
-        logger.error(f"save_workout_analysis error: {e}")
-
-    text = _format_analysis_result(result, mode)
+    banner = ("🧪 ТЕСТОВЫЙ ПРОГОН — в базу НЕ записано, эталоны не обновлены.\n"
+              "Для боевого обновления — /reanalyze\n\n")
+    text = banner + _format_analysis_result(result, mode)
     first = True
     for i in range(0, len(text), 4096):
         chunk = text[i:i + 4096]
@@ -1441,78 +1454,50 @@ async def cmd_test_long(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _run_test_step2(update, context, long=True)
 
 
-async def _reanalyze_one(workout: dict, mode: str) -> str:
-    """Принудительный переанализ одного анонса (игнор idempotency) → запись в workout_analysis.
-    Возвращает строку статуса для админа.
+async def _reanalyze_one(workout: dict, mode: str, context=None) -> str:
+    """Боевой переразбор одного анонса (игнор idempotency): то же ядро,
+    что у шедулера, + единая запись (анализ + эталоны) + обновлённый бриф.
+    Возвращает готовый вывод разбора для админа (тот же, что у тестового прогона).
     """
-    import json as _json, functools
     label = "🕐 Long Run" if workout.get("workout_type") == "long" else "⚡ Интервальная"
     date_fmt = workout.get("workout_date", "—")
-    raw_text = workout.get("raw_text") or ""
-    comments_text = workout.get("comments_text") or ""
-    edit_date = workout.get("edit_date")
-    extra = workout.get("extra_groups") or []
 
-    result = await asyncio.get_event_loop().run_in_executor(
-        None, functools.partial(analyze_workout, raw_text, comments_text, mode)
-    )
+    result = await _analyze_core(workout, mode)
     if not result:
-        return f"{label} — {date_fmt}: ❌ анализ не удался (пустой ответ модели)"
+        return f"{label} — {date_fmt}: ❌ разбор не удался (пустой ответ модели)"
 
-    # Failsafe B: анонс без групп физически бесполезен для рекомендации
-    if result.get("is_valid") and not (result.get("groups") or []):
-        result["is_valid"] = False
-        result["reject_reason"] = "нет групп с темпами — не анонс"
-
-    result["work_text"] = (workout.get("work_text") or "").strip()
-    save_workout_analysis(
-        post_id=workout.get("post_id"),
-        workout_date=result.get("workout_date", ""),
-        workout_type=result.get("workout_type", ""),
-        is_valid=1 if result.get("is_valid") else 0,
-        raw_text=raw_text,
-        analyzed_json=_json.dumps(result, ensure_ascii=False),
-        analysis_mode=mode,
-        extra_groups_json=_json.dumps(extra, ensure_ascii=False),
-        edit_date=edit_date,
-    )
-    n_groups = len(result.get("groups") or [])
-    n_extra = len(result.get("extra_groups") or [])
+    _store_analysis(result, workout, mode)
     logger.info(f"reanalyze: post_id={workout.get('post_id')} обновлён вручную "
                 f"(type={result.get('workout_type')}, valid={result.get('is_valid')})")
-    return (
-        f"{label} — {result.get('workout_date', date_fmt)} | режим {mode} | "
-        f"valid={result.get('is_valid')}\n"
-        f"   групп: {n_groups}, доп. групп: {n_extra} — обновлено"
-    )
+
+    # Обновлённый бриф режимов (Шаг 1.5) — только интервальные, не роняет переразбор.
+    if context is not None and result.get("workout_type") != "long":
+        try:
+            import announce_brief
+            brief = await asyncio.to_thread(
+                announce_brief.build_admin_brief, result, workout.get("post_id"), "deep")
+            if brief:
+                for i in range(0, len(brief), 4096):
+                    await _notify_admin(context.bot, brief[i:i + 4096])
+        except Exception as e:
+            logger.warning(f"reanalyze: announce_brief error: {e}")
+
+    return "💾 ЗАПИСАНО В БАЗУ (анализ + эталоны)\n\n" + _format_analysis_result(result, mode)
 
 
 async def cmd_reanalyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Ручной форс переанализа свежих анонсов (interval + long) → кэш workout_analysis (админ)."""
+    """Боевой переразбор анонса с записью в базу: анализ + эталоны + бриф (админ)."""
     if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
         await update.message.reply_text("Нет доступа.")
         return
-
-    mode = get_preprocess_mode()
-    msg = await update.message.reply_text(
-        f"🔁 Принудительный переанализ свежих анонсов (режим {mode})...\nМожет занять 1-2 минуты на каждый."
+    await update.message.reply_text(
+        "💾 Боевой переразбор — результат ЗАПИШЕТСЯ в базу (анализ + эталоны).\n"
+        "Какую тренировку разобрать?",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("⚡ Интервальная (вт/пт)", callback_data="reanalyze_interval"),
+            InlineKeyboardButton("🕐 Long Run (вс)",        callback_data="reanalyze_long"),
+        ]])
     )
-
-    lines = [f"🔁 <b>Переанализ выполнен (режим {mode})</b>\n"]
-
-    workout = await find_next_workout(only_interval=True)
-    if workout and workout.get("post_id"):
-        lines.append(await _reanalyze_one(workout, mode))
-    else:
-        lines.append("⚡ Интервальная — анонс не найден")
-
-    workout_lr = await find_next_long_run()
-    if workout_lr and workout_lr.get("post_id"):
-        lines.append(await _reanalyze_one(workout_lr, mode))
-    else:
-        lines.append("🕐 Long Run — анонс не найден")
-
-    await msg.edit_text("\n".join(lines), parse_mode="HTML")
 
 
 async def cmd_show_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1779,7 +1764,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db_user_id = get_or_create_user(user.id, user.full_name, user.username)
         profile = get_user_profile(db_user_id)
         await query.edit_message_text(
-            _build_profile_text(profile),
+            _build_profile_text(profile, db_user_id),
             reply_markup=_build_profile_keyboard(profile)
         )
 
@@ -1811,7 +1796,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         save_user_profile(db_user_id, gender=gender)
         profile = get_user_profile(db_user_id)
         await query.edit_message_text(
-            f"✅ Пол сохранён: {gender_label}\n\n{_build_profile_text(profile)}",
+            f"✅ Пол сохранён: {gender_label}\n\n{_build_profile_text(profile, db_user_id)}",
             reply_markup=_build_profile_keyboard(profile)
         )
 
@@ -1831,7 +1816,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         save_user_profile(db_user_id, specialization=spec)
         profile = get_user_profile(db_user_id)
         await query.edit_message_text(
-            f"✅ Специализация сохранена: {SPECIALIZATIONS[spec]}\n\n{_build_profile_text(profile)}",
+            f"✅ Специализация сохранена: {SPECIALIZATIONS[spec]}\n\n{_build_profile_text(profile, db_user_id)}",
             reply_markup=_build_profile_keyboard(profile)
         )
 
@@ -1862,7 +1847,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         else "📡 ЛП: используется значение из систем (Garmin).")
         profile = get_user_profile(db_user_id)
         await query.edit_message_text(
-            f"{note}\n\n{_build_profile_text(profile)}",
+            f"{note}\n\n{_build_profile_text(profile, db_user_id)}",
             reply_markup=_build_profile_keyboard(profile)
         )
 
@@ -2094,18 +2079,43 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await context.bot.send_message(user.id, chunk)
 
-    elif query.data in ("analyze_interval", "analyze_long"):
+    elif query.data in ("analyze_test_interval", "analyze_test_long"):
         if user.id not in ADMIN_TELEGRAM_IDS:
             return
-        is_long = query.data == "analyze_long"
+        is_long = query.data == "analyze_test_long"
         await query.edit_message_text(
-            f"🔬 Ищу {'Long Run' if is_long else 'интервальную'} тренировку в канале..."
+            f"🧪 Ищу {'Long Run' if is_long else 'интервальную'} тренировку в канале..."
         )
         workout = await (find_next_long_run() if is_long else find_next_workout(only_interval=True))
         if not workout:
             await query.edit_message_text("😔 Не нашёл подходящую тренировку в канале.")
             return
-        await _run_analyze_and_show(workout, query, context)
+        await _run_analyze_test(workout, query, context)
+
+    elif query.data in ("reanalyze_interval", "reanalyze_long"):
+        if user.id not in ADMIN_TELEGRAM_IDS:
+            return
+        is_long = query.data == "reanalyze_long"
+        mode = get_preprocess_mode()
+        await query.edit_message_text(
+            f"💾 Ищу {'Long Run' if is_long else 'интервальную'} тренировку в канале..."
+        )
+        workout = await (find_next_long_run() if is_long else find_next_workout(only_interval=True))
+        if not workout or not workout.get("post_id"):
+            await query.edit_message_text("😔 Не нашёл подходящую тренировку в канале.")
+            return
+        await query.edit_message_text(
+            f"💾 Боевой переразбор через DeepSeek (режим {mode})...\nМожет занять 1-2 минуты."
+        )
+        text = await _reanalyze_one(workout, mode, context)
+        first = True
+        for i in range(0, len(text), 4096):
+            chunk = text[i:i + 4096]
+            if first:
+                await query.edit_message_text(chunk)
+                first = False
+            else:
+                await context.bot.send_message(user.id, chunk)
 
     # ── ОБРАТНАЯ СВЯЗЬ ────────────────────────────────────────
 
@@ -2233,7 +2243,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop("awaiting_profile")
         profile = get_user_profile(db_user_id)
         await update.message.reply_text(
-            f"✅ VO2max сохранён: {vo2max} мл/кг/мин\n\n{_build_profile_text(profile)}",
+            f"✅ VO2max сохранён: {vo2max} мл/кг/мин\n\n{_build_profile_text(profile, db_user_id)}",
             reply_markup=_build_profile_keyboard(profile)
         )
 
@@ -2270,7 +2280,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop("awaiting_profile")
         profile = get_user_profile(db_user_id)
         await update.message.reply_text(
-            f"✅ Лактатный порог сохранён: {pace} мин/км при ЧСС {hr} уд/мин\n\n{_build_profile_text(profile)}",
+            f"✅ Лактатный порог сохранён: {pace} мин/км при ЧСС {hr} уд/мин\n\n{_build_profile_text(profile, db_user_id)}",
             reply_markup=_build_profile_keyboard(profile)
         )
 
@@ -3580,6 +3590,61 @@ def _edit_newer(a: str | None, b: str | None) -> bool:
         return str(a) > str(b)
 
 
+# ── Единое ядро разбора анонса (Шаг 1) ──────────────────────────
+# Один разбор для всех путей: шедулер, боевой /reanalyze, тестовый прогон.
+# Ядро только считает и ничего не пишет; запись — отдельной функцией сверху.
+
+async def _analyze_core(workout: dict, mode: str) -> dict | None:
+    """Разбор анонса моделью + предохранители. В БД НЕ пишет.
+    Возвращает result-dict (готов к сохранению) или None, если модель не ответила.
+    """
+    import json as _json, functools, re as _re
+    result = await asyncio.get_event_loop().run_in_executor(
+        None, functools.partial(analyze_workout,
+                                workout.get("raw_text") or "",
+                                workout.get("comments_text") or "", mode)
+    )
+    if not result:
+        return None
+    # Предохранитель: анонс без групп С ТЕМПАМИ бесполезен для рекомендации
+    # (прогрев-посты с одной группой «здоровье» без темпа — это не анонс).
+    if result.get("is_valid"):
+        paced = [g for g in (result.get("groups") or [])
+                 if _re.search(r"\d{1,2}:\d{2}", _json.dumps(g, ensure_ascii=False))]
+        if not paced:
+            result["is_valid"] = False
+            result["reject_reason"] = "нет групп с темпами — не анонс"
+            logger.info(f"анализ: post_id={workout.get('post_id')} is_valid сброшен "
+                        f"(нет групп с темпами)")
+    result["work_text"] = (workout.get("work_text") or "").strip()
+    return result
+
+
+def _store_analysis(result: dict, workout: dict, mode: str) -> None:
+    """ЕДИНСТВЕННАЯ точка записи разбора: анализ + эталоны за ту же дату.
+    Формат данных один для всех боевых путей (шедулер, /reanalyze).
+    """
+    import json as _json
+    wdate = result.get("workout_date", "")
+    save_workout_analysis(
+        post_id=workout.get("post_id"),
+        workout_date=wdate,
+        workout_type=result.get("workout_type", ""),
+        is_valid=1 if result.get("is_valid") else 0,
+        raw_text=workout.get("raw_text") or "",
+        analyzed_json=_json.dumps(result, ensure_ascii=False),
+        analysis_mode=mode,
+        extra_groups_json=_json.dumps(workout.get("extra_groups") or [], ensure_ascii=False),
+        edit_date=workout.get("edit_date"),
+    )
+    # Эталоны по группам — из этого же разбора (лонг repeat-блоков не имеет).
+    if result.get("is_valid") and result.get("workout_type") != "long":
+        try:
+            _save_workout_templates(result, wdate)
+        except Exception as e:
+            logger.error(f"эталоны при сохранении разбора: {e}")
+
+
 async def _autoanalyze_post(workout: dict, context=None) -> None:
     """Фоновый автоанализ анонса (Шаг 1) → запись в workout_analysis.
     Запускается при: новом анонсе / новой доп. группе / редактировании поста.
@@ -3587,16 +3652,14 @@ async def _autoanalyze_post(workout: dict, context=None) -> None:
     После успешного анализа уведомляет ТОЛЬКО админа (контроль, что бот поймал анонс).
     Пользователям ничего не шлёт — их единственное сообщение это вечерняя рассылка 20:00.
     """
-    import json as _json, functools
+    import json as _json
     try:
         post_id = workout.get("post_id")
         if not post_id:
             return
         raw_text = workout.get("raw_text") or ""
-        comments_text = workout.get("comments_text") or ""
         edit_date = workout.get("edit_date")
         extra = workout.get("extra_groups") or []
-        extra_json = _json.dumps(extra, ensure_ascii=False)
 
         existing = get_workout_analysis(post_id)
         reason = None
@@ -3615,35 +3678,11 @@ async def _autoanalyze_post(workout: dict, context=None) -> None:
 
         mode = get_preprocess_mode()
         logger.info(f"autoanalyze: post_id={post_id} запуск анализа ({reason}, режим {mode})")
-        result = await asyncio.get_event_loop().run_in_executor(
-            None, functools.partial(analyze_workout, raw_text, comments_text, mode)
-        )
+        result = await _analyze_core(workout, mode)
         if not result:
             logger.warning(f"autoanalyze: post_id={post_id} анализ не удался ({reason})")
             return
-        # Failsafe B: анонс без групп С ТЕМПАМИ физически бесполезен для рекомендации.
-        # Прогрев-посты проходят с одной группой «здоровье» без темпа — это не анонс.
-        # Группа «с темпом» = в её JSON есть паттерн M:SS (схемонезависимо для interval/long).
-        if result.get("is_valid"):
-            import re as _re_fs
-            _paced = [g for g in (result.get("groups") or [])
-                      if _re_fs.search(r"\d{1,2}:\d{2}", _json.dumps(g, ensure_ascii=False))]
-            if not _paced:
-                result["is_valid"] = False
-                result["reject_reason"] = "нет групп с темпами — не анонс"
-                logger.info(f"autoanalyze: post_id={post_id} is_valid сброшен (нет групп с темпами)")
-        result["work_text"] = (workout.get("work_text") or "").strip()
-        save_workout_analysis(
-            post_id=post_id,
-            workout_date=result.get("workout_date", ""),
-            workout_type=result.get("workout_type", ""),
-            is_valid=1 if result.get("is_valid") else 0,
-            raw_text=raw_text,
-            analyzed_json=_json.dumps(result, ensure_ascii=False),
-            analysis_mode=mode,
-            extra_groups_json=extra_json,
-            edit_date=edit_date,
-        )
+        _store_analysis(result, workout, mode)
         n_groups = len(result.get("groups") or [])
         n_extra = len(result.get("extra_groups") or [])
         logger.info(
@@ -3992,35 +4031,29 @@ async def scheduled_wakeup_poll(context: ContextTypes.DEFAULT_TYPE):
 
 # ── ПЛАНИРОВЩИК ──────────────────────────────────────────────
 
-def _save_workout_templates(analysis: dict | None, live: dict | None) -> None:
-    """Сохраняет эталоны (готовый Garmin JSON) по всем группам из анализа Шага 1.
-    Только интервальные. Не критично — сбой не должен ронять рассылку/отчёт.
+def _save_workout_templates(parsed: dict | None, workout_date: str | None) -> None:
+    """Сохраняет эталоны (готовый Garmin JSON) по всем группам из разбора Шага 1.
+    На вход — УЖЕ РАЗОБРАННЫЙ анализ (dict) и дата тренировки.
+    Только интервальные. Не критично — сбой не должен ронять рассылку/разбор.
+    Группа «здоровье» пропускается: у неё нет темпов, эталон бессмысленен.
     """
     import json as _json
     from fit_generator import build_garmin_from_analysis
-    if not analysis:
-        return
-    tmpl_date = live.get("workout_date") if live else None
-    if not tmpl_date:
-        return
-    try:
-        parsed = _json.loads(analysis.get("analyzed_json") or "{}")
-    except Exception as e:
-        logger.error(f"эталоны: не распарсился analyzed_json: {e}")
+    if not parsed or not workout_date:
         return
     saved = 0
     for g in (parsed.get("groups") or []):
         gnum = str(g.get("number") or "").strip()
-        if not gnum:
+        if not gnum or "здоров" in gnum.lower():
             continue
         try:
             wj = build_garmin_from_analysis(parsed, gnum)
-            save_workout_template(tmpl_date, gnum, "interval",
+            save_workout_template(workout_date, gnum, "interval",
                                   _json.dumps(wj, ensure_ascii=False))
             saved += 1
         except Exception as e:
             logger.error(f"эталон группы {gnum} не сохранён: {e}")
-    logger.info(f"эталоны тренировки: {saved} групп на {tmpl_date}")
+    logger.info(f"эталоны тренировки: {saved} групп на {workout_date}")
 
 
 async def scheduled_evening(context: ContextTypes.DEFAULT_TYPE):
@@ -4056,9 +4089,15 @@ async def scheduled_evening(context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Evening notification error for {telegram_id}: {e}")
     logger.info(f"Вечерняя рассылка завершена ({wtype}, status={status}): {count} отправлено (кэш, без парсинга на лету)")
 
-    # Эталоны по группам в БД (только интервалы) — для последующей сверки факт/план.
+    # Эталоны теперь пишутся вместе с разбором (_store_analysis) — здесь страховка
+    # на случай анализов, сохранённых до перехода на единое ядро.
     if not is_long:
-        _save_workout_templates(analysis, live)
+        try:
+            import json as _json_t
+            _parsed_t = _json_t.loads((analysis or {}).get("analyzed_json") or "{}")
+            _save_workout_templates(_parsed_t, live.get("workout_date") if live else None)
+        except Exception as e:
+            logger.error(f"эталоны (рассылка): {e}")
 
     base = (f"📨 Рассылка завершена\n"
             f"Тип: {wtype} | Отправлено: {count} пользователям")
@@ -5227,7 +5266,7 @@ def main():
     app.add_handler(CommandHandler("feedback",  cmd_feedback))
     app.add_handler(CommandHandler("ratings",   cmd_ratings))
     app.add_handler(CommandHandler("feedbacks", cmd_feedbacks))
-    app.add_handler(CommandHandler("analyze",   cmd_analyze))
+    app.add_handler(CommandHandler("analyze_test", cmd_analyze_test))
     app.add_handler(CommandHandler("preprocess_mode", cmd_preprocess_mode))
     app.add_handler(CommandHandler("test_workout", cmd_test_workout))
     app.add_handler(CommandHandler("test_long",    cmd_test_long))

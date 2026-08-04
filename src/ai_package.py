@@ -258,6 +258,9 @@ def _pick_activity(acts, selector):
     runs = [a for a in (acts or [])
             if "running" in str((a.get("activityType") or {}).get("typeKey", ""))
             and re.search(r"DD[-_]", str(a.get("activityName") or ""))]
+    # Самая свежая — первой: на порядок выдачи API не полагаемся.
+    runs.sort(key=lambda a: str(a.get("startTimeLocal") or a.get("startTimeGMT") or ""),
+              reverse=True)
     if selector is None:
         return runs[0] if runs else None
     if str(selector).isdigit():
@@ -288,13 +291,12 @@ def _template_json(wdate, wgroup):
         return None
 
 
-def _assign_button_laps(splits, plan_wkt, plan_steps, use_plan_dist):
+def _assign_button_laps(splits, plan_wkt, plan_steps):
     """Кнопочные лэпы Garmin (у всех wktStepIndex=None) при наличии плана:
     раздаёт wktStepIndex/intensityType по порядку исполнения (strava._expand_plan_roles),
     лишние лэпы-хвосты остаются без шага.
-    use_plan_dist=True (тренажёр/манеж без GPS): дистанция лэпа заменяется плановой
-    (датчик врёт) — темп станет факт-время / план-дистанция.
-    Мутирует splits. Ничего не делает, если индексы уже есть."""
+    Мутирует splits. Ничего не делает, если индексы уже есть.
+    Дистанции здесь НЕ трогаются — этим занимается _apply_plan_distances."""
     laps = (splits.get("lapDTOs") or []) if isinstance(splits, dict) else []
     laps = [l for l in laps if isinstance(l, dict)]
     if not laps or not plan_wkt or not plan_steps:
@@ -303,12 +305,45 @@ def _assign_button_laps(splits, plan_wkt, plan_steps, use_plan_dist):
         return
     import strava as _sv
     seq = _sv._expand_plan_roles(plan_wkt)
-    dist_of = {p["idx"]: p.get("dist") for p in plan_steps}
     for lap, (idx, stype) in zip(laps, seq):
         lap["wktStepIndex"] = idx
         lap["intensityType"] = "REST" if stype in ("recovery", "rest") else "INTERVAL"
-        if use_plan_dist and dist_of.get(idx):
-            lap["distance"] = float(dist_of[idx])
+
+
+def _no_gps(act, source: str) -> bool:
+    """Запись без спутников (стадион/манеж/дорожка): дистанция с датчика врёт.
+    Strava: пустой start_latlng / пустая полилиния / trainer=true.
+    Garmin: нет координат старта (None или 0.0) либо treadmill в типе."""
+    if not isinstance(act, dict):
+        return False
+    if source == "strava":
+        if act.get("trainer") is True:
+            return True
+        if not (act.get("start_latlng") or []):
+            return True
+        return not ((act.get("map") or {}).get("summary_polyline") or "")
+    lat, lon = act.get("startLatitude"), act.get("startLongitude")
+    if "treadmill" in str((act.get("activityType") or {}).get("typeKey") or ""):
+        return True
+    return not lat and not lon
+
+
+def _apply_plan_distances(splits, plan_steps) -> int:
+    """Заменяет дистанции лэпов на плановые (время — фактическое,
+    темп пересчитается сам). Общий шаг для обеих веток: вызывается ПОСЛЕ разметки
+    лэпов, поэтому работает и с кнопочными лэпами, и со структурированной тренировкой.
+    Возвращает число заменённых лэпов."""
+    laps = (splits.get("lapDTOs") or []) if isinstance(splits, dict) else []
+    dist_of = {p["idx"]: p.get("dist") for p in (plan_steps or [])}
+    n = 0
+    for lap in laps:
+        if not isinstance(lap, dict):
+            continue
+        d = dist_of.get(lap.get("wktStepIndex"))
+        if d:
+            lap["distance"] = float(d)
+            n += 1
+    return n
 
 
 async def _garmin_candidate(db_user_id, selector):
@@ -338,9 +373,10 @@ async def _garmin_candidate(db_user_id, selector):
         plan_wkt = _template_json(wdate, wgroup)
         if plan_wkt:
             plan_steps = ar._flatten_plan_steps(plan_wkt)
-    _assign_button_laps(
-        splits, plan_wkt, plan_steps,
-        use_plan_dist=("treadmill" in str((act.get("activityType") or {}).get("typeKey") or "")))
+    _assign_button_laps(splits, plan_wkt, plan_steps)
+    if _no_gps(act, "garmin"):
+        n = _apply_plan_distances(splits, plan_steps)
+        print(f"/report: Garmin-активность без спутников — плановые дистанции у {n} лэпов")
     try:
         details = await asyncio.to_thread(client.get_activity_details, act_id, 100000, 100000)
     except Exception:
@@ -362,6 +398,10 @@ async def _strava_candidate(db_user_id, selector):
     acts = await strava.get_recent_activities(token, days=30)
     runs = [a for a in (acts or [])
             if a.get("type") == "Run" and re.search(r"DD[-_]", str(a.get("name") or ""))]
+    # ВАЖНО: Strava с параметром `after` отдаёт активности по ВОЗРАСТАНИЮ даты,
+    # то есть первой в списке идёт САМАЯ СТАРАЯ тренировка. Сортируем явно.
+    runs.sort(key=lambda a: str(a.get("start_date_local") or a.get("start_date") or ""),
+              reverse=True)
     if selector is None:
         act = runs[0] if runs else None
     elif str(selector).isdigit():
@@ -377,6 +417,9 @@ async def _strava_candidate(db_user_id, selector):
         return None
     plan_steps = ar._flatten_plan_steps(plan_wkt)
     splits = await strava.get_activity_splits(token, act.get("id"), plan_wkt)
+    if _no_gps(act, "strava"):
+        n = _apply_plan_distances(splits, plan_steps)
+        print(f"/report: Strava-активность без спутников — плановые дистанции у {n} лэпов")
     return {"source": "strava", "name": name, "act_id": act.get("id"),
             "display_date": act.get("start_date_local"), "wdate": wdate, "wgroup": wgroup,
             "wtype_key": "running", "splits": splits, "plan_steps": plan_steps, "pts": None}
