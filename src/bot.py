@@ -684,20 +684,29 @@ def _speed_lines(db_user_id: int | None) -> list:
     if not zz:
         return []
     out = ["\nТвои скорости:"]
+    try:
+        _anchor = zones.resolve_anchor(get_user_profile(db_user_id))
+    except Exception:
+        _anchor = None
+    if _anchor:
+        out.append(f"Источник: {_anchor['text']} → VDOT {_anchor['vdot']:.1f}")
     if zz.get("threshold"):
         out.append(f"ПАНО (порог): {zz['threshold']} мин/км")
     if zz.get("interval"):
         out.append(f"МПК (интервальный): {zz['interval']} мин/км")
     if zz.get("repetition"):
         out.append(f"Повторный: {zz['repetition']} мин/км")
-    k100 = (z or {}).get("speed_k100")
-    if zz.get("repetition") and k100:
-        c200 = zones.speed_ceiling_for_distance(zz["repetition"], k100, 200)
-        c400 = zones.speed_ceiling_for_distance(zz["repetition"], k100, 400)
-        if c200 or c400:
-            parts = [p for p in (f"200м {c200}" if c200 else "",
-                                 f"400м {c400}" if c400 else "") if p]
-            out.append("Предел скорости: " + " · ".join(parts) + " мин/км")
+    if zz.get("repetition"):
+        rtype = (z or {}).get("runner_type")
+        parts = []
+        for d in (100, 200, 300, 400):
+            p = zones.repeat_pace_for_distance(zz["repetition"], d, rtype)
+            if p:
+                parts.append(f"{d}м {p}")
+        if parts:
+            out.append("Темп повторов: " + " · ".join(parts) + " мин/км")
+        if rtype:
+            out.append(f"Тип бегуна: {rtype}")
     return out
 
 
@@ -3505,32 +3514,27 @@ async def _build_variant_b_prompt(
         workout_dict or {},
         (recovery or {}).get("data_fetched_at"),
     )
-    # Потолки скорости по скоростным блокам (≤200м, recovery > work или цель — скорость)
-    _speed_ceilings = []
+    # Максимально повторяемый темп по скоростным блокам (см. PROCESS_MAP.md):
+    # отсекает группы, чей финишный темп быстрее повторяемого для этой длины.
+    _repeat_caps = []
     _rep_pace = zones_map.get("repetition")
-    _k100 = (zinfo or {}).get("speed_k100")
-    if _rep_pace and _k100 is not None:
+    _rtype = (zinfo or {}).get("runner_type")
+    if _rep_pace:
         _seen_dist: set[int] = set()
         for _b in (analysis.get("structure") or []):
             if _b.get("type") != "repeat":
                 continue
             _d = _b.get("work_distance_m") or 0
-            _rec = _b.get("recovery_distance_m") or 0
-            _purpose = (_b.get("purpose") or "").lower()
-            _is_speed = (
-                50 <= _d <= 200 and
-                (_rec > _d or any(kw in _purpose for kw in ["скорост", "нейромышечн", "нейромышц"]))
-            )
-            if _is_speed and _d not in _seen_dist:
+            if 50 <= _d <= 400 and _d not in _seen_dist:
                 _seen_dist.add(_d)
-                _c = _z.speed_ceiling_for_distance(_rep_pace, _k100, _d)
-                if _c:
-                    _speed_ceilings.append({"distance_m": _d, "ceiling": _c})
+                _p = _z.repeat_pace_for_distance(_rep_pace, _d, _rtype)
+                if _p:
+                    _repeat_caps.append({"distance_m": _d, "ceiling": _p})
 
     prompt = claude_advisor.build_ai_b_prompt(
         analysis, user_data, zones_map, recovery,
         recovery_scenario_text=scenario_ctx["prompt_text"],
-        speed_ceilings=_speed_ceilings or None,
+        speed_ceilings=_repeat_caps or None,
     )
     return prompt, scenario_ctx
 

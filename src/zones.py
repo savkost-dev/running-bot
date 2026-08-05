@@ -125,37 +125,68 @@ def _vdot_from_predictions(predictions: dict) -> float | None:
     return None
 
 
+# Коэффициент перевода VO2max с часов в VDOT.
+# VO2max — оценка потенциала прибором, VDOT — индекс по результату,
+# разница между ними — экономичность бега. Приравнивание (k=1.0) завышало зоны
+# у тех, у кого нет ЛП.
+# ⚠ ВРЕМЕННАЯ КОНСТАНТА (05.08.2026): плоские 0.95 до набора статистики по клубу.
+# План: k(VO2max) по наблюдённым парам VO2max↔ЛП. См. PROCESS_MAP.md.
+K_VO2MAX = 0.95
+
+
+def resolve_anchor(profile: dict | None) -> dict | None:
+    """Точка отсчёта для зон по лесенке приоритетов (решение 05.08.2026):
+      1. ЛП введён вручную → якорь ЛП (прямое указание темпа, без преобразований)
+      2. VO2max введён вручную → VO2max × k
+      3. VO2max с часов → VO2max × k  (базовый сценарий: часы обновляют его часто)
+      4. ЛП с часов → якорь ЛП (фолбэк, когда VO2max нет вовсе)
+    Возвращает {"kind", "vdot", "text"} или None.
+    """
+    p = profile or {}
+    lt = p.get("lactate_threshold_pace")
+    lt_manual = (p.get("lactate_source") or "").lower() == "manual"
+    vo2 = p.get("vo2max")
+    vo2_manual = (p.get("vo2max_source") or "").lower() == "manual"
+
+    if lt and lt_manual:
+        vdot = _vdot_from_threshold_pace(lt)
+        if vdot:
+            return {"kind": "lt_manual", "vdot": vdot,
+                    "text": f"лактатный порог {lt} (вручную)"}
+    if vo2:
+        try:
+            vdot = float(vo2) * K_VO2MAX
+        except (TypeError, ValueError):
+            vdot = None
+        if vdot and vdot > 0:
+            src = "вручную" if vo2_manual else (p.get("vo2max_source") or "часы")
+            return {"kind": "vo2max_manual" if vo2_manual else "vo2max_device", "vdot": vdot,
+                    "text": f"VO2max {vo2} ({src}) × {K_VO2MAX}"}
+    if lt:
+        vdot = _vdot_from_threshold_pace(lt)
+        if vdot:
+            return {"kind": "lt_device", "vdot": vdot,
+                    "text": f"лактатный порог {lt} ({p.get('lactate_source') or 'часы'})"}
+    return None
+
+
 def calculate_pace_zones(user_profile: dict | None,
                          athlete_cache: dict | None) -> dict | None:
-    """Считает персональные зоны. Приоритет: лактат → VO2max → Риегель.
+    """Считает персональные зоны. Приоритет — в resolve_anchor, дальше Риегель.
 
-    Возвращает {"zones": {...}, "source": "lactate"|"vo2max"|"riegel"} или None.
+    Возвращает {"zones": {...}, "source": kind, "vdot": float, "anchor": text} или None.
     """
-    profile = user_profile or {}
+    anchor = resolve_anchor(user_profile)
+    if anchor:
+        return {"zones": _zones_from_vdot(anchor["vdot"]), "source": anchor["kind"],
+                "vdot": anchor["vdot"], "anchor": anchor["text"]}
 
-    # 1. Лактатный (пороговый) темп
-    lt_pace = profile.get("lactate_threshold_pace")
-    if lt_pace:
-        vdot = _vdot_from_threshold_pace(lt_pace)
-        if vdot:
-            return {"zones": _zones_from_vdot(vdot), "source": "lactate"}
-
-    # 2. VO2max → VDOT напрямую
-    vo2max = profile.get("vo2max")
-    if vo2max:
-        try:
-            vdot = float(vo2max)
-            if vdot > 0:
-                return {"zones": _zones_from_vdot(vdot), "source": "vo2max"}
-        except (TypeError, ValueError):
-            pass
-
-    # 3. Риегель — прогнозы забегов
+    # Риегель — прогнозы забегов (когда нет ни VO2max, ни ЛП)
     predictions = (athlete_cache or {}).get("predictions") or {}
     vdot = _vdot_from_predictions(predictions)
     if vdot:
-        return {"zones": _zones_from_vdot(vdot), "source": "riegel"}
-
+        return {"zones": _zones_from_vdot(vdot), "source": "riegel",
+                "vdot": vdot, "anchor": "прогнозы забегов Strava"}
     return None
 
 
@@ -176,50 +207,61 @@ def recalculate_and_save(db_user_id: int) -> dict | None:
     return result
 
 
-def _compute_speed_passport(zones: dict) -> tuple[float | None, str | None]:
-    """Скоростной паспорт бегуна из зон.
-    Возвращает (k100, runner_profile).
-    k100 — коэффициент скорости на 100м относительно repetition-зоны:
-      gap threshold−repetition > 30 сек → 0.55 (скоростной)
-      gap 15−30 сек             → 0.64 (универсал)
-      gap < 15 сек              → 0.73 (выносливостный)
-    """
-    rep = _pace_to_sec_per_km(zones.get("repetition"))
-    thr = _pace_to_sec_per_km(zones.get("threshold"))
-    if not rep:
-        return None, None
-    if thr:
-        gap = thr - rep   # сек/км, > 0 (threshold медленнее repetition)
-        if gap > 30:
-            return 0.55, "скоростной"
-        elif gap >= 15:
-            return 0.64, "универсал"
-        else:
-            return 0.73, "выносливостный"
-    return 0.64, "универсал"
+# Темп повторов по длине отрезка — доля от зоны repetition.
+# Это НЕ спринтерский максимум (его из аэробных чисел не вывести), а максимально
+# ПОВТОРЯЕМЫЙ темп для отрезка данной длины (серия с полным отдыхом):
+# у Дэниелса R-темп задан для 400-800м, на 200 и 100м тот же бегун повторяет быстрее,
+# но не пропорционально — поэтому свой коэффициент на каждую длину.
+# Источник/проверка/опровержение — в PROCESS_MAP.md, раздел о повторяемом темпе.
+_REPEAT_FACTORS = {400: 1.00, 300: 0.96, 200: 0.93, 100: 0.88}
+_TYPE_SHIFT = {"скоростной": -0.02, "универсал": 0.0, "выносливостный": 0.02}
 
 
-def speed_ceiling_for_distance(repetition_pace: str, k100: float, distance_m: int) -> str | None:
-    """Потолок финишного темпа для скоростного отрезка заданной дистанции (100–400м).
-    Формула критической скорости:
-      k(d) = 1 - (1 - k100) × (400 - d) / (3 × d)
-      MSS(d) = repetition_sec × k(d)
-      ceiling = MSS(d) / 0.94   (целевой темп ≤ 94% MSS — держимый без срыва техники)
+def runner_type(zones: dict) -> str | None:
+    """Тип бегуна по разрыву threshold−repetition: >30 сек — скоростной,
+    15-30 — универсал, <15 — выносливостный. Сдвигает короткий край таблицы."""
+    rep = _pace_to_sec_per_km((zones or {}).get("repetition"))
+    thr = _pace_to_sec_per_km((zones or {}).get("threshold"))
+    if not rep or not thr:
+        return "универсал" if rep else None
+    gap = thr - rep
+    return "скоростной" if gap > 30 else ("универсал" if gap >= 15 else "выносливостный")
+
+
+def repeat_pace_for_distance(repetition_pace: str, distance_m: int,
+                             rtype: str | None = None) -> str | None:
+    """Максимально повторяемый темп для отрезка 100-400м (серия повторов).
+    Коэффициент берётся из таблицы с линейной интерполяцией между узлами,
+    тип бегуна сдвигает короткий край (на 400м сдвига нет, на 100м максимальный).
     """
     rep_sec = _pace_to_sec_per_km(repetition_pace)
-    if not rep_sec or not k100:
+    if not rep_sec:
         return None
-    d = max(100, min(400, distance_m))
-    k = 1 - (1 - k100) * (400 - d) / (3 * d)
-    ceiling_sec = int(rep_sec * k / 0.94)
-    return _sec_per_km_to_pace(ceiling_sec)
+    d = max(100, min(400, int(distance_m or 0)))
+    nodes = sorted(_REPEAT_FACTORS)
+    lo = max([n for n in nodes if n <= d])
+    hi = min([n for n in nodes if n >= d])
+    if lo == hi:
+        factor = _REPEAT_FACTORS[lo]
+    else:
+        w = (d - lo) / (hi - lo)
+        factor = _REPEAT_FACTORS[lo] + w * (_REPEAT_FACTORS[hi] - _REPEAT_FACTORS[lo])
+    factor += _TYPE_SHIFT.get(rtype or "универсал", 0.0) * (400 - d) / 300.0
+    return _sec_per_km_to_pace(rep_sec * factor)
 
 
 def get_pace_zones(db_user_id: int) -> dict | None:
     """Достаёт готовые зоны из athlete_cache.
     Если зон нет (новый пользователь) — считает на лету и сохраняет.
-    Возвращает {"zones": dict, "source": str, "updated_at": str,
-                "speed_k100": float|None, "runner_profile": str|None} или None.
+    Возвращает {"zones": dict, "source": str, "updated_at": str} или None.
+
+    ПРИМЕЧАНИЕ (05.08.2026): скоростной паспорт (k100) и потолок на коротких
+    отрезках УДАЛЕНЫ. Максимальную скорость на 100-400м нельзя вывести из аэробных
+    показателей: модель критической скорости неприменима ниже 800м, таблиц Дэниелса
+    для этой величины не существует, а спринтерская скорость измеряется, а не считается.
+    Прежняя формула (DeepSeek, июнь 2026) давала на 400м темп МЕДЛЕННЕЕ повторного
+    и противоречила фактам. Вернёмся к вопросу только через измерение
+    (ручной ввод лучшего результата либо фактические лэпы из разборов).
     """
     import database as _db
     cached = _db.get_pace_zones_raw(db_user_id)
@@ -228,7 +270,5 @@ def get_pace_zones(db_user_id: int) -> dict | None:
         if result:
             cached = _db.get_pace_zones_raw(db_user_id)
     if cached:
-        k100, profile = _compute_speed_passport(cached.get("zones") or {})
-        cached["speed_k100"] = k100
-        cached["runner_profile"] = profile
+        cached["runner_type"] = runner_type(cached.get("zones") or {})
     return cached

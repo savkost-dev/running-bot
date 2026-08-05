@@ -1156,11 +1156,11 @@ def build_ai_b_prompt_reco_champion(analysis: dict, user_data: dict, zones_map: 
         + (f"{time_context}\n" if time_context else "")
         + (
             (
-                f"\nПотолок финишного темпа (отрезок {speed_ceilings[0]['distance_m']}м): "
+                f"\nМаксимально повторяемый темп (отрезок {speed_ceilings[0]['distance_m']}м): "
                 f"{speed_ceilings[0]['ceiling']}/км. "
                 "Группу с финишем быстрее — risk, % ≤ 10.\n"
             ) if speed_ceilings and len(speed_ceilings) == 1 else (
-                "\nПотолки по блокам: " +
+                "\nМаксимально повторяемый темп по блокам: " +
                 ", ".join(f"{sc['distance_m']}м → {sc['ceiling']}/км" for sc in speed_ceilings) +
                 ". Группа подходит ТОЛЬКО если КАЖДЫЙ блок не превышает свой потолок."
                 " Хоть один блок быстрее — risk/hard, % ≤ 10.\n"
@@ -1329,11 +1329,11 @@ def build_ai_b_prompt_reco_challenger(analysis: dict, user_data: dict, zones_map
         + (f"{time_context}\n" if time_context else "")
         + (
             (
-                f"\nПотолок финишного темпа (отрезок {speed_ceilings[0]['distance_m']}м): "
+                f"\nМаксимально повторяемый темп (отрезок {speed_ceilings[0]['distance_m']}м): "
                 f"{speed_ceilings[0]['ceiling']}/км. "
                 "Группу с финишем быстрее — risk, % ≤ 10.\n"
             ) if speed_ceilings and len(speed_ceilings) == 1 else (
-                "\nПотолки по блокам: " +
+                "\nМаксимально повторяемый темп по блокам: " +
                 ", ".join(f"{sc['distance_m']}м → {sc['ceiling']}/км" for sc in speed_ceilings) +
                 ". Группа подходит ТОЛЬКО если КАЖДЫЙ блок не превышает свой потолок."
                 " Хоть один блок быстрее — risk/hard, % ≤ 10.\n"
