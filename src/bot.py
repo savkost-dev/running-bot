@@ -627,15 +627,29 @@ async def cmd_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(text[i:i + 4096])
 
 
+def _applied_threshold(db_user_id: int) -> str | None:
+    """ПОРОГ, КОТОРЫЙ РЕАЛЬНО ИСПОЛЬЗУЕТСЯ в расчётах — темп threshold-зоны.
+    Он может отличаться от ЛП в профиле: если якорем служит VO2max, зоны считаются
+    от него, а приборный ЛП остаётся справочным. В рекомендацию и промт должен
+    уходить именно применяемый, иначе ИИ видит два противоречащих числа."""
+    try:
+        z = zones.get_pace_zones(db_user_id) or {}
+        return ((z.get("zones") or {}).get("threshold")) or None
+    except Exception:
+        return None
+
+
 def _athlete_line(db_user_id: int) -> str:
-    """Строка «МПК X · ПАНО Y/км @ Z» для рекомендации — из профиля (VO2max resolved).
+    """Строка «МПК X · ПАНО Y/км @ Z» для рекомендации.
+    ПАНО — применяемый (из зон), а не сырой ЛП из профиля.
     Пустая строка, если данных нет — блок тогда не рендерится."""
     p = get_user_profile(db_user_id) or {}
     parts = []
     if p.get("vo2max"):
         parts.append(f"МПК {p['vo2max']}")
-    if p.get("lactate_threshold_pace"):
-        lt = f"ПАНО {p['lactate_threshold_pace']}/км"
+    thr = _applied_threshold(db_user_id) or p.get("lactate_threshold_pace")
+    if thr:
+        lt = f"ПАНО {thr}/км"
         if p.get("lactate_threshold_hr"):
             lt += f" @ {p['lactate_threshold_hr']}"
         parts.append(lt)
@@ -731,6 +745,13 @@ def _build_profile_text(profile: dict | None, db_user_id: int | None = None) -> 
             lt += f"  ({'вручную' if lt_source == 'manual' else 'из сервиса'}){lt_lock}"
         elif lt_lock:
             lt += f"  {lt_lock.strip()}"
+        # Если зоны считаются НЕ от этого ЛП — честно помечаем, что он справочный
+        try:
+            _anchor_kind = (zones.resolve_anchor(profile) or {}).get("kind", "")
+        except Exception:
+            _anchor_kind = ""
+        if _anchor_kind and not _anchor_kind.startswith("lt"):
+            lt += "\n⚠️ в расчёте не участвует — зоны считаются от VO2max (см. Источник ниже)"
         lines.append(lt)
     lines += _speed_lines(db_user_id)
     spec = profile.get("specialization")
@@ -898,6 +919,7 @@ def _build_help_text(is_admin: bool) -> str:
             "/ratings — последние оценки рекомендаций\n"
             "/feedbacks — последние сообщения обратной связи\n"
             "/analyze_test — тестовый разбор анонса (без записи в базу)\n"
+            "/brief — анализ с режимами (без даты — последний, или /brief 20260804)\n"
             "/preprocess_mode — режим анализа тренировок (deep/smart)\n"
             "/test_workout — тест Шага 2 (рекомендация группы) на твоих данных\n"
             "/test_long — тест Шага 2 для длительной на твоих данных\n"
@@ -1492,6 +1514,66 @@ async def _reanalyze_one(workout: dict, mode: str, context=None) -> str:
             logger.warning(f"reanalyze: announce_brief error: {e}")
 
     return "💾 ЗАПИСАНО В БАЗУ (анализ + эталоны)\n\n" + _format_analysis_result(result, mode)
+
+
+async def cmd_brief(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Анализ (РЦС + режимы) из истории: /brief — последний,
+    /brief 20260804 — за конкретную дату. Рендер из кэша analyzed_json["modes"],
+    без обращения к ИИ. Если режимов нет (старые анализы) — кнопка генерации."""
+    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+        await update.message.reply_text("Нет доступа.")
+        return
+    import json as _json
+    arg = (context.args[0] if context.args else "").strip()
+    wdate = None
+    if arg:
+        digits = "".join(ch for ch in arg if ch.isdigit())
+        if len(digits) != 8:
+            await update.message.reply_text(
+                "Формат: /brief 20260804 (или /brief без даты — последний)")
+            return
+        wdate = f"{digits[:4]}-{digits[4:6]}-{digits[6:]}"
+
+    row = _analysis_row(wdate)
+    if not row:
+        await update.message.reply_text(
+            f"Анализ {'за ' + wdate if wdate else ''} не найден.")
+        return
+    post_id, found_date, ajson = row
+    try:
+        result = _json.loads(ajson or "{}")
+    except Exception:
+        await update.message.reply_text("Анализ не распарсился.")
+        return
+
+    modes = result.get("modes")
+    if not modes:
+        await update.message.reply_text(
+            f"Анализ за {found_date} есть, но режимы для него не считались.\n"
+            "Можно сгенерировать сейчас (deep, 2-3 минуты) — результат сохранится в анализе.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🧭 Сгенерировать режимы",
+                                     callback_data=f"brief_gen_{post_id}"),
+            ]]))
+        return
+
+    import announce_brief
+    text = announce_brief.format_brief(result, modes)
+    for i in range(0, len(text), 4096):
+        await update.message.reply_text(text[i:i + 4096])
+
+
+def _analysis_row(wdate: str | None):
+    """(post_id, workout_date, analyzed_json) валидного интервального анализа:
+    за дату или последний по дате тренировки."""
+    from database import get_connection
+    base = ("SELECT post_id, workout_date, analyzed_json FROM workout_analysis "
+            "WHERE is_valid = 1 AND workout_type = 'interval' ")
+    with get_connection() as conn:
+        if wdate:
+            return conn.execute(base + "AND workout_date = ? ORDER BY updated_at DESC LIMIT 1",
+                               (wdate,)).fetchone()
+        return conn.execute(base + "ORDER BY workout_date DESC LIMIT 1").fetchone()
 
 
 async def cmd_reanalyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2120,6 +2202,39 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         first = True
         for i in range(0, len(text), 4096):
             chunk = text[i:i + 4096]
+            if first:
+                await query.edit_message_text(chunk)
+                first = False
+            else:
+                await context.bot.send_message(user.id, chunk)
+
+    elif query.data.startswith("brief_gen_"):
+        if user.id not in ADMIN_TELEGRAM_IDS:
+            return
+        import json as _json_b
+        import announce_brief
+        from database import get_workout_analysis
+        try:
+            _pid = int(query.data.replace("brief_gen_", ""))
+        except ValueError:
+            return
+        rec = get_workout_analysis(_pid)
+        if not rec:
+            await query.edit_message_text("Анализ не найден.")
+            return
+        await query.edit_message_text("🧭 Считаю режимы (deep, 2-3 минуты)...")
+        try:
+            _res = _json_b.loads(rec.get("analyzed_json") or "{}")
+        except Exception:
+            await query.edit_message_text("Анализ не распарсился.")
+            return
+        brief = await asyncio.to_thread(announce_brief.build_admin_brief, _res, _pid, "deep")
+        if not brief:
+            await query.edit_message_text("Не удалось построить режимы.")
+            return
+        first = True
+        for i in range(0, len(brief), 4096):
+            chunk = brief[i:i + 4096]
             if first:
                 await query.edit_message_text(chunk)
                 first = False
@@ -3089,7 +3204,9 @@ async def _send_workout_recommendation(
             fitness["vo2max_source"] = profile.get("vo2max_source") or "профиль"
             fitness["vo2max_resolved"] = True
         if profile.get("lactate_threshold_pace"):
-            fitness["lactate_threshold_pace"] = profile["lactate_threshold_pace"]
+            # В промт — применяемый порог (из зон), а не сырой ЛП из профиля
+            fitness["lactate_threshold_pace"] = (_applied_threshold(db_user_id)
+                                                or profile["lactate_threshold_pace"])
         if profile.get("lactate_threshold_hr"):
             fitness["lactate_threshold_hr"] = profile["lactate_threshold_hr"]
         if profile.get("gender"):
@@ -5271,6 +5388,7 @@ def main():
     app.add_handler(CommandHandler("ratings",   cmd_ratings))
     app.add_handler(CommandHandler("feedbacks", cmd_feedbacks))
     app.add_handler(CommandHandler("analyze_test", cmd_analyze_test))
+    app.add_handler(CommandHandler("brief", cmd_brief))
     app.add_handler(CommandHandler("preprocess_mode", cmd_preprocess_mode))
     app.add_handler(CommandHandler("test_workout", cmd_test_workout))
     app.add_handler(CommandHandler("test_long",    cmd_test_long))
