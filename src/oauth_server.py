@@ -441,9 +441,35 @@ async def _strava_webhook_verify(request: web.Request) -> web.Response:
     )
 
 
+async def _strava_activity_ingest(uid: int, activity_id) -> None:
+    """Фоновая обработка события activity.create: полный цикл загрузки одного юзера.
+    fetch_raw (сырьё) → run_normalization (unified_cache; для Strava-only юзеров это
+    ЕДИНСТВЕННАЯ точка нормализации — wakeup_poll их не трогает) →
+    refresh_athlete_cache (CTL/ATL/TSB + прогнозы).
+    Заменяет ночной опрос Strava: данные те же, триггер — событие, а не расписание."""
+    try:
+        import strava as _sv
+        from data_normalizer import run_normalization
+        from fitness import refresh_athlete_cache
+        token = await _sv.ensure_valid_token(uid)
+        if not token:
+            logger.warning(f"strava ingest: uid={uid} без валидного токена — пропуск")
+            return
+        await _sv.fetch_raw(uid)
+        run_normalization(uid)
+        await refresh_athlete_cache(uid, token)
+        logger.info(f"strava ingest: uid={uid} activity={activity_id} — "
+                    f"сырьё+нормализация+кэш обновлены по вебхуку")
+    except Exception as e:
+        logger.error(f"strava ingest error uid={uid}: {e}")
+
+
 async def _strava_webhook_event(request: web.Request) -> web.Response:
-    """События Strava. deauth (athlete + authorized=false) → чистка токена
-    и уведомление админа (слот освободился). activity — пока только лог."""
+    """События Strava. Отвечаем 200 сразу, обработка — create_task (требование <2 сек).
+    deauth (athlete + authorized=false) → чистка токена + уведомление админа.
+    activity.create → фоновый ингест (_strava_activity_ingest) — замена ночного поллинга.
+    activity.update игнорируем намеренно: атрибуты сохраняются асинхронно и одно
+    сохранение атлета даёт несколько событий — фетч на каждое устроил бы шторм."""
     try:
         event = await request.json()
     except Exception:
@@ -470,6 +496,16 @@ async def _strava_webhook_event(request: web.Request) -> web.Response:
             else:
                 logger.warning(
                     f"strava webhook: deauth неизвестного athlete {event.get('owner_id')}")
+        elif (event.get("object_type") == "activity"
+                and event.get("aspect_type") == "create"):
+            from database import get_user_by_strava_athlete_id
+            uid = get_user_by_strava_athlete_id(event.get("owner_id"))
+            if uid:
+                asyncio.create_task(
+                    _strava_activity_ingest(uid, event.get("object_id")))
+            else:
+                logger.warning(
+                    f"strava webhook: activity от неизвестного athlete {event.get('owner_id')}")
     except Exception as e:
         logger.error(f"strava webhook processing error: {e}")
     return web.Response(text="ok")

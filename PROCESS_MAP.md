@@ -92,11 +92,19 @@
 
 | артефакт | кто пишет | когда |
 |---|---|---|
-| `raw_service_data` | `fetch_raw` в garmin/coros/polar/whoop/strava | ночной `scheduled_wakeup_poll`, `scheduled_cache_refresh` (03:45 UTC) |
-| `unified_cache` | `data_normalizer.run_normalization` → `save_unified_data` | сразу после fetch_raw и в cache_refresh |
-| `athlete_cache` | `fitness.refresh_athlete_cache` (CTL/ATL/TSB, прогнозы Риегеля, зоны) | `/refresh`, cache_refresh, data_refresh, OAuth-подключение Strava |
+| `raw_service_data` | `fetch_raw` в garmin/coros/polar/whoop | ночной `scheduled_wakeup_poll` |
+| `raw_service_data` (Strava) | `strava.fetch_raw` | **вебхук activity.create** (с 08.08.2026, `oauth_server._strava_activity_ingest`) |
+| `unified_cache` | `data_normalizer.run_normalization` → `save_unified_data` | после fetch_raw (wakeup_poll / вебхук) и в cache_refresh |
+| `athlete_cache` | `fitness.refresh_athlete_cache` (CTL/ATL/TSB, прогнозы Риегеля, зоны) | вебхук activity.create, `/refresh`, OAuth-подключение Strava |
 | `garmin_recovery_cache` | `recovery._fetch_garmin_recovery` | утренний снимок + перед рекомендацией |
 | `user_profile` | VO2max/ЛП v2 (device/manual + приоритет) | ночные джобы, кнопки профиля |
+
+> **Strava с 08.08.2026 — событийная, не по расписанию.** Событие activity.create запускает
+> полный цикл одного юзера: fetch_raw → run_normalization → refresh_athlete_cache
+> (для Strava-only юзеров это единственная точка нормализации). activity.update
+> игнорируется намеренно (асинхронные множественные события — риск шторма фетчей).
+> Страховки при пропущенном событии: ручной `/refresh`, пересчёт при OAuth-подключении;
+> деградация мягкая (CTL/ATL меняются медленно).
 
 ## Этап 7. Факт тренировки и /report
 

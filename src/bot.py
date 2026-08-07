@@ -4282,15 +4282,9 @@ async def scheduled_cache_refresh(context: ContextTypes.DEFAULT_TYPE):
         db_user_id = get_or_create_user(telegram_id, name)
 
         # ── Strava CTL/ATL/TSB ────────────────────────────────
-        try:
-            access_token = await ensure_valid_token(db_user_id)
-            if access_token:
-                await refresh_athlete_cache(db_user_id, access_token)
-                from strava import fetch_raw as _strava_fetch_raw
-                await _strava_fetch_raw(db_user_id)
-                counts["strava"] += 1
-        except Exception as e:
-            logger.warning(f"Strava cache error for {telegram_id}: {e}")
+        # Убрана из расписания 08.08.2026: данные приходят по вебхуку activity.create
+        # (oauth_server._strava_activity_ingest: fetch_raw → нормализация →
+        # refresh_athlete_cache). Страховки: /refresh, OAuth-подключение.
 
         # Ночной забор сырья (Garmin/COROS/Polar/Whoop) + нормализация —
         # перенесены в scheduled_wakeup_poll (по факту поимки ночи). Здесь не дублируем.
@@ -4344,14 +4338,8 @@ async def scheduled_data_refresh(context: ContextTypes.DEFAULT_TYPE):
     for telegram_id, name, _ in users:
         db_user_id = get_or_create_user(telegram_id, name)
 
-        # Strava
-        try:
-            access_token = await ensure_valid_token(db_user_id)
-            if access_token:
-                await refresh_athlete_cache(db_user_id, access_token)
-                strava_ok += 1
-        except Exception as e:
-            logger.error(f"Strava refresh error for {telegram_id}: {e}")
+        # Strava — убрана из расписания 08.08.2026 (вебхук activity.create,
+        # см. oauth_server._strava_activity_ingest)
 
         # Garmin recovery cache
         if get_token(db_user_id, "garmin"):
