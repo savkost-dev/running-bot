@@ -681,6 +681,7 @@ async def build_charts_stacked(splits, plan_steps, name: str, out_dir: str,
             c = r["color"]
             tls = ar._SERIES_TREND_LS[ri % len(ar._SERIES_TREND_LS)]
             ax.scatter(xs, ys, color=c, s=60, zorder=3, label=f"{r['label']} — факт")
+            et_pts = None
             if r.get("bounds"):
                 slow, fast = r["bounds"]
                 if abs(slow - fast) <= ar.WORK_EXACT_EPS:
@@ -698,9 +699,17 @@ async def build_charts_stacked(splits, plan_steps, name: str, out_dir: str,
                             label=f"{r['label']} — эталон ({ar._pace_formatter(slow)}→{ar._pace_formatter(fast)})")
                 ar._draw_deltas(ax, xs, ys, et_pts)
             if len(xs) >= 2:
-                a, b = np.polyfit(xs, ys, 1)
-                tr = a * xs + b
-                ax.plot(xs, tr, color=c, ls=tls, lw=2.0, zorder=4,
+                # Выброс из тренда (решение 08.08.2026): при ≥8 повторах ПОСЛЕДНИЙ
+                # повтор с отклонением от эталона > 15 сек/км не участвует в линии
+                # тренда (в таблице и средних остаётся). Фикс-порог вместо MAD:
+                # при чистом исполнении MAD → 0 и коридор схлопывается.
+                fit_xs, fit_ys = xs, ys
+                if (et_pts is not None and len(xs) >= 8
+                        and abs(ys[-1] - et_pts[-1]) > 15):
+                    fit_xs, fit_ys = xs[:-1], ys[:-1]
+                a, b = np.polyfit(fit_xs, fit_ys, 1)
+                tr = a * fit_xs + b
+                ax.plot(fit_xs, tr, color=c, ls=tls, lw=2.0, zorder=4,
                         label=f"{r['label']} — тренд ({ar._pace_formatter(tr[0])}→{ar._pace_formatter(tr[-1])})")
         ax.invert_yaxis()
         ax.set_ylabel("Темп (мин:сек/км)", fontsize=10)
@@ -937,7 +946,8 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
 
     rcs_lines = []
     if s4:
-        rcs_lines += _rcs_wrap("Работа", s4.get("work_text"), "bold")
+        import claude_advisor as _ca
+        rcs_lines += _rcs_wrap("Работа", _ca.strip_links(s4.get("work_text")), "bold")
         rcs_lines += _rcs_wrap("Цель", s4.get("overall_purpose"), "italic")
         rcs_lines += _rcs_wrap("Суть", s4.get("summary"), "italic")
     # Структура плана: «7 × 600 м @ 3:52→3:59  ·  отдых 200 м @ 6:10»

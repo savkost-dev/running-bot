@@ -3720,6 +3720,7 @@ async def _analyze_core(workout: dict, mode: str) -> dict | None:
     Возвращает result-dict (готов к сохранению) или None, если модель не ответила.
     """
     import json as _json, functools, re as _re
+    import claude_advisor as _ca_strip
     result = await asyncio.get_event_loop().run_in_executor(
         None, functools.partial(analyze_workout,
                                 workout.get("raw_text") or "",
@@ -3737,7 +3738,7 @@ async def _analyze_core(workout: dict, mode: str) -> dict | None:
             result["reject_reason"] = "нет групп с темпами — не анонс"
             logger.info(f"анализ: post_id={workout.get('post_id')} is_valid сброшен "
                         f"(нет групп с темпами)")
-    result["work_text"] = (workout.get("work_text") or "").strip()
+    result["work_text"] = _ca_strip.strip_links(workout.get("work_text"))
     return result
 
 
