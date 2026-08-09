@@ -966,26 +966,58 @@ async def cmd_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Статистика бота (только для админов)."""
+    """Статистика бота: воронка данных + матрица подключений (только для админов).
+    Все числа — по единым определениям (get_stats_overview): активные, resolved-поля v2."""
     if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
         await update.message.reply_text("Нет доступа.")
         return
-    s = get_bot_stats()
+    from database import get_stats_overview
+    s = get_bot_stats()          # запросы/оценки за период — как были
+    o = get_stats_overview()     # воронка/матрица — единые определения
+
+    # Матрица пересечений: диагональ — всего по сервису, клетки — вместе
+    order = [("strava", "Str"), ("garmin", "Gar"), ("coros", "Cor"),
+             ("whoop", "Whp"), ("polar", "Pol")]
+    svc = o["services"]
+    mrows = ["     " + "".join(f"{lbl:>5}" for _, lbl in order) + f"{'один':>7}"]
+    for i, (k1, l1) in enumerate(order):
+        cells = []
+        for j, (k2, _) in enumerate(order):
+            if j < i:
+                cells.append(f"{'':>5}")
+            elif j == i:
+                cells.append(f"{len(svc.get(k1, set())):>5}")
+            else:
+                n = len(svc.get(k1, set()) & svc.get(k2, set()))
+                cells.append(f"{(n if n else '·'):>5}")
+        others = set().union(*(svc.get(k2, set()) for k2, _ in order if k2 != k1)) \
+            if len(order) > 1 else set()
+        only_n = len(svc.get(k1, set()) - others)
+        mrows.append(f"{l1:<5}" + "".join(cells) + f"{only_n:>7}")
+    matrix = "\n".join(mrows)
+
+    reco_line = "—"
+    lr = o.get("last_reco")
+    if lr:
+        by_g = " · ".join(f"гр{g}: {n}" for g, n in sorted(lr["by_group"].items()))
+        reminders = max(lr["subscribed"] - lr["rec_total"], 0)
+        reco_line = (f"{lr['wtype']}, {lr['date']}: получателей {lr['subscribed']} = "
+                     f"рекомендаций {lr['rec_total']} + напоминаний {reminders}\n"
+                     f"{by_g}")
+
     text = (
         "📊 <b>Статистика бота</b>\n\n"
-        f"👥 Пользователи: {s['total']}\n"
-        f"✅ Активных: {s.get('active_bot', s['total'])}\n"
-        f"💤 Неактивных: {s.get('inactive_bot', 0)}\n"
-        f"Новых за 7 дней: {s['new_7d']}\n"
-        f"Активных за 7 дней: {s['active_7d']}\n\n"
-        "Подключения:\n"
-        f"🟠 Strava: {s['strava']}\n"
-        f"⚪ Whoop: {s['whoop']}\n"
-        f"🔵 Garmin: {s['garmin']}\n"
-        f"🔴 COROS: {s['coros']}\n"
-        f"❄️ Polar: {s.get('polar', 0)}\n"
-        f"👤 Профиль заполнен: {s['profile']}\n\n"
-        "Запросы за 7 дней (в скобках — уникальных пользователей):\n"
+        f"👥 Пользователи: {o['total']} — активных {o['active']}, заблокировали {o['blocked']}\n"
+        f"Новых за 7 дней: {s['new_7d']} · активных за 7 дней: {s['active_7d']}\n\n"
+        "📡 <b>Данные</b> (по активным):\n"
+        f"с трекером {o['tracker_users']} + только профиль {o['profile_only']} "
+        f"+ пусто {o['empty']} = {o['active']}\n"
+        f"якорь для зон: {o['anchor_users']} · зоны посчитаны: {o['zones_users']}\n"
+        f"готовность (утро ловится): за 7 дней {o.get('morning_7d', 0)} · сегодня {o.get('morning_today', 0)}\n\n"
+        f"<b>Подключения</b> (диагональ — всего, клетки — вместе):\n"
+        f"<pre>{matrix}</pre>\n"
+        f"📨 <b>Последняя рассылка</b>:\n{reco_line}\n\n"
+        "Запросы за 7 дней (в скобках — уникальных):\n"
         f"📋 /workout: {s['workout_7d']} ({s.get('workout_users_7d', 0)})\n"
         f"🕐 /long: {s['long_7d']} ({s.get('long_users_7d', 0)})\n"
         f"☀️ /morning: {s['morning_7d']} ({s.get('morning_users_7d', 0)})\n"
@@ -4199,10 +4231,12 @@ async def scheduled_evening(context: ContextTypes.DEFAULT_TYPE):
 
     users = get_all_users_with_status()
     count = 0
+    sent: list[tuple] = []  # (telegram_id, name, username) — для блока «без рекомендации» в отчёте
     for telegram_id, name, _un, _has in users:
         try:
             await _send_recommendation(telegram_id, name, context, long=is_long, live=live, is_broadcast=True)
             count += 1
+            sent.append((telegram_id, name, _un))
             await asyncio.sleep(0.5)
         except Forbidden:
             _mark_user_inactive(telegram_id)
@@ -4235,6 +4269,14 @@ async def scheduled_evening(context: ContextTypes.DEFAULT_TYPE):
                 groups.setdefault(str(r["recommended_group"] or "—"), []).append(r)
             summary = " · ".join(f"гр{g}: {len(lst)}" for g, lst in groups.items())
             lines = [f"📊 Группы: {summary}"]
+            # Сверка арифметики: кому рассылка ушла, но рекомендация не строилась
+            # (нет данных/группы) — раньше эти люди в отчёте были невидимы,
+            # и «Отправлено N» не сходилось с суммой по группам.
+            rec_tids = {r.get("telegram_id") for r in recs}
+            no_rec = [(n, u) for tid, n, u in sent if tid not in rec_tids]
+            if no_rec:
+                refs = ", ".join(f"@{u}" if u else (n or "—") for n, u in no_rec)
+                lines.append(f"📭 Без рекомендации ({len(no_rec)}): {refs}")
             if BROADCAST_REPORT_DETAILED:
                 for g, lst in groups.items():
                     lines.append(f"\n▸ Группа {g}")

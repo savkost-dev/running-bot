@@ -734,6 +734,93 @@ def get_bot_stats() -> dict:
     }
 
 
+def get_stats_overview() -> dict:
+    """Единая статистика для /stats с СОГЛАСОВАННЫМИ определениями (09.08.2026):
+    все счётчики — по АКТИВНЫМ пользователям; «якорь для зон» — по resolved-полям v2
+    (device/manual, плюс legacy-поля как фолбэк — та же логика, что zones.resolve_anchor);
+    воронка данных сходится по построению: tracker + profile_only + empty = active.
+
+    Возвращает: total, active, blocked, tracker_users, profile_only, empty,
+    anchor_users, zones_users, services {name: set(uid)}, last_reco
+    {date, wtype, by_group {gr: n}, rec_total, subscribed}.
+    """
+    with get_connection() as conn:
+        active_ids = {r[0] for r in conn.execute("""
+            SELECT u.id FROM users u
+            LEFT JOIN user_preferences p ON u.id = p.user_id
+            WHERE p.is_active IS NULL OR p.is_active = 1
+        """)}
+        total = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+
+        services: dict[str, set] = {}
+        for uid, svc in conn.execute(
+                "SELECT user_id, service FROM user_tokens"):
+            if uid in active_ids:
+                services.setdefault(svc, set()).add(uid)
+        tracker_ids = set().union(*services.values()) if services else set()
+
+        anchor_ids = {r[0] for r in conn.execute("""
+            SELECT user_id FROM user_profile
+            WHERE vo2max_device IS NOT NULL OR vo2max_manual IS NOT NULL
+               OR lt_pace_device IS NOT NULL OR lt_pace_manual IS NOT NULL
+               OR vo2max IS NOT NULL OR lactate_threshold_pace IS NOT NULL
+        """) if r[0] in active_ids}
+        zones_ids = {r[0] for r in conn.execute(
+            "SELECT user_id FROM athlete_cache WHERE pace_zones_json IS NOT NULL"
+        ) if r[0] in active_ids}
+
+        profile_only = anchor_ids - tracker_ids
+        empty_n = len(active_ids) - len(tracker_ids | anchor_ids)
+
+        # Готовность: у скольких реально ловится утро (таблица mornings)
+        morning_7d = len({r[0] for r in conn.execute(
+            "SELECT DISTINCT user_id FROM mornings "
+            "WHERE morning_caught = 1 AND date >= date('now', '-7 days')"
+        ) if r[0] in active_ids})
+        morning_today = len({r[0] for r in conn.execute(
+            "SELECT DISTINCT user_id FROM mornings "
+            "WHERE morning_caught = 1 AND date = date('now')"
+        ) if r[0] in active_ids})
+
+        # Последняя рассылка рекомендаций: дата из last_recommendation,
+        # тип и подписчики — чтобы было видно «рекомендаций X из Y получателей».
+        last_reco = None
+        row = conn.execute(
+            "SELECT workout_date FROM last_recommendation "
+            "ORDER BY workout_date DESC LIMIT 1").fetchone()
+        if row and row[0]:
+            bdate = row[0]
+            by_group: dict[str, int] = {}
+            rec_uids = set()
+            for uid, grp in conn.execute(
+                    "SELECT user_id, recommended_group FROM last_recommendation "
+                    "WHERE workout_date = ?", (bdate,)):
+                rec_uids.add(uid)
+                by_group[str(grp or "—")] = by_group.get(str(grp or "—"), 0) + 1
+            wtype_row = conn.execute(
+                "SELECT post_type FROM workout_notifications "
+                "WHERE workout_date = ? ORDER BY notified_at DESC LIMIT 1",
+                (bdate,)).fetchone()
+            wtype = (wtype_row[0] if wtype_row else None) or "?"
+            notify_key = "notify_long" if wtype == "long" else "notify_interval"
+            subscribed = conn.execute(f"""
+                SELECT COUNT(*) FROM users u
+                LEFT JOIN user_preferences p ON u.id = p.user_id
+                WHERE (p.is_active IS NULL OR p.is_active = 1)
+                  AND (p.{notify_key} IS NULL OR p.{notify_key} = 1)
+            """).fetchone()[0]
+            last_reco = {"date": bdate, "wtype": wtype, "by_group": by_group,
+                         "rec_total": len(rec_uids), "subscribed": subscribed}
+
+    return {
+        "total": total, "active": len(active_ids), "blocked": total - len(active_ids),
+        "tracker_users": len(tracker_ids), "profile_only": len(profile_only),
+        "empty": empty_n, "anchor_users": len(anchor_ids), "zones_users": len(zones_ids),
+        "morning_7d": morning_7d, "morning_today": morning_today,
+        "services": services, "last_reco": last_reco,
+    }
+
+
 def get_all_users_with_details() -> list:
     """Все пользователи с деталями: (db_id, telegram_id, name, username, created_at), сортировка по id."""
     with get_connection() as conn:
@@ -1147,7 +1234,7 @@ def get_recommendations_for_date(workout_date: str) -> list[dict]:
         rows = conn.execute("""
             SELECT COALESCE(u.name, u.username, 'user_' || lr.user_id),
                    lr.recommended_group, lr.evening_recovery_score, lr.lowered_by_recovery,
-                   u.username
+                   u.username, u.telegram_id
             FROM last_recommendation lr
             JOIN users u ON u.id = lr.user_id
             WHERE lr.workout_date = ?
@@ -1160,6 +1247,7 @@ def get_recommendations_for_date(workout_date: str) -> list[dict]:
             "evening_recovery_score": r[2],
             "lowered_by_recovery": bool(r[3]) if r[3] is not None else False,
             "username": r[4],
+            "telegram_id": r[5],
         }
         for r in rows
     ]
