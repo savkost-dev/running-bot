@@ -4310,6 +4310,13 @@ async def scheduled_evening(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Отправка отчёта по рассылке: {e}")
 
+    # Проверка протухших кредов — ЗДЕСЬ, а не в ночном джобе: сообщения пользователям
+    # уходят вечером вместе с рекомендацией, а не в три ночи (решение 09.08.2026).
+    try:
+        await _check_stale_credentials(context)
+    except Exception as e:
+        logger.error(f"stale credentials check error: {e}")
+
 
 async def scheduled_cache_refresh(context: ContextTypes.DEFAULT_TYPE):
     """03:45 UTC (06:45 МСК) — обновляет кэш всех сервисов перед утренней рассылкой.
@@ -4424,6 +4431,67 @@ async def scheduled_data_refresh(context: ContextTypes.DEFAULT_TYPE):
         await asyncio.sleep(1)
 
     logger.info(f"Обновление завершено: Strava={strava_ok}, Garmin recovery={garmin_ok}, VO2max={vo2max_ok}")
+
+
+async def _check_stale_credentials(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Ищет активных пользователей, у кого креды сервиса есть, а сырьё старше 72 часов —
+    признак сменённого пароля (COROS отвечает 1019, re-auth бесполезен).
+    Пользователю — сообщение с кнопками «обновить пароль / отключить» (не чаще раза
+    в 7 дней, маркер в bot_settings), админу — сводка каждый день.
+    Сервисы с паролями: garmin, coros (OAuth-сервисы обновляют токены сами)."""
+    from database import get_connection
+    from datetime import date as _date
+    today = _date.today().isoformat()
+    creds_col = {"garmin": "garmin_email", "coros": "coros_email"}
+    admin_lines: list[str] = []
+    with get_connection() as conn:
+        for svc, col in creds_col.items():
+            rows = conn.execute(f"""
+                SELECT u.id, u.telegram_id, COALESCE(u.username, u.name),
+                       r.fetched_at
+                FROM users u
+                JOIN user_profile p ON p.user_id = u.id AND p.{col} IS NOT NULL
+                LEFT JOIN user_preferences pref ON pref.user_id = u.id
+                LEFT JOIN raw_service_data r ON r.user_id = u.id AND r.service = ?
+                WHERE (pref.is_active IS NULL OR pref.is_active = 1)
+                  AND (r.fetched_at IS NULL
+                       OR r.fetched_at < datetime('now', '-72 hours'))
+            """, (svc,)).fetchall()
+            for uid, tid, uname, fat in rows:
+                admin_lines.append(
+                    f"  {_svc_name(svc)}: @{uname or uid} — сырьё от {fat or 'никогда'}")
+                key = f"stale_notice_{uid}_{svc}"
+                last = conn.execute(
+                    "SELECT value FROM bot_settings WHERE key = ?", (key,)).fetchone()
+                if last and (_date.fromisoformat(today)
+                             - _date.fromisoformat(last[0])).days < 7:
+                    continue
+                connect_cb = next(
+                    (cb for s, _, _, cb, _ in _SERVICES if s == svc), None)
+                try:
+                    await context.bot.send_message(
+                        tid,
+                        f"⚠️ Данные {_svc_name(svc)} не обновляются с "
+                        f"{(fat or 'момента подключения')[:10]}.\n"
+                        f"Похоже, пароль изменился или доступ пропал. Обнови пароль в боте — "
+                        f"или отключи сервис, если больше им не пользуешься.",
+                        reply_markup=InlineKeyboardMarkup([[
+                            InlineKeyboardButton("🔑 Обновить пароль",
+                                                 callback_data=connect_cb),
+                            InlineKeyboardButton("🔌 Отключить",
+                                                 callback_data=f"disc_ask_{svc}"),
+                        ]]))
+                    conn.execute(
+                        "INSERT OR REPLACE INTO bot_settings (key, value) VALUES (?, ?)",
+                        (key, today))
+                except Forbidden:
+                    _mark_user_inactive(tid)
+                except Exception as e:
+                    logger.warning(f"stale notice to {tid} failed: {e}")
+    if admin_lines:
+        await _notify_admin(context.bot,
+                            "🔒 Протухшие подключения (креды есть, сырья нет >72ч):\n"
+                            + "\n".join(admin_lines))
 
 
 async def scheduled_morning(context: ContextTypes.DEFAULT_TYPE):
