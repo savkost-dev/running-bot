@@ -14,9 +14,13 @@ logger = logging.getLogger(__name__)
 
 MODEL_DEEP  = "deepseek-v4-pro"    # thinking=True  — 🧠 Глубокое
 MODEL_SMART = "deepseek-v4-flash"  # thinking=True  — ⚡ Умное
-MODEL_FAST  = "deepseek-chat"      # thinking=False — 🔥 Быстрое (~7s)
+MODEL_FAST  = "deepseek-v4-pro"    # thinking выключен явно — 🪶 Лёгкое: pro-качество без рассуждений
+# 14.08.2026: Лёгкий = v4-PRO non-thinking (решение Антона — воспроизводит его проверенный
+# веб-эксперимент «эксперт без рассуждений»: качество pro, скорость секунды).
+# Ранее был легаси-алиас deepseek-chat (retired 24.07.2026).
+_FAST_EXTRA = {"thinking": {"type": "disabled"}}
 
-_MODE_LABELS = {"deep": "🧠 Глубокий (ИИ)", "smart": "⚡ Быстрый (ИИ)",
+_MODE_LABELS = {"deep": "🧠 Глубокий (ИИ)", "smart": "⚖️ Умный (ИИ)",
                 "fast": "🪶 Лёгкий (ИИ)", "calc": "📊 Расчётный",
                 "b_ai": "🧪 B (ИИ выбор)"}
 
@@ -809,8 +813,8 @@ def _build_analyze_prompt(raw_text: str, comments_text: str) -> str:
 def analyze_workout(raw_text: str, comments_text: str = "", mode: str = "deep") -> dict | None:
     """Шаг 1 двухшаговой обработки: анализ анонса тренировки через DeepSeek.
 
-    mode="deep"  → deepseek-v4-pro,   max_tokens=8000, timeout=300s
-    mode="smart" → deepseek-v4-flash, max_tokens=8000, timeout=180s
+    mode="deep"  → deepseek-v4-pro,   max_tokens=24000, timeout=300s
+    mode="smart" → deepseek-v4-flash, max_tokens=12000, timeout=180s
 
     Возвращает структурированный dict с разбором тренировки или None при ошибке.
     """
@@ -1480,9 +1484,11 @@ def generate_ai_b_extra(analysis: dict, advice: dict, mode: str = "smart") -> st
     )
 
     if mode == "deep":
-        model, max_tok, timeout = MODEL_DEEP, 1000, 120
+        model, max_tok, timeout = MODEL_DEEP, 6000, 180
     else:
-        model, max_tok, timeout = MODEL_SMART, 800, 60
+        model, max_tok, timeout = MODEL_SMART, 5000, 120
+    # Лимиты подняты с 1000/800 (14.08.2026): thinking-чекпоинты считают рассуждения
+    # в completion — старые потолки съедались целиком до полезного текста.
 
     try:
         resp = _get_client().chat.completions.create(
@@ -2046,9 +2052,13 @@ def ask_groq(prompt: str, mode: str = "smart") -> dict | None:
     """Возвращает {"advice": {...}, "stats": {...}, "garmin_workout": ...} или None.
     При timeout возвращает {"advice": None, "timeout": True, "stats": {...}}.
 
-    mode="deep"  → deepseek-v4-pro,   max_tokens=16000, timeout=300s  (~2-3 мин)
-    mode="smart" → deepseek-v4-flash, max_tokens=12000, timeout=180s  (~1-2 мин)
-    mode="fast"  → deepseek-chat,     max_tokens=8000,  timeout=60s   (~7 сек)
+    mode="deep"  → deepseek-v4-pro,   max_tokens=24000, timeout=420s
+    mode="smart" → deepseek-v4-flash, max_tokens=20000, timeout=300s
+    mode="fast"  → deepseek-chat,     max_tokens=8000,  timeout=60s   (~7 сек, без рассуждений)
+
+    Лимиты подняты 14.08.2026: чекпоинты V4-Flash-0731/V4-Pro-0813 льют заметно
+    больше рассуждений в выход (они считаются в completion): smart упирался в 12000 —
+    обрезанный JSON, карточки с нулями/прочерками; deep доходил до 13.8k из 16k.
     """
     global last_prompt
     last_prompt = prompt
@@ -2056,11 +2066,12 @@ def ask_groq(prompt: str, mode: str = "smart") -> dict | None:
     import re as _re
 
     if mode == "deep":
-        model, max_tok, api_timeout = MODEL_DEEP, 16000, 300
+        model, max_tok, api_timeout = MODEL_DEEP, 24000, 420
     elif mode == "smart":
-        model, max_tok, api_timeout = MODEL_SMART, 12000, 180
+        model, max_tok, api_timeout = MODEL_SMART, 28000, 300
+        # 28000 (было 20000): живой замер 14.08 показал 19152 — впритык, flash рассуждает многословнее pro
     else:
-        model, max_tok, api_timeout = MODEL_FAST, 8000, 60
+        model, max_tok, api_timeout = MODEL_FAST, 12000, 90
 
     t0 = _time.time()
     raw = ""
@@ -2075,6 +2086,8 @@ def ask_groq(prompt: str, mode: str = "smart") -> dict | None:
                 temperature=0,
                 timeout=api_timeout,
             )
+            if mode == "fast":
+                create_kwargs["extra_body"] = _FAST_EXTRA
             response = _get_client().chat.completions.create(**create_kwargs)
             elapsed = round(_time.time() - t0, 1)
             usage = response.usage
@@ -2214,11 +2227,12 @@ def ask_text(prompt: str, mode: str = "deep", temperature: float = 0.4) -> str:
     """
     import re as _re
     if mode == "deep":
-        model, max_tok, timeout = MODEL_DEEP, 12000, 300
+        model, max_tok, timeout = MODEL_DEEP, 20000, 420
     elif mode == "fast":
-        model, max_tok, timeout = MODEL_FAST, 3000, 60
+        model, max_tok, timeout = MODEL_FAST, 6000, 90
     else:
-        model, max_tok, timeout = MODEL_SMART, 3500, 180
+        model, max_tok, timeout = MODEL_SMART, 12000, 300
+    _extra = {"extra_body": _FAST_EXTRA} if mode == "fast" else {}
     try:
         resp = _get_client().chat.completions.create(
             model=model,
@@ -2226,6 +2240,7 @@ def ask_text(prompt: str, mode: str = "deep", temperature: float = 0.4) -> str:
             max_tokens=max_tok,
             temperature=temperature,
             timeout=timeout,
+            **_extra,
         )
         msg = resp.choices[0].message
         raw = (msg.content or "").strip()
@@ -2879,7 +2894,7 @@ def format_evening_message(advice: dict, workout: dict, stats: dict | None = Non
             lines.append(weather_line)
 
     if stats and stats.get("mode") == "fast" and not profile_only:
-        lines.append("🔥 Быстрый режим — без глубокого анализа")
+        lines.append("🪶 Лёгкий режим — ответ без рассуждений")
 
     if not has_tracker:
         lines.append("⚠️ Рекомендация без данных о нагрузке — подключи Garmin, COROS или Polar для точного анализа")
@@ -3281,7 +3296,7 @@ def format_long_run_message(advice: dict, workout: dict, stats: dict | None = No
         lines.append(weather_line)
 
     if stats and stats.get("mode") == "fast" and not profile_only:
-        lines.append("🔥 Быстрый режим — без глубокого анализа")
+        lines.append("🪶 Лёгкий режим — ответ без рассуждений")
 
     if not has_tracker:
         lines.append("⚠️ Рекомендация без данных о нагрузке — подключи Garmin, COROS или Polar для точного анализа")

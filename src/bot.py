@@ -808,9 +808,9 @@ async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Режим формирования РЕКОМЕНДАЦИИ (Шаг 2). Анализ анонса (Шаг 1) всегда deep (админ).
 _MODE_INFO = {
-    "deep":  ("🧠", "Глубокий (ИИ)", "~2 мин",     "ИИ формулирует рекомендацию, макс. качество"),
-    "smart": ("⚡", "Быстрый (ИИ)",  "~30-60 сек", "баланс качества и скорости"),
-    "fast":  ("🪶", "Лёгкий (ИИ)",   "~10 сек",    "короткое ИИ-объяснение"),
+    "deep":  ("🧠", "Глубокий (ИИ)", "~3-7 мин",   "длинные рассуждения, макс. качество"),
+    "smart": ("⚖️", "Умный (ИИ)",    "~1-5 мин",   "рассуждения покороче, баланс"),
+    "fast":  ("🪶", "Лёгкий (ИИ)",   "~10 сек",    "без рассуждений, быстрый ответ"),
     "calc":  ("📊", "Расчётный",      "формулы",    "группа и % по формулам, текст коротко от ИИ"),
 }
 
@@ -2917,6 +2917,7 @@ async def _send_recommendation(
     msg=None,
     live: dict | None = None,
     is_broadcast: bool = False,
+    force_mode: str | None = None,
 ):
     """И3: рекомендация из кэша workout_analysis + recommend_group/recommend_long.
     find_next_* используется ТОЛЬКО для детекта свежести анонса (post_id/edit_date) и
@@ -2989,7 +2990,7 @@ async def _send_recommendation(
         "recovery": await _get_unified_recovery(db_user_id, force_fresh=not _is_past_rt),
     }
 
-    rec_mode = (get_preferences(db_user_id) or {}).get("ai_mode", "smart")
+    rec_mode = force_mode or (get_preferences(db_user_id) or {}).get("ai_mode", "smart")
     if rec_mode != "calc" and not long:
         # Путь B — ИИ выбирает группу (deep/smart/fast)
         workout_dict_b = dict(live) if live else {"workout_date": analysis.get("workout_date", "")}
@@ -3075,7 +3076,7 @@ async def _send_recommendation(
         advice["rec_group_progression"] = _extract_group_pace(_adv_grp)
 
     # Режим рекомендации (Шаг 2) из настроек пользователя; анализ (Шаг 1) всегда deep
-    rec_mode = (get_preferences(db_user_id) or {}).get("ai_mode", "smart")
+    rec_mode = force_mode or (get_preferences(db_user_id) or {}).get("ai_mode", "smart")
     main = rec.get("main_group") or {}
     _profile = get_user_profile(db_user_id) or {}
     _rec_group_num = str(advice.get("recommended_group") or "")
@@ -4210,6 +4211,52 @@ def _save_workout_templates(parsed: dict | None, workout_date: str | None) -> No
     logger.info(f"эталоны тренировки: {saved} групп на {workout_date}")
 
 
+async def cmd_resend_evening(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Досылка вечерней рекомендации ТОЛЬКО недополучившим (без дублей):
+    активные подписанные без last_recommendation на дату. Создана после обрыва
+    рассылки 13.08 (рестарт убил процесс на середине).
+    /resend_evening 20260814 [fast|smart|deep] — режим принудительно для всех
+    досылаемых (по умолчанию fast — быстро догнать при медленном DeepSeek)."""
+    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+        await update.message.reply_text("Нет доступа.")
+        return
+    from database import get_connection
+    args = context.args or []
+    digits = "".join(ch for ch in (args[0] if args else "") if ch.isdigit())
+    if len(digits) != 8:
+        await update.message.reply_text("Формат: /resend_evening 20260814 [fast|smart|deep]")
+        return
+    wdate = f"{digits[:4]}-{digits[4:6]}-{digits[6:]}"
+    fmode = args[1] if len(args) > 1 and args[1] in ("fast", "smart", "deep") else "fast"
+    with get_connection() as conn:
+        targets = conn.execute("""
+            SELECT u.telegram_id, COALESCE(u.name, u.username, 'user')
+            FROM users u
+            LEFT JOIN user_preferences p ON u.id = p.user_id
+            WHERE (p.is_active IS NULL OR p.is_active = 1)
+              AND (p.notify_interval IS NULL OR p.notify_interval = 1)
+              AND u.telegram_id > 0 AND u.telegram_id < 900000000
+              AND u.id NOT IN (SELECT user_id FROM last_recommendation
+                               WHERE workout_date = ?)
+        """, (wdate,)).fetchall()
+    await update.message.reply_text(
+        f"Досылаю {len(targets)} недополучившим ({wdate}, режим {fmode})...")
+    ok = fail = 0
+    for tid, name in targets:
+        try:
+            await _send_recommendation(tid, name, context, long=False,
+                                       is_broadcast=True, force_mode=fmode)
+            ok += 1
+        except Forbidden:
+            _mark_user_inactive(tid)
+            fail += 1
+        except Exception as e:
+            logger.warning(f"resend to {tid}: {e}")
+            fail += 1
+        await asyncio.sleep(0.5)
+    await update.message.reply_text(f"Досылка завершена: отправлено {ok}, ошибок {fail}")
+
+
 async def scheduled_evening(context: ContextTypes.DEFAULT_TYPE):
     # return  # TEMP: рассылка отключена 2026-06-01, убрать после фикса зон
     now = datetime.now()
@@ -4228,6 +4275,39 @@ async def scheduled_evening(context: ContextTypes.DEFAULT_TYPE):
     if status == "empty":
         logger.info(f"Вечерняя рассылка: нет анализа в кэше ({wtype}) — пропуск")
         return
+
+    # Бриф комментарием под анонсом (решение 11.08.2026): перед персональной
+    # рассылкой публикуем режимы в ветку обсуждения анонса (от аккаунта Антона
+    # через Telethon — бота в чат не добавить). Только интервалы (у лонгов нет
+    # режимов). Любая ошибка — только лог, рассылка не страдает.
+    if not is_long:
+        try:
+            # Режимы берём из СОХРАНЁННОГО анализа по post_id (как /brief):
+            # объект analysis рассылки режимов НЕ содержит (урок 13.08 —
+            # первый прогон молча пропустился именно на этом).
+            _bresult = None
+            _modes = None
+            if cur_post:
+                from database import get_workout_analysis as _gwa
+                import json as _json_bc
+                _brec = _gwa(cur_post)
+                if _brec:
+                    _bresult = _json_bc.loads(_brec.get("analyzed_json") or "{}")
+                    _modes = _bresult.get("modes")
+            if _modes and _bresult:
+                import announce_brief as _ab
+                import telegram_reader as _tr
+                _btext = _ab.format_brief(_bresult, _modes)
+                _btext += ("\n\n🤖 Персональная группа под твою форму, тренировка в часы "
+                           "и разбор после финиша — @DD_adviser_bot")
+                if await _tr.post_comment(cur_post, _btext):
+                    logger.info(f"Бриф опубликован комментарием к посту {cur_post}")
+                else:
+                    logger.warning(f"Бриф-комментарий к посту {cur_post} не опубликован")
+            else:
+                logger.info("Бриф-комментарий пропущен: нет режимов или post_id")
+        except Exception as e:
+            logger.error(f"Бриф-комментарий: {e}")
 
     users = get_all_users_with_status()
     count = 0
@@ -4489,6 +4569,7 @@ async def _check_stale_credentials(context: ContextTypes.DEFAULT_TYPE) -> None:
                 except Exception as e:
                     logger.warning(f"stale notice to {tid} failed: {e}")
     if admin_lines:
+        logger.info(f"stale check: {len(admin_lines)} протухших подключений, сводка админу")
         await _notify_admin(context.bot,
                             "🔒 Протухшие подключения (креды есть, сырья нет >72ч):\n"
                             + "\n".join(admin_lines))
@@ -5488,6 +5569,7 @@ def main():
     app.add_handler(CommandHandler("feedbacks", cmd_feedbacks))
     app.add_handler(CommandHandler("analyze_test", cmd_analyze_test))
     app.add_handler(CommandHandler("brief", cmd_brief))
+    app.add_handler(CommandHandler("resend_evening", cmd_resend_evening))
     app.add_handler(CommandHandler("preprocess_mode", cmd_preprocess_mode))
     app.add_handler(CommandHandler("test_workout", cmd_test_workout))
     app.add_handler(CommandHandler("test_long",    cmd_test_long))

@@ -85,6 +85,33 @@ async def close_client() -> None:
         _shared_client = None
 
 
+async def post_comment(post_id: int, text: str) -> bool:
+    """Публикует комментарий под постом канала от имени аккаунта сессии (Антон).
+    Telethon сам находит зеркало поста в группе обсуждения (comment_to).
+    Длинный текст режется по абзацам на части <4000 символов — все в ту же ветку.
+    Возвращает True при успехе; любая ошибка — False (вызывающий не должен падать)."""
+    try:
+        client = await _get_shared_client()
+        parts: list[str] = []
+        cur = ""
+        for para in text.split("\n\n"):
+            cand = (cur + "\n\n" + para) if cur else para
+            if len(cand) > 4000 and cur:
+                parts.append(cur)
+                cur = para
+            else:
+                cur = cand
+        if cur:
+            parts.append(cur)
+        for part in parts:
+            await client.send_message(CHANNEL, part, comment_to=post_id)
+            await asyncio.sleep(1)
+        return True
+    except Exception as e:
+        print(f"post_comment: не удалось опубликовать комментарий к посту {post_id}: {e}")
+        return False
+
+
 def is_admin(telegram_id: int) -> bool:
     return telegram_id in ADMIN_TELEGRAM_IDS
 
