@@ -823,10 +823,10 @@ def analyze_workout(raw_text: str, comments_text: str = "", mode: str = "deep") 
     prompt = _build_analyze_prompt(raw_text, comments_text or "(нет комментариев)")
 
     if mode == "deep":
-        model, api_timeout = MODEL_DEEP, 300
+        model, api_timeout = MODEL_DEEP, 600
     else:
-        model, api_timeout = MODEL_SMART, 180
-    max_tok = 24000 if mode == "deep" else 12000
+        model, api_timeout = MODEL_SMART, 420
+    max_tok = 32000 if mode == "deep" else 32000  # 17.08: единый потолок «на вырост» — Шаг 1 редкий, лимит некритичен
 
     t0 = _time.time()
     raw = ""
@@ -1150,10 +1150,24 @@ def build_ai_b_prompt_reco_champion(analysis: dict, user_data: dict, zones_map: 
         blocks = g.get("blocks") or []
         block_strs = []
         for bl in blocks:
+            rp = bl.get("recovery_pace") or "—"
+            segs = bl.get("segments") or []
+            if segs:
+                # Составной блок (14.08.2026): сегментный формат вместо «3:53→3:20» —
+                # стрелка читалась как прогрессия по повторам и ЖГЛА рассуждения модели.
+                seg_strs = []
+                for s in segs:
+                    sps = s.get("work_pace_start") or "?"
+                    spe = s.get("work_pace_end")
+                    sp = f"{sps}→{spe}" if spe and spe != sps else sps
+                    seg_strs.append(f"{s.get('distance_m')}м@{sp}")
+                block_strs.append(
+                    f"бл{bl.get('block')} {' + '.join(seg_strs)} слитно без отдыха внутри "
+                    f"(стрелка внутри сегмента = прогрессия по повторам; recovery {rp})")
+                continue
             ps = bl.get("work_pace_start") or "?"
             pe = bl.get("work_pace_end")
             pace_str = f"{ps}→{pe}" if pe and pe != ps else ps
-            rp = bl.get("recovery_pace") or "—"
             block_strs.append(f"бл{bl.get('block')} {pace_str}/км (recovery {rp})")
         groups_lines.append(f"  Группа {g.get('number')}: {'; '.join(block_strs)}")
     groups_text = "\n".join(groups_lines) if groups_lines else "  —"
@@ -1215,6 +1229,16 @@ def build_ai_b_prompt_reco_champion(analysis: dict, user_data: dict, zones_map: 
         "- МПК-работа (средние отрезки 300-600м, неполный отдых ≤ длины работы):\n"
         "  ориентир — зона interval.\n"
         "- ПАНО/темповая (длинные отрезки, короткий отдых): ориентир — зона threshold.\n"
+        "- СОСТАВНОЙ отрезок с финишным ускорением (база+ускорение без отдыха внутри) — "
+        "ЭТО ИНТЕРВАЛЬНАЯ работа, НЕ темповая: ориентир базы — верх threshold…interval, "
+        "ускорения — interval…repetition. Не подбирай группу по близости базы к чистому "
+        "threshold — слишком мягкая база (около marathon-темпа) убивает стимул.\n"
+        "ОТДЫХ классифицируй ОТНОШЕНИЕМ к работе, а не абсолютом: отдых ≥1/2 длины "
+        "работы — значительный (можно держать верх зоны-ориентира); отдых ≤1/4 — "
+        "короткий (сдвиг к нижней границе). Не называй отдых коротким по умолчанию.\n"
+        "Вторая ось — ТЕМП отдыха: если recovery-темп группы быстрее easy-зоны атлета — "
+        "это АКТИВНЫЙ отдых (бег, а не трусца): восстановление неполное даже при большой "
+        "длине — сдвигайся к нижней части ориентира.\n"
         "- Длительный бег: зоны marathon/easy.\n"
         "Рекомендованная группа должна давать темп близкий к целевому ориентиру\n"
         "для ДАННОГО типа работы, а не универсально-средний.\n"
@@ -1228,6 +1252,11 @@ def build_ai_b_prompt_reco_champion(analysis: dict, user_data: dict, zones_map: 
         "но медленнее 2; 3.5 быстрее 4, но медленнее 3. Таких групп может НЕ быть в этой "
         "тренировке — оценивай и упоминай ТОЛЬКО те группы, что перечислены в разделе ГРУППЫ "
         "выше. Не добавляй дробные группы сам, если их там нет.\n"
+        "ПОДХОДИМОСТЬ — это соответствие тренировочному СТИМУЛУ для ЭТОГО атлета, а не выполнимости: "
+        "группа, чья база медленнее его marathon-темпа, почти не даёт стимула — ставь ей "
+        "НИЗКИЙ процент (эпитеты easy/tooslow), даже если пробежать её тривиально. "
+        "Максимальные проценты — у групп, чьи темпы попадают в целевые зоны этой тренировки "
+        "для атлета.\n"
         "Правило эпитетов: группы с номером МЕНЬШЕ рекомендованной — быстрее и тяжелее "
         "(амбициозно/hard/risk); группы с номером БОЛЬШЕ — медленнее и легче "
         "(easy/tooslow). Эпитеты строго следуют этому направлению.\n"
@@ -1323,10 +1352,24 @@ def build_ai_b_prompt_reco_challenger(analysis: dict, user_data: dict, zones_map
         blocks = g.get("blocks") or []
         block_strs = []
         for bl in blocks:
+            rp = bl.get("recovery_pace") or "—"
+            segs = bl.get("segments") or []
+            if segs:
+                # Составной блок (14.08.2026): сегментный формат вместо «3:53→3:20» —
+                # стрелка читалась как прогрессия по повторам и ЖГЛА рассуждения модели.
+                seg_strs = []
+                for s in segs:
+                    sps = s.get("work_pace_start") or "?"
+                    spe = s.get("work_pace_end")
+                    sp = f"{sps}→{spe}" if spe and spe != sps else sps
+                    seg_strs.append(f"{s.get('distance_m')}м@{sp}")
+                block_strs.append(
+                    f"бл{bl.get('block')} {' + '.join(seg_strs)} слитно без отдыха внутри "
+                    f"(стрелка внутри сегмента = прогрессия по повторам; recovery {rp})")
+                continue
             ps = bl.get("work_pace_start") or "?"
             pe = bl.get("work_pace_end")
             pace_str = f"{ps}→{pe}" if pe and pe != ps else ps
-            rp = bl.get("recovery_pace") or "—"
             block_strs.append(f"бл{bl.get('block')} {pace_str}/км (recovery {rp})")
         groups_lines.append(f"  Группа {g.get('number')}: {'; '.join(block_strs)}")
     groups_text = "\n".join(groups_lines) if groups_lines else "  —"
@@ -1388,6 +1431,16 @@ def build_ai_b_prompt_reco_challenger(analysis: dict, user_data: dict, zones_map
         "- МПК-работа (средние отрезки 300-600м, неполный отдых ≤ длины работы):\n"
         "  ориентир — зона interval.\n"
         "- ПАНО/темповая (длинные отрезки, короткий отдых): ориентир — зона threshold.\n"
+        "- СОСТАВНОЙ отрезок с финишным ускорением (база+ускорение без отдыха внутри) — "
+        "ЭТО ИНТЕРВАЛЬНАЯ работа, НЕ темповая: ориентир базы — верх threshold…interval, "
+        "ускорения — interval…repetition. Не подбирай группу по близости базы к чистому "
+        "threshold — слишком мягкая база (около marathon-темпа) убивает стимул.\n"
+        "ОТДЫХ классифицируй ОТНОШЕНИЕМ к работе, а не абсолютом: отдых ≥1/2 длины "
+        "работы — значительный (можно держать верх зоны-ориентира); отдых ≤1/4 — "
+        "короткий (сдвиг к нижней границе). Не называй отдых коротким по умолчанию.\n"
+        "Вторая ось — ТЕМП отдыха: если recovery-темп группы быстрее easy-зоны атлета — "
+        "это АКТИВНЫЙ отдых (бег, а не трусца): восстановление неполное даже при большой "
+        "длине — сдвигайся к нижней части ориентира.\n"
         "- Длительный бег: зоны marathon/easy.\n"
         "- Число повторов и суммарный объём: ориентир должен быть удержим на ВСЁМ задании\n"
         "  (6×300 и 20×300 — разные тренировки: при большом числе повторов целься в нижнюю\n"
@@ -1413,6 +1466,11 @@ def build_ai_b_prompt_reco_challenger(analysis: dict, user_data: dict, zones_map
         "но медленнее 2; 3.5 быстрее 4, но медленнее 3. Таких групп может НЕ быть в этой "
         "тренировке — оценивай и упоминай ТОЛЬКО те группы, что перечислены в разделе ГРУППЫ "
         "выше. Не добавляй дробные группы сам, если их там нет.\n"
+        "ПОДХОДИМОСТЬ — это соответствие тренировочному СТИМУЛУ для ЭТОГО атлета, а не выполнимости: "
+        "группа, чья база медленнее его marathon-темпа, почти не даёт стимула — ставь ей "
+        "НИЗКИЙ процент (эпитеты easy/tooslow), даже если пробежать её тривиально. "
+        "Максимальные проценты — у групп, чьи темпы попадают в целевые зоны этой тренировки "
+        "для атлета.\n"
         "Правило эпитетов: группы с номером МЕНЬШЕ рекомендованной — быстрее и тяжелее "
         "(амбициозно/hard/risk); группы с номером БОЛЬШЕ — медленнее и легче "
         "(easy/tooslow). Эпитеты строго следуют этому направлению.\n"
@@ -1484,9 +1542,9 @@ def generate_ai_b_extra(analysis: dict, advice: dict, mode: str = "smart") -> st
     )
 
     if mode == "deep":
-        model, max_tok, timeout = MODEL_DEEP, 6000, 180
+        model, max_tok, timeout = MODEL_DEEP, 16000, 300
     else:
-        model, max_tok, timeout = MODEL_SMART, 5000, 120
+        model, max_tok, timeout = MODEL_SMART, 12000, 240
     # Лимиты подняты с 1000/800 (14.08.2026): thinking-чекпоинты считают рассуждения
     # в completion — старые потолки съедались целиком до полезного текста.
 
@@ -2066,9 +2124,9 @@ def ask_groq(prompt: str, mode: str = "smart") -> dict | None:
     import re as _re
 
     if mode == "deep":
-        model, max_tok, api_timeout = MODEL_DEEP, 24000, 420
+        model, max_tok, api_timeout = MODEL_DEEP, 32000, 600
     elif mode == "smart":
-        model, max_tok, api_timeout = MODEL_SMART, 28000, 300
+        model, max_tok, api_timeout = MODEL_SMART, 32000, 420
         # 28000 (было 20000): живой замер 14.08 показал 19152 — впритык, flash рассуждает многословнее pro
     else:
         model, max_tok, api_timeout = MODEL_FAST, 12000, 90
@@ -2227,11 +2285,11 @@ def ask_text(prompt: str, mode: str = "deep", temperature: float = 0.4) -> str:
     """
     import re as _re
     if mode == "deep":
-        model, max_tok, timeout = MODEL_DEEP, 20000, 420
+        model, max_tok, timeout = MODEL_DEEP, 32000, 600
     elif mode == "fast":
         model, max_tok, timeout = MODEL_FAST, 6000, 90
     else:
-        model, max_tok, timeout = MODEL_SMART, 12000, 300
+        model, max_tok, timeout = MODEL_SMART, 24000, 420
     _extra = {"extra_body": _FAST_EXTRA} if mode == "fast" else {}
     try:
         resp = _get_client().chat.completions.create(
@@ -2393,7 +2451,7 @@ def ask_deepseek_garmin(workout: dict, group: str, pace: str) -> dict | None:
         response = _get_client().chat.completions.create(
             model=MODEL_FAST,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=4000,
+            max_tokens=8000,
             temperature=0,
         )
         raw = (response.choices[0].message.content or "").strip()

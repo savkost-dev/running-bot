@@ -260,7 +260,7 @@ async def _get_unified_recovery(db_user_id: int, force_fresh: bool = True) -> di
             or row.get("updated_at"))
         # Для Garmin конец наблюдения = wellnessEndTimeLocal; иначе синк
         _obs_end = _garmin_observation_end(db_user_id)
-        return {
+        res = {
             "source":                  "unified_cache",
             "recovery_score":          u.s3_recovery_daily,
             "training_readiness":      u.s3_training_readiness,
@@ -272,6 +272,17 @@ async def _get_unified_recovery(db_user_id: int, force_fresh: bool = True) -> di
             "sleep_hours":             u.s3_sleep_hours,
             "data_fetched_at":         _obs_end or _data_fetched,
         }
+        # Фикс 16.08.2026 («Восстановление не указано» в ретро): unified-снимок
+        # может быть собран до расчёта TR часами (ранний синк) — тогда TR берём
+        # из garmin_recovery_cache, а при полной пустоте снимка честно падаем в фолбэк.
+        if res.get("training_readiness") is None:
+            cached = get_garmin_recovery_cache(db_user_id)
+            if cached and cached.get("training_readiness"):
+                res["training_readiness"] = cached["training_readiness"]
+        if all(res.get(k) is None for k in
+               ("training_readiness", "recovery_score", "body_battery", "hrv")):
+            return await _get_recovery_data(db_user_id, force_fresh=False)
+        return res
     except Exception:
         return await _get_recovery_data(db_user_id, force_fresh=False)
 

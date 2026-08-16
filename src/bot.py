@@ -2987,10 +2987,18 @@ async def _send_recommendation(
     user_data = {
         "db_user_id": db_user_id,
         "specialization": (get_user_profile(db_user_id) or {}).get("specialization"),
-        "recovery": await _get_unified_recovery(db_user_id, force_fresh=not _is_past_rt),
+        # Рассылка читает КЭШ (прогрет в 19:00 джобом scheduled_recovery_prefetch),
+        # живые походы в трекеры — только ручные команды (/workout и т.п.).
+        "recovery": await _get_unified_recovery(
+            db_user_id, force_fresh=(not _is_past_rt) and (not is_broadcast)),
     }
 
     rec_mode = force_mode or (get_preferences(db_user_id) or {}).get("ai_mode", "smart")
+    if is_broadcast and not force_mode:
+        # Рассылка использует 2 режима из 4 (решение 14.08.2026): smart→deep
+        # (глубокий живее и экономнее умного: 144с/11.5k против 164с/19k),
+        # calc→fast (формульным — полноценная лёгкая ИИ-карточка за секунды).
+        rec_mode = {"smart": "deep", "calc": "fast"}.get(rec_mode, rec_mode)
     if rec_mode != "calc" and not long:
         # Путь B — ИИ выбирает группу (deep/smart/fast)
         workout_dict_b = dict(live) if live else {"workout_date": analysis.get("workout_date", "")}
@@ -3077,6 +3085,9 @@ async def _send_recommendation(
 
     # Режим рекомендации (Шаг 2) из настроек пользователя; анализ (Шаг 1) всегда deep
     rec_mode = force_mode or (get_preferences(db_user_id) or {}).get("ai_mode", "smart")
+    if is_broadcast and not force_mode:
+        # Тот же маппинг 2-из-4, что и выше — для calc/long-пути
+        rec_mode = {"smart": "deep", "calc": "fast"}.get(rec_mode, rec_mode)
     main = rec.get("main_group") or {}
     _profile = get_user_profile(db_user_id) or {}
     _rec_group_num = str(advice.get("recommended_group") or "")
@@ -4136,6 +4147,30 @@ def _normalize_after_catch(db_user_id: int) -> None:
         logger.warning(f"normalize after catch error for uid={db_user_id}: {e}")
 
 
+async def scheduled_recovery_prefetch(context: ContextTypes.DEFAULT_TYPE):
+    """19:00 МСК — прогрев данных к вечерней рассылке (решение 14.08.2026).
+    Мини-версия wakeup_poll без логики поимки: fetch_raw ночных сервисов
+    (garmin/coros/polar/whoop; Strava СОБЫТИЙНАЯ — не опрашивается) +
+    нормализация → unified_cache свеж к 20:00. Рассылка читает кэш
+    (force_fresh=False при is_broadcast) — ноль живых походов между юзерами,
+    битые креды виснут здесь, в тихий час. Живые данные по запросу — только /workout."""
+    users = get_all_users_with_status()
+    n = fails = 0
+    for telegram_id, name, _un, _has in users:
+        db_user_id = get_or_create_user(telegram_id, name)
+        if not _night_services(db_user_id):
+            continue
+        try:
+            await _sync_night_services(db_user_id)
+            _normalize_after_catch(db_user_id)
+            n += 1
+        except Exception as e:
+            fails += 1
+            logger.warning(f"recovery prefetch error for {telegram_id}: {e}")
+        await asyncio.sleep(1)
+    logger.info(f"Прогрев восстановления к рассылке: обновлено {n}, ошибок {fails}")
+
+
 async def scheduled_wakeup_poll(context: ContextTypes.DEFAULT_TYPE):
     """Опросник пробуждения: 06:00–09:00 МСК каждые 15 мин.
     Для юзеров с ночным сервисом, у кого сегодня ночь ещё не поймана (morning_caught≠сегодня):
@@ -4312,18 +4347,27 @@ async def scheduled_evening(context: ContextTypes.DEFAULT_TYPE):
     users = get_all_users_with_status()
     count = 0
     sent: list[tuple] = []  # (telegram_id, name, username) — для блока «без рекомендации» в отчёте
-    for telegram_id, name, _un, _has in users:
-        try:
-            await _send_recommendation(telegram_id, name, context, long=is_long, live=live, is_broadcast=True)
-            count += 1
-            sent.append((telegram_id, name, _un))
-            await asyncio.sleep(0.5)
-        except Forbidden:
-            _mark_user_inactive(telegram_id)
-            logger.info(f"Пользователь {telegram_id} заблокировал бота (вечерняя рассылка)")
-        except Exception as e:
-            logger.error(f"Evening notification error for {telegram_id}: {e}")
-    logger.info(f"Вечерняя рассылка завершена ({wtype}, status={status}): {count} отправлено (кэш, без парсинга на лету)")
+    # Параллельная рассылка (14.08.2026): семафор на 5 одновременных — безопасно,
+    # потому что живых фетчей в broadcast-пути больше нет (кэш + прогрев 19:00),
+    # параллелятся только вызовы DeepSeek и отправки Telegram.
+    _sem = asyncio.Semaphore(5)
+
+    async def _mail_one(telegram_id, name, _un):
+        nonlocal count
+        async with _sem:
+            try:
+                await _send_recommendation(telegram_id, name, context, long=is_long, live=live, is_broadcast=True)
+                count += 1
+                sent.append((telegram_id, name, _un))
+                await asyncio.sleep(0.5)
+            except Forbidden:
+                _mark_user_inactive(telegram_id)
+                logger.info(f"Пользователь {telegram_id} заблокировал бота (вечерняя рассылка)")
+            except Exception as e:
+                logger.error(f"Evening notification error for {telegram_id}: {e}")
+
+    await asyncio.gather(*[_mail_one(t, n, u) for t, n, u, _has in users])
+    logger.info(f"Вечерняя рассылка завершена ({wtype}, status={status}): {count} отправлено (кэш, параллель ×5)")
 
     # Эталоны теперь пишутся вместе с разбором (_store_analysis) — здесь страховка
     # на случай анализов, сохранённых до перехода на единое ядро.
@@ -5607,6 +5651,7 @@ def main():
     app.add_handler(TypeHandler(Update, _activity_logger), group=-1)
 
     job_queue = app.job_queue
+    job_queue.run_daily(scheduled_recovery_prefetch, time=time(hour=16, minute=0))                       # 19:00 МСК — прогрев к рассылке
     job_queue.run_daily(scheduled_evening,       time=time(hour=17, minute=0))                          # 20:00 МСК
     # PTB days: 0=вс, 1=пн … 6=сб → вт/пт = (2, 5), вс = (0,)
     job_queue.run_daily(scheduled_cache_refresh, time=time(hour=2,  minute=0),  days=(2, 5))            # 05:00 МСК вт/пт
