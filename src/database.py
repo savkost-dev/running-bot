@@ -237,7 +237,9 @@ def init_db():
                 pass
     for col in ("notify_interval INTEGER DEFAULT 1",
                 "notify_interval_extra INTEGER DEFAULT 1",
-                "notify_long INTEGER DEFAULT 1"):
+                "notify_long INTEGER DEFAULT 1",
+                "notify_morning_interval INTEGER DEFAULT 1",
+                "notify_morning_long INTEGER DEFAULT 1"):
         with get_connection() as conn:
             try:
                 conn.execute(f"ALTER TABLE user_preferences ADD COLUMN {col}")
@@ -573,7 +575,8 @@ def get_preferences(user_id: int) -> dict | None:
         row = conn.execute("""
             SELECT default_group, notify_evening, notify_morning, ai_mode, use_garmin_recovery,
                    notify_interval, notify_interval_extra, notify_long,
-                   is_active, deactivated_at
+                   is_active, deactivated_at,
+                   notify_morning_interval, notify_morning_long
             FROM user_preferences WHERE user_id = ?
         """, (user_id,)).fetchone()
 
@@ -591,6 +594,9 @@ def get_preferences(user_id: int) -> dict | None:
         "notify_long": bool(row[7]) if row[7] is not None else True,
         "is_active": bool(row[8]) if row[8] is not None else True,
         "deactivated_at": row[9],
+        # 17.08.2026: утренние уведомления — отдельные галочки от вечерних
+        "notify_morning_interval": bool(row[10]) if row[10] is not None else True,
+        "notify_morning_long": bool(row[11]) if row[11] is not None else True,
     }
 
 def log_activity(user_id: int, command: str) -> None:
@@ -1255,7 +1261,10 @@ def get_recommendations_for_date(workout_date: str) -> list[dict]:
 
 # ── Кэш Garmin recovery ──────────────────────────────────────
 
-def get_garmin_recovery_cache(user_id: int, max_age_hours: int = 8) -> dict | None:
+def get_garmin_recovery_cache(user_id: int, max_age_hours: int | None = None) -> dict | None:
+    """Кэш Garmin-восстановления. 17.08.2026 (Антон): по умолчанию живёт
+    ДО КОНЦА ДНЯ (МСК), а не фиксированное окно часов; max_age_hours — опция
+    для вызовов, которым нужно жёсткое окно."""
     with get_connection() as conn:
         row = conn.execute("""
             SELECT body_battery, hrv_last_night, hrv_weekly_avg, hrv_status,
@@ -1265,9 +1274,15 @@ def get_garmin_recovery_cache(user_id: int, max_age_hours: int = 8) -> dict | No
     if not row:
         return None
     try:
-        age_hours = (datetime.now() - datetime.fromisoformat(row[7])).total_seconds() / 3600
-        if age_hours > max_age_hours:
-            return None
+        upd = datetime.fromisoformat(row[7])
+        if max_age_hours is not None:
+            if (datetime.now() - upd).total_seconds() / 3600 > max_age_hours:
+                return None
+        else:
+            from datetime import timedelta as _td
+            # updated_at пишется datetime('now') = UTC; сравниваем даты в МСК (+3)
+            if (upd + _td(hours=3)).date() != (datetime.utcnow() + _td(hours=3)).date():
+                return None
     except Exception:
         return None
     return {

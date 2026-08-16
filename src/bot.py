@@ -158,9 +158,12 @@ def _build_screen1_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📋 Тренировка", callback_data="get_workout"),
          InlineKeyboardButton("🕐 Long Run",   callback_data="get_long_run")],
-        [InlineKeyboardButton("☀️ Утро",       callback_data="get_morning"),
-         InlineKeyboardButton("👤 Профиль",   callback_data="my_profile")],
-        [InlineKeyboardButton("📊 Разбор тренировки", callback_data="get_report")],
+        # 17.08.2026 (Антон): Разбор на место Утра, Утро на место Профиля,
+        # Профиль в третью строку вместе с новой кнопкой Уведомлений.
+        [InlineKeyboardButton("📊 Разбор тренировки", callback_data="get_report"),
+         InlineKeyboardButton("☀️ Утро",       callback_data="get_morning")],
+        [InlineKeyboardButton("👤 Профиль",   callback_data="my_profile"),
+         InlineKeyboardButton("🔔 Уведомления", callback_data="notifications")],
         [InlineKeyboardButton("💬 Обратная связь", callback_data="feedback_show"),
          InlineKeyboardButton("❓ Справка",        callback_data="help")],
         [InlineKeyboardButton("⚙️ Настройки →",   callback_data="show_settings")],
@@ -323,9 +326,52 @@ async def _show_main_menu(query_or_update, user, db_user_id: int):
 
 # ── КОМАНДЫ ───────────────────────────────────────────────────
 
+async def admin_video_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Админ шлёт видео боту в личку → file_id сохраняется как видеоинструкция
+    (17.08.2026, раздел «🎬 Видеоинструкция» в Справке). Не-админские видео игнорируются."""
+    if (update.effective_user.id not in ADMIN_TELEGRAM_IDS
+            or not update.message or not update.message.video):
+        return
+    fid = update.message.video.file_id
+    from database import get_connection
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO bot_settings (key, value) "
+            "VALUES ('video_manual_file_id', ?)", (fid,))
+    await update.message.reply_text(
+        "🎬 Видео сохранено как инструкция — кнопка в Справке уже отдаёт его.")
+
+
+async def _report_block(bot, telegram_id: int, where: str) -> None:
+    """Блокировка бота пользователем: пометить неактивным + уведомить админа
+    (задача 17.08.2026: блокировки жили только в логе и терялись)."""
+    _mark_user_inactive(telegram_id)
+    logger.info(f"Пользователь {telegram_id} заблокировал бота ({where})")
+    try:
+        from database import get_connection
+        with get_connection() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(username, name, CAST(telegram_id AS TEXT)) "
+                "FROM users WHERE telegram_id = ?", (telegram_id,)).fetchone()
+        who = f"@{row[0]}" if row else str(telegram_id)
+        await _notify_admin(bot, f"🚫 Заблокировал бота: {who} ({where})")
+    except Exception as e:
+        logger.warning(f"_report_block notify failed for {telegram_id}: {e}")
+
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     is_new = not user_exists(user.id)
+    was_blocked = False
+    if not is_new:
+        # Вернулся ли после блокировки (17.08.2026: раньше такие возвраты были невидимы)
+        from database import get_connection
+        with get_connection() as conn:
+            row = conn.execute(
+                "SELECT p.is_active FROM users u "
+                "LEFT JOIN user_preferences p ON p.user_id = u.id "
+                "WHERE u.telegram_id = ?", (user.id,)).fetchone()
+        was_blocked = bool(row) and row[0] == 0
     db_user_id = _mark_user_active_if_needed(user.id, user.full_name, user.username)
     if is_new:
         total = len(get_all_users())
@@ -334,6 +380,12 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.bot,
             f"👤 Новый пользователь: {user.full_name}{uname}\n"
             f"Всего пользователей: {total}"
+        )
+    elif was_blocked:
+        uname = f" (@{user.username})" if user.username else ""
+        await _notify_admin(
+            context.bot,
+            f"🔓 Вернулся после блокировки: {user.full_name}{uname}"
         )
     await _show_main_menu(update, user, db_user_id)
 
@@ -757,6 +809,29 @@ def _build_profile_text(profile: dict | None, db_user_id: int | None = None) -> 
     spec = profile.get("specialization")
     spec_label = SPECIALIZATIONS.get(spec) if spec else None
     lines.append(f"Специализация: {spec_label or 'Полумарафон (по умолчанию)'}")
+    # 17.08.2026: актуальное восстановление в профиле — из кэшей (мгновенно, без сети)
+    if db_user_id:
+        try:
+            _rl = []
+            _snap = get_morning_caught(db_user_id)
+            if _snap and _snap.get("caught"):
+                _rl.append(
+                    f"Утро {_snap.get('date') or '—'}: TR {_snap.get('tr') if _snap.get('tr') is not None else '—'} | "
+                    f"BB {_snap.get('bb') if _snap.get('bb') is not None else '—'} | "
+                    f"HRV {_snap.get('hrv') if _snap.get('hrv') is not None else '—'} | "
+                    f"сон {_snap.get('sleep_h') if _snap.get('sleep_h') is not None else '—'}ч")
+            from database import get_garmin_recovery_cache
+            _gc = get_garmin_recovery_cache(db_user_id) or {}
+            _gtr = _gc.get("training_readiness")
+            if isinstance(_gtr, dict):
+                _gtr = _gtr.get("score")
+            if _gtr is not None:
+                _gt = str(_gc.get("fetched_at") or "")[11:16]
+                _rl.append(f"Последний синк{f' {_gt}' if _gt else ''}: TR {_gtr}")
+            if _rl:
+                lines.append("\n⚡ Восстановление:\n" + "\n".join(_rl))
+        except Exception as e:
+            logger.warning(f"profile recovery block: {e}")
     if profile.get("updated_at"):
         lines.append(f"\nОбновлено: {profile['updated_at'][:10]}")
     return '\n'.join(lines)
@@ -852,10 +927,12 @@ async def cmd_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def _build_notifications_text(prefs: dict) -> str:
     def mark(key): return "✅" if (prefs or {}).get(key, True) else "❌"
     return (
-        "🔔 Настройки уведомлений:\n\n"
-        f"{mark('notify_interval')} Тренировки вт/пт\n"
-        f"{mark('notify_interval_extra')} Новые группы\n"
-        f"{mark('notify_long')} Воскресный Long Run"
+        "🔔 Настройка уведомлений:\n\n"
+        f"{mark('notify_interval')} Вечер накануне вт/пт (20:00) — рекомендация группы\n"
+        f"{mark('notify_morning_interval')} Утро вт/пт (07:00) — проверка готовности\n"
+        f"{mark('notify_long')} Вечер накануне Long Run (20:00)\n"
+        f"{mark('notify_morning_long')} Утро воскресенья (07:30)\n"
+        f"{mark('notify_interval_extra')} Новые группы в анонсе"
     )
 
 
@@ -865,9 +942,11 @@ def _build_notifications_keyboard(prefs: dict) -> InlineKeyboardMarkup:
         action = f"notif_off_{key}" if on else f"notif_on_{key}"
         return InlineKeyboardButton(f"{'✅' if on else '❌'} {title} — {'[Выкл]' if on else '[Вкл]'}", callback_data=action)
     return InlineKeyboardMarkup([
-        [lbl("notify_interval", "Тренировки вт/пт")],
+        [lbl("notify_interval", "Вечер вт/пт")],
+        [lbl("notify_morning_interval", "Утро вт/пт")],
+        [lbl("notify_long", "Вечер Long Run")],
+        [lbl("notify_morning_long", "Утро воскресенья")],
         [lbl("notify_interval_extra", "Новые группы")],
-        [lbl("notify_long", "Воскресный Long Run")],
         _settings_nav(),
     ])
 
@@ -2147,15 +2226,34 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "recommended_group": group_num,
                 "garmin_json": wkt,
             }
-            await context.bot.send_message(
-                user.id,
-                f"⌚ <b>{fname}</b>\n\nСкачай JSON или загрузи напрямую в Garmin Connect:",
-                parse_mode="HTML",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("📥 Скачать JSON", callback_data="fit_dl"),
-                    InlineKeyboardButton("⌚ Загрузить в Garmin", callback_data="fit_up"),
-                ]]),
-            )
+            # 17.08.2026: грузим СРАЗУ при выборе группы — промежуточная кнопка убрана
+            # (нажатие номера группы = решение, второе подтверждение излишне).
+            db_user_id = get_or_create_user(user.id, user.full_name, user.username)
+            if not get_token(db_user_id, "garmin"):
+                await context.bot.send_message(
+                    user.id,
+                    f"⌚ <b>{fname}</b> готова, но Garmin не подключён.\n"
+                    "Используй /connect_garmin и выбери группу заново.",
+                    parse_mode="HTML",
+                    reply_markup=_add_main_menu_btn(None))
+                return
+            from garmin import upload_workout as garmin_upload_workout
+            ok = await garmin_upload_workout(db_user_id, wkt)
+            if ok:
+                await context.bot.send_message(
+                    user.id,
+                    f"✅ <b>Тренировка загружена в Garmin Connect!</b>\n\n"
+                    f"📋 {fname}\n\n"
+                    f"Открой Garmin Connect → Тренировки и планы → Тренировки.",
+                    parse_mode="HTML",
+                    reply_markup=_add_main_menu_btn(None))
+            else:
+                await context.bot.send_message(
+                    user.id,
+                    f"❌ Не удалось загрузить {fname} в Garmin — попробуй ещё раз через минуту.",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("🔁 Повторить", callback_data="fit_up"),
+                    ]]))
         except Exception as e:
             logger.error(f"garmin_grp_{group_num} error for {user.id}: {e}", exc_info=True)
             await context.bot.send_message(
@@ -2165,8 +2263,27 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
     elif query.data == "help":
-        back_btn = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")]])
+        back_btn = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🎬 Видеоинструкция", callback_data="video_manual")],
+            [InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")]])
         await query.edit_message_text(_build_help_text(user.id in ADMIN_TELEGRAM_IDS), reply_markup=back_btn)
+
+    elif query.data == "video_manual":
+        # 17.08.2026: раздел видеоинструкции — file_id хранится в bot_settings,
+        # само видео живёт на серверах Telegram (админ шлёт ролик боту — он запоминает).
+        from database import get_connection as _gc_vm
+        with _gc_vm() as _conn_vm:
+            _row_vm = _conn_vm.execute(
+                "SELECT value FROM bot_settings WHERE key = 'video_manual_file_id'").fetchone()
+        if _row_vm and _row_vm[0]:
+            await context.bot.send_video(
+                user.id, _row_vm[0],
+                caption="🎬 Видеоинструкция: подключение и первая тренировка с ботом",
+                reply_markup=_add_main_menu_btn(None))
+        else:
+            await context.bot.send_message(
+                user.id, "🎬 Видеоинструкция готовится — скоро появится здесь.",
+                reply_markup=_add_main_menu_btn(None))
 
     elif query.data.startswith("preprocess_set_"):
         if user.id not in ADMIN_TELEGRAM_IDS:
@@ -3323,7 +3440,6 @@ async def _send_workout_recommendation(
             'ai_mode': ai_mode,
         }
         fit_markup = InlineKeyboardMarkup([[
-            InlineKeyboardButton("📥 Скачать JSON", callback_data="fit_dl"),
             InlineKeyboardButton("⌚ Загрузить в Garmin", callback_data="fit_up"),
         ]])
         rating_markup = InlineKeyboardMarkup([[
@@ -3627,7 +3743,6 @@ async def _send_long_run_recommendation(
             'ai_mode': ai_mode,
         }
         fit_markup = InlineKeyboardMarkup([[
-            InlineKeyboardButton("📥 Скачать JSON", callback_data="fit_dl"),
             InlineKeyboardButton("⌚ Загрузить в Garmin", callback_data="fit_up"),
         ]])
         rating_markup = InlineKeyboardMarkup([[
@@ -3712,8 +3827,7 @@ async def _notify_all(context, text: str, notify_key: str = "") -> int:
             count += 1
             await asyncio.sleep(0.3)
         except Forbidden:
-            _mark_user_inactive(telegram_id)
-            logger.info(f"Пользователь {telegram_id} заблокировал бота, отмечен как неактивный")
+            await _report_block(context.bot, telegram_id, "рассылка сообщений")
         except Exception as e:
             logger.error(f"Broadcast error for {telegram_id}: {e}")
     return count
@@ -3735,8 +3849,7 @@ async def _broadcast_split(
             count += 1
             await asyncio.sleep(0.3)
         except Forbidden:
-            _mark_user_inactive(telegram_id)
-            logger.info(f"Пользователь {telegram_id} заблокировал бота, отмечен как неактивный")
+            await _report_block(context.bot, telegram_id, "рассылка сообщений")
         except Exception as e:
             logger.error(f"Broadcast error for {telegram_id}: {e}")
     return count
@@ -4361,8 +4474,7 @@ async def scheduled_evening(context: ContextTypes.DEFAULT_TYPE):
                 sent.append((telegram_id, name, _un))
                 await asyncio.sleep(0.5)
             except Forbidden:
-                _mark_user_inactive(telegram_id)
-                logger.info(f"Пользователь {telegram_id} заблокировал бота (вечерняя рассылка)")
+                await _report_block(context.bot, telegram_id, "вечерняя рассылка")
             except Exception as e:
                 logger.error(f"Evening notification error for {telegram_id}: {e}")
 
@@ -4625,15 +4737,15 @@ async def scheduled_morning(context: ContextTypes.DEFAULT_TYPE):
     if now.weekday() not in [1, 4]:
         return
     logger.info("Запускаю утреннюю рассылку...")
-    # Пользователей без профиля/трекера не беспокоим — им нечего показывать
-    users = [(tid, name, un) for tid, name, un, has in get_all_users_with_status() if has]
+    # Без профиля/трекера не беспокоим; 17.08.2026 — фильтр по галочке утренних
+    users = [(tid, name, un) for tid, name, un, has
+             in get_all_users_with_status("notify_morning_interval") if has]
     for telegram_id, name, _ in users:
         try:
             await _send_morning_check(telegram_id, context)
             await asyncio.sleep(0.5)
         except Forbidden:
-            _mark_user_inactive(telegram_id)
-            logger.info(f"Пользователь {telegram_id} заблокировал бота (утренняя рассылка)")
+            await _report_block(context.bot, telegram_id, "утренняя рассылка")
         except Exception as e:
             logger.error(f"Morning notification error for {telegram_id}: {e}")
 
@@ -4647,14 +4759,14 @@ async def scheduled_cache_refresh_sunday(context: ContextTypes.DEFAULT_TYPE):
 async def scheduled_morning_sunday(context: ContextTypes.DEFAULT_TYPE):
     """04:30 UTC (07:30 МСК), только вс — после воскресного рефреша."""
     logger.info("Запускаю утреннюю рассылку (вс, 07:30 МСК)...")
-    users = [(tid, name, un) for tid, name, un, has in get_all_users_with_status() if has]
+    users = [(tid, name, un) for tid, name, un, has
+             in get_all_users_with_status("notify_morning_long") if has]
     for telegram_id, name, _ in users:
         try:
             await _send_morning_check(telegram_id, context)
             await asyncio.sleep(0.5)
         except Forbidden:
-            _mark_user_inactive(telegram_id)
-            logger.info(f"Пользователь {telegram_id} заблокировал бота (воскресная рассылка)")
+            await _report_block(context.bot, telegram_id, "воскресная рассылка")
         except Exception as e:
             logger.error(f"Sunday morning notification error for {telegram_id}: {e}")
 
@@ -5490,10 +5602,15 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
     # Полный режим: получаем анализ ИИ ДО отправки (чтобы отдать всё разом).
     ai_chunks = None
     if not simple_mode:
-        await msg.edit_text(f"🤖 Анализирую через ИИ… ({res['name']})")
+        # 17.08.2026: разбор в РЕЖИМЕ ПОЛЬЗОВАТЕЛЯ (был всегда deep); calc → fast —
+        # текстовый разбор нужен всем, у формульного режима своего ИИ-пути нет.
+        _rmode = (get_preferences(db_user_id) or {}).get("ai_mode", "smart")
+        _rmode = {"calc": "fast"}.get(_rmode, _rmode)
+        _rlabel = _MODE_INFO.get(_rmode, ("", _rmode))[1]
+        await msg.edit_text(f"🤖 Анализирую через ИИ ({_rlabel})… ({res['name']})")
         import claude_advisor
-        answer = await asyncio.to_thread(
-            claude_advisor.ask_text, PROMPT + "\n\n" + res["text"], "deep")
+        answer, _ai_stats = await asyncio.to_thread(
+            claude_advisor.ask_text, PROMPT + "\n\n" + res["text"], _rmode, 0.4, True)
         if answer:
             import re as _re_md
             _ans = _re_md.sub(r"\*\*(.+?)\*\*", r"\1", answer)
@@ -5504,7 +5621,12 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
                 _s = _re_md.sub(r"^#{1,6}\s*", "", _s)
                 _s = _re_md.sub(r"^[\*\-]\s+", "— ", _s)
                 _clean.append(_s)
-            ai_chunks = _send_chunks("\n".join(_clean).strip())
+            # 17.08.2026: плашка режим/токены в разборе — как в рекомендации
+            _mstr = claude_advisor._MODE_LABELS.get(_ai_stats.get("mode"), "🧠 Глубокий (ИИ)")
+            _plaque = (f"⏱ {_ai_stats.get('time_sec', '?')}с | {_mstr} | "
+                       f"📥 {_ai_stats.get('input_tokens', '?')} / "
+                       f"📤 {_ai_stats.get('output_tokens', '?')} | v{VERSION}")
+            ai_chunks = _send_chunks("\n".join(_clean).strip() + "\n\n" + _plaque)
         else:
             ai_chunks = ["⚠️ ИИ не ответил."]
 
@@ -5607,6 +5729,7 @@ def main():
     app.add_handler(CommandHandler("debug", cmd_debug))
     app.add_handler(CommandHandler("debug_long", cmd_debug_long))
     app.add_handler(CommandHandler("notifications", cmd_notifications))
+    app.add_handler(MessageHandler(filters.VIDEO, admin_video_handler))
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("feedback",  cmd_feedback))
     app.add_handler(CommandHandler("ratings",   cmd_ratings))

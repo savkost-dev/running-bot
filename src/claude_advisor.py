@@ -2277,13 +2277,21 @@ def ask_groq(prompt: str, mode: str = "smart") -> dict | None:
     return None
 
 
-def ask_text(prompt: str, mode: str = "deep", temperature: float = 0.4) -> str:
+def ask_text(prompt: str, mode: str = "deep", temperature: float = 0.4,
+             return_stats: bool = False):
     """Свободный текстовый ответ модели (БЕЗ JSON-парсинга). Для свободных
     анализов/комментариев тренера. Возвращает текст или '' при ошибке/таймауте.
+    return_stats=True → кортеж (текст, stats) для плашки режим/токены (17.08.2026).
 
-    mode="deep" → deepseek-v4-pro (~2-3 мин); "smart" → flash; "fast" → chat.
+    mode="deep" → deepseek-v4-pro (~2-3 мин); "smart" → flash; "fast" → pro без рассуждений.
     """
     import re as _re
+    _t0 = _time.time()
+    _stats = {"time_sec": 0, "input_tokens": None, "output_tokens": None, "mode": mode}
+
+    def _ret(text: str):
+        _stats["time_sec"] = round(_time.time() - _t0, 1)
+        return (text, _stats) if return_stats else text
     if mode == "deep":
         model, max_tok, timeout = MODEL_DEEP, 32000, 600
     elif mode == "fast":
@@ -2301,6 +2309,10 @@ def ask_text(prompt: str, mode: str = "deep", temperature: float = 0.4) -> str:
             **_extra,
         )
         msg = resp.choices[0].message
+        _usage = getattr(resp, "usage", None)
+        if _usage:
+            _stats["input_tokens"] = getattr(_usage, "prompt_tokens", None)
+            _stats["output_tokens"] = getattr(_usage, "completion_tokens", None)
         raw = (msg.content or "").strip()
         raw = _re.sub(r"<think>.*?</think>", "", raw, flags=_re.DOTALL).strip()
         if not raw:
@@ -2314,10 +2326,10 @@ def ask_text(prompt: str, mode: str = "deep", temperature: float = 0.4) -> str:
                 logger.warning(f"ask_text: content пуст, reasoning {len(reasoning)} симв. — отброшен (обрезан)")
         if not raw:
             logger.warning("ask_text: пустой ответ модели")
-        return raw
+        return _ret(raw)
     except Exception as e:
         logger.warning(f"ask_text error (mode={mode}): {e}")
-        return ""
+        return _ret("")
 
 
 def ask_deepseek_garmin(workout: dict, group: str, pace: str) -> dict | None:
