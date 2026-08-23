@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Поддержка — DoDick</title>
+<meta name="description" content="Как связаться с DoDick, отключить часы и удалить свои данные.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#15181D;
+    --paper:#F7F6F2;
+    --line:#E3E0D8;
+    --muted:#6E7480;
+    --mark:#2E2BD6;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0;
+    background:var(--paper);
+    color:var(--ink);
+    font:400 17px/1.6 "IBM Plex Sans",-apple-system,Segoe UI,Roboto,sans-serif;
+  }
+  .wrap{max-width:760px;margin:0 auto;padding:0 24px}
+  header{border-bottom:1px solid var(--line)}
+  .bar{display:flex;align-items:baseline;justify-content:space-between;gap:16px;padding:22px 0}
+  .logo{font-weight:700;letter-spacing:-.02em;font-size:20px;color:var(--ink);text-decoration:none}
+  .logo span{color:var(--mark)}
+  nav a{color:var(--muted);text-decoration:none;font-size:15px;margin-left:20px}
+  nav a:hover{color:var(--ink)}
+
+  h1{font-size:clamp(30px,5vw,44px);line-height:1.1;letter-spacing:-.03em;margin:56px 0 18px}
+  .lede{font-size:19px;color:#2A2F38;margin:0 0 44px;max-width:52ch}
+
+  h2{
+    font:600 12px/1 "IBM Plex Mono",monospace;
+    letter-spacing:.14em;
+    text-transform:uppercase;
+    color:var(--muted);
+    margin:0 0 16px;
+  }
+  section{padding:26px 0;border-top:1px solid var(--line)}
+  h3{font-size:18px;font-weight:600;margin:22px 0 6px}
+  h3:first-of-type{margin-top:0}
+  p{margin:0 0 12px;max-width:62ch}
+  a{color:var(--mark)}
+  .contact{
+    background:#fff;
+    border:1px solid var(--line);
+    padding:22px 24px;
+    margin:0 0 8px;
+  }
+  .contact p{margin:0 0 8px}
+  .contact p:last-child{margin:0}
+  .en{color:#2A2F38}
+  footer{border-top:1px solid var(--line);padding:24px 0 48px;color:var(--muted);font-size:15px;margin-top:32px}
+  footer a{color:var(--muted)}
+  @media (max-width:700px){h1{margin-top:36px}}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap bar">
+    <a class="logo" href="/">Do<span>Dick</span></a>
+    <nav>
+      <a href="/">Главная</a>
+      <a href="https://t.me/DD_adviser_bot">Telegram</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <h1>Поддержка</h1>
+  <p class="lede">Если что-то не работает или нужен ответ по вашим данным — напишите, отвечаем обычно в тот же день.</p>
+
+  <section>
+    <h2>Связь</h2>
+    <div class="contact">
+      <p>В боте: кнопка <b>«Связь»</b> на главном экране — сообщение придёт напрямую.</p>
+      <p>Почтой: <a href="mailto:admin@dodick.run">admin@dodick.run</a></p>
+      <p>Вопросы о данных и приватности: <a href="mailto:admin@dodick.run">admin@dodick.run</a></p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Частые вопросы</h2>
+
+    <h3>Как подключить часы</h3>
+    <p>В боте: «Профиль» → выберите свой сервис (Garmin, COROS, Polar, Whoop). Strava подключается отдельной кнопкой, без ввода пароля.</p>
+
+    <h3>Как отключить часы</h3>
+    <p>Там же, в «Профиле», у подключённого сервиса есть кнопка отключения. После неё бот перестаёт запрашивать ваши данные, а сохранённый доступ стирается.</p>
+
+    <h3>Как удалить свои данные</h3>
+    <p>Напишите нам с того же аккаунта — удалим профиль, зоны, историю тренировок и рекомендаций. Обычно в течение нескольких дней.</p>
+
+    <h3>Пришла не та группа</h3>
+    <p>Чаще всего дело в зонах: проверьте в «Профиле» лактатный порог и VO2max. Если там всё верно — напишите нам, разберём конкретный случай.</p>
+
+    <h3>Как перестать получать сообщения</h3>
+    <p>В боте: «Уведомления» — там отдельные галочки на вечерние и утренние сообщения.</p>
+  </section>
+
+  <section>
+    <h2>Данные</h2>
+    <p>Бот берёт с ваших часов и из Strava только то, что нужно для рекомендации: тренировки, пульс, сон, показатели восстановления. Эти данные используются, чтобы посчитать вашу группу и разобрать вашу тренировку — и не передаются третьим лицам, не продаются и не используются в рекламе.</p>
+    <p>Доступ к сервисам хранится на нашем сервере и отзывается по вашему требованию — из бота или письмом.</p>
+  </section>
+
+  <section class="en">
+    <h2>English</h2>
+    <p>DoDick is a training assistant for the Dusty Dumbbells running club, run by a single developer.</p>
+    <p><b>Contact:</b> the “Связь” (Contact) button inside the bot, or <a href="mailto:admin@dodick.run">admin@dodick.run</a>. Privacy and data requests go to the same address.</p>
+    <p><b>Connecting and disconnecting a device.</b> Watch services (Garmin, COROS, Polar, Whoop) and Strava are connected in the bot under “Профиль” (Profile). Every connection can be revoked there at any time; the stored access is deleted when you do.</p>
+    <p><b>Data use.</b> We read only what the recommendation needs — workouts, heart rate, sleep and recovery metrics. The data is used to calculate that runner's training group and to review their own workout. It is not shared with third parties, not sold, and not used for advertising. To have your account and history deleted, write to us from the same account.</p>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    DoDick · беговой клуб «Пыльные гантели» · <a href="/">Главная</a> · <a href="/privacy">Приватность</a>
+  </div>
+</footer>
+
+</body>
+</html>

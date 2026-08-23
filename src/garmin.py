@@ -289,13 +289,59 @@ async def get_lactate_threshold(db_user_id: int) -> dict | None:
 
 
 async def upload_workout(db_user_id: int, workout_json: dict) -> bool:
-    """Uploads a workout plan to Garmin Connect. Returns True on success."""
+    """Uploads a workout plan to Garmin Connect. Returns True on success.
+    18.08.2026: после загрузки АВТО-ПУШ в библиотеку часов (формат снят с живого
+    запроса кнопки GC «отправить в устройство»): юзеру больше не нужно жать
+    значок вручную — тренировка приедет при следующем синке часов. Пуш
+    best-effort: его ошибка не валит успешную загрузку."""
     client = await _client(db_user_id)
     if not client:
         return False
 
     def _do():
-        return client.upload_workout(workout_json)
+        resp = client.upload_workout(workout_json)
+        wid = resp.get("workoutId") if isinstance(resp, dict) else None
+        if not wid:
+            return True
+        name = workout_json.get("workoutName") or f"DD_{wid}"
+
+        def _api(path, **kw):
+            fn = getattr(client, "connectapi", None)
+            if fn is None:
+                fn = client.garth.connectapi
+            return fn(path, **kw)
+
+        def _post(path, payload):
+            # прямой POST через garth-клиент: connectapi сам подставляет method
+            g = getattr(client, "garth", None) or getattr(client, "client", None)
+            return g.post("connectapi", path, json=payload, api=True)
+
+        try:
+            devices = _api("/device-service/deviceregistration/devices") or []
+            # 19.08.2026: шлём ТОЛЬКО на основные часы (разведка по 20 юзерам: у каждого
+            # ровно одно primaryActivityTrackerIndicator=True и это всегда актуальные часы;
+            # пульсометры/велокомпьютеры/старые часы — False). Фолбэки ниже.
+            targets = [d for d in devices if d.get("primaryActivityTrackerIndicator")]
+            if not targets:
+                targets = [d for d in devices if d.get("runningWorkoutCapable")]
+            if not targets:
+                targets = devices
+            msgs = [{
+                "deviceId": d.get("deviceId"),
+                "fileType": "FIT",
+                "groupName": None,
+                "messageName": name,
+                "messageType": "workouts",
+                "messageUrl": f"workout-service/workout/FIT/{wid}",
+                "metaDataId": wid,
+                "priority": 1,
+            } for d in targets if d.get("deviceId")]
+            if msgs:
+                _post("/device-service/devicemessage/messages", msgs)
+                print(f"Garmin: workout {wid} pushed to {len(msgs)} device(s)")
+        except Exception as e:
+            print(f"Garmin device push (некритично): {type(e).__name__}: {str(e)[:200]}")
+        return True
 
     try:
         await asyncio.to_thread(_do)

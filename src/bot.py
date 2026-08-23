@@ -26,6 +26,7 @@ from database import (
     get_garmin_recovery_cache, save_garmin_recovery_cache,
     user_exists, log_activity, get_bot_stats, count_users_with_service,
     get_activity_daily, get_activity_top, get_activity_users, get_activity_report,
+    get_report_users,
     delete_token,
     get_all_users_with_details, get_users_with_service_full, get_users_with_profile_full,
     save_feedback, save_rating, get_recent_ratings, get_recent_feedbacks,
@@ -219,6 +220,42 @@ def _svc_done_msg(svc: str) -> str:
     return next((msg for s, _, _, _, msg in _SERVICES if s == svc), f"{svc} отключён")
 
 
+async def _revoke_service(db_user_id: int, svc: str) -> bool:
+    """Отзыв доступа НА СТОРОНЕ сервиса перед удалением ключа у нас.
+
+    Strava: освобождает слот в лимите приложения — без этого отключённые
+    продолжают занимать места. Polar: снимает регистрацию в AccessLink.
+    У остальных сервисов отзыва нет — возвращаем False, ключ всё равно удаляется.
+    """
+    try:
+        if svc == "strava":
+            import strava as _sv
+            return await _sv.deauthorize(db_user_id)
+        if svc == "polar":
+            import polar as _pl
+            return await _pl.deregister(db_user_id)
+    except Exception as e:
+        logger.warning(f"Отзыв {svc} для uid={db_user_id} не удался: {e}")
+    return False
+
+
+def _blocked_with_tokens() -> list:
+    """[(uid, кто, [сервисы], с какого числа), ...] — заблокировавшие бота,
+    у кого остались ключи Strava/Polar (такие зря занимают места в лимите)."""
+    from database import get_connection
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT u.id, COALESCE(u.username, u.name, CAST(u.telegram_id AS TEXT)), "
+            "p.deactivated_at FROM users u JOIN user_preferences p ON p.user_id = u.id "
+            "WHERE p.is_active = 0 ORDER BY u.id").fetchall()
+    out = []
+    for uid, who, since in rows:
+        svcs = [s for s in ("strava", "polar") if get_token(uid, s)]
+        if svcs:
+            out.append((uid, who, svcs, (since or "")[:10]))
+    return out
+
+
 def _build_screen3_keyboard(db_user_id: int) -> InlineKeyboardMarkup:
     """Экран 3 — подключение/отключение сервисов.
 
@@ -359,6 +396,75 @@ async def _report_block(bot, telegram_id: int, where: str) -> None:
         logger.warning(f"_report_block notify failed for {telegram_id}: {e}")
 
 
+async def check_new_users(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """20.08.2026: источник правды — ТАБЛИЦА users. Раз в несколько минут смотрим,
+    не появились ли записи новее отметки последней проверки (bot_settings.
+    last_new_user_seen) — тогда шлём админу. Ловит любой путь появления юзера
+    (не только /start) и не трогает остальные апдейты."""
+    from database import get_connection
+    try:
+        with get_connection() as conn:
+            row = conn.execute(
+                "SELECT value FROM bot_settings WHERE key = 'last_new_user_seen'").fetchone()
+            if not row or not row[0]:
+                conn.execute(
+                    "INSERT OR REPLACE INTO bot_settings (key, value) "
+                    "VALUES ('last_new_user_seen', datetime('now'))")
+                return
+            fresh = conn.execute(
+                "SELECT name, username, created_at FROM users "
+                "WHERE created_at > ? ORDER BY created_at", (row[0],)).fetchall()
+            if fresh:
+                conn.execute(
+                    "INSERT OR REPLACE INTO bot_settings (key, value) VALUES "
+                    "('last_new_user_seen', ?)", (fresh[-1][2],))
+    except Exception as e:
+        logger.error(f"check_new_users: {e}")
+        return
+    for name, uname, _ in fresh:
+        tag = f" (@{uname})" if uname else ""
+        await _notify_admin(
+            context.bot,
+            f"👤 Новый пользователь: {name}{tag}\n"
+            f"Всего пользователей: {len(get_all_users())}")
+    await _check_new_ratings(context)
+
+
+async def _check_new_ratings(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """21.08.2026: новые оценки рекомендаций — тот же приём, что и с новыми юзерами:
+    смотрим записи recommendation_ratings новее отметки bot_settings.last_rating_seen.
+    Первый запуск только ставит отметку — старые оценки не хлынут."""
+    from database import get_connection
+    try:
+        with get_connection() as conn:
+            row = conn.execute(
+                "SELECT value FROM bot_settings WHERE key = 'last_rating_seen'").fetchone()
+            if not row or not row[0]:
+                conn.execute(
+                    "INSERT OR REPLACE INTO bot_settings (key, value) "
+                    "VALUES ('last_rating_seen', datetime('now'))")
+                return
+            fresh = conn.execute("""
+                SELECT COALESCE(u.username, u.name), r.rating, r.workout_date,
+                       r.ai_mode, r.comment, r.created_at
+                FROM recommendation_ratings r JOIN users u ON u.id = r.user_id
+                WHERE r.created_at > ? ORDER BY r.created_at
+            """, (row[0],)).fetchall()
+            if fresh:
+                conn.execute(
+                    "INSERT OR REPLACE INTO bot_settings (key, value) VALUES "
+                    "('last_rating_seen', ?)", (fresh[-1][5],))
+    except Exception as e:
+        logger.error(f"_check_new_ratings: {e}")
+        return
+    for who, rating, wdate, mode, comment, _ in fresh:
+        text = (f"⭐ Оценка {rating}/10 от {who}\n"
+                f"Тренировка: {wdate or '—'} · режим: {mode or '—'}")
+        if comment:
+            text += f"\n💬 {comment[:500]}"
+        await _notify_admin(context.bot, text)
+
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     is_new = not user_exists(user.id)
@@ -374,13 +480,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         was_blocked = bool(row) and row[0] == 0
     db_user_id = _mark_user_active_if_needed(user.id, user.full_name, user.username)
     if is_new:
-        total = len(get_all_users())
-        uname = f" (@{user.username})" if user.username else ""
-        await _notify_admin(
-            context.bot,
-            f"👤 Новый пользователь: {user.full_name}{uname}\n"
-            f"Всего пользователей: {total}"
-        )
+        # 20.08.2026: уведомляет check_new_users (по таблице users) — здесь не дублируем
+        pass
     elif was_blocked:
         uname = f" (@{user.username})" if user.username else ""
         await _notify_admin(
@@ -586,6 +687,15 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _show_status(update, db_user_id)
 
 
+def _strava_slots_line() -> str:
+    """Строка «Сейчас свободно мест: X из 10» для экранов подключения Strava.
+    Лимит — 10 athlete connections у неодобренного приложения."""
+    from database import count_service_tokens
+    cap = 10
+    free = max(0, cap - count_service_tokens("strava"))
+    return f"🎫 Сейчас свободно мест: {free} из {cap}."
+
+
 async def cmd_connect_strava(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     _mark_user_active_if_needed(user.id, user.full_name, user.username)
@@ -595,7 +705,8 @@ async def cmd_connect_strava(update: Update, context: ContextTypes.DEFAULT_TYPE)
         "Нажми кнопку и авторизуйся в Strava.\n\n"
         "После авторизации ты автоматически получишь сообщение в Telegram — ничего копировать не нужно.\n\n"
         "⚠️ Strava временно ограничена — подключение новых пользователей на проверке у Strava. "
-        "Пока можно использовать Garmin или COROS (/connect_garmin, /connect_coros)."
+        "Пока можно использовать Garmin или COROS (/connect_garmin, /connect_coros).\n\n"
+        + _strava_slots_line()
     )
     badge = os.path.join(os.path.dirname(__file__), "..", "img",
                          "btn_strava_connect_with_orange_x2.png")
@@ -931,8 +1042,7 @@ def _build_notifications_text(prefs: dict) -> str:
         f"{mark('notify_interval')} Вечер накануне вт/пт (20:00) — рекомендация группы\n"
         f"{mark('notify_morning_interval')} Утро вт/пт (07:00) — проверка готовности\n"
         f"{mark('notify_long')} Вечер накануне Long Run (20:00)\n"
-        f"{mark('notify_morning_long')} Утро воскресенья (07:30)\n"
-        f"{mark('notify_interval_extra')} Новые группы в анонсе"
+        f"{mark('notify_morning_long')} Утро воскресенья (07:30)"
     )
 
 
@@ -946,9 +1056,60 @@ def _build_notifications_keyboard(prefs: dict) -> InlineKeyboardMarkup:
         [lbl("notify_morning_interval", "Утро вт/пт")],
         [lbl("notify_long", "Вечер Long Run")],
         [lbl("notify_morning_long", "Утро воскресенья")],
-        [lbl("notify_interval_extra", "Новые группы")],
         _settings_nav(),
     ])
+
+
+def _build_mailing_report(date: str, sent: list | None = None) -> str:
+    """Текст отчёта по рассылке за дату: сводка по группам + поимённо.
+    19.08.2026: единая точка — зовётся из scheduled_evening и из /mailing.
+    sent — список (telegram_id, name, username) фактически отправленных;
+    если передан — добавляется блок «Без рекомендации»."""
+    recs = get_recommendations_for_date(date) if date else []
+    if not recs:
+        return ""
+    groups: dict[str, list] = {}
+    for r in recs:
+        groups.setdefault(str(r["recommended_group"] or "—"), []).append(r)
+    summary = " · ".join(f"гр{g}: {len(lst)}" for g, lst in groups.items())
+    lines = [f"📊 Группы: {summary}"]
+    if sent is not None:
+        rec_tids = {r.get("telegram_id") for r in recs}
+        no_rec = [(n, u) for tid, n, u in sent if tid not in rec_tids]
+        if no_rec:
+            refs = ", ".join(f"@{u}" if u else (n or "—") for n, u in no_rec)
+            lines.append(f"📭 Без рекомендации ({len(no_rec)}): {refs}")
+    if BROADCAST_REPORT_DETAILED:
+        for g, lst in groups.items():
+            lines.append(f"\n▸ Группа {g}")
+            for r in lst:
+                rs = r["evening_recovery_score"]
+                mark = "↓" if r["lowered_by_recovery"] else ""
+                nick = f" (@{r['username']})" if r.get("username") else ""
+                lines.append(f"   {r['name']}{nick} (rec={rs if rs is not None else '—'}{mark})")
+    return "\n".join(lines)
+
+
+async def cmd_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/mailing [YYYY-MM-DD] — заново собрать отчёт по рассылке (19.08.2026).
+    Тот же вид, что приходит по завершении вечерней рассылки: группы + поимённо.
+    Без аргумента — дата последней рассылки."""
+    user = update.effective_user
+    if user.id not in ADMIN_TELEGRAM_IDS:
+        return
+    date = (context.args[0] if context.args else "").strip()
+    if not date:
+        from database import get_stats_overview
+        lr = (get_stats_overview() or {}).get("last_reco") or {}
+        date = lr.get("date") or ""
+    recs_report = _build_mailing_report(date)
+    if not recs_report:
+        await update.message.reply_text(
+            f"Нет рекомендаций за {date or '—'}. Формат: /mailing 2026-08-18")
+        return
+    text = f"📨 <b>Рассылка {date}</b>\n{recs_report}"
+    for i in range(0, len(text), 3900):
+        await update.message.reply_text(text[i:i + 3900], parse_mode="HTML")
 
 
 async def cmd_notifications(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -992,6 +1153,7 @@ def _build_help_text(is_admin: bool) -> str:
             "/stats — статистика пользователей и активности\n"
             "/users — список всех пользователей\n"
             "/services — пользователи по подключённым сервисам\n"
+            "/cleanup — убрать за теми, кто заблокировал бота: отзыв Strava/Polar\n"
             "/prompt — последний промпт к модели\n"
             "/debug — разбор последней тренировки\n"
             "/debug_long — разбор последнего Long Run\n"
@@ -1016,6 +1178,10 @@ def _build_help_text(is_admin: bool) -> str:
             "/p_a_user — промпт варианта A для выбранного пользователя\n"
             "/p_analyze — промпт Шага 1 (анализ анонса)\n"
             "/activity — активность по дням и топ действий за 14 дней"
+            "\n/mailing — отчёт по рассылке поимённо (без даты — последняя; /mailing 2026-08-18)"
+            "\n/brief — бриф режимов из кэша (/brief 20260804 — за дату); если режимов нет — кнопка «Сгенерировать режимы» (deep, без полного переанализа)"
+            "\n/rebrief — ПРИНУДИТЕЛЬНО пересобрать режимы заново (/rebrief 20260804), без переанализа анонса"
+            "\n/resend_evening — дослать вечернюю тем, кому не ушла (/resend_evening 20260814 [fast|smart|deep])"
             "\n/msg_user <id> <текст> — написать юзеру от имени бота"
             "\n/last — разбор последней выполненной тренировки (графики факт vs план; /last dark — тёмная тема)"
             "\n/report — ИИ-анализ последней тренировки (/report DD_20260612 — выбрать; /report data — сырой пакет+промпт)"
@@ -1078,7 +1244,15 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reco_line = "—"
     lr = o.get("last_reco")
     if lr:
-        by_g = " · ".join(f"гр{g}: {n}" for g, n in sorted(lr["by_group"].items()))
+        # 19.08.2026: распределение по группам — столбиками (моноширинный блок)
+        _items = sorted(lr["by_group"].items(),
+                        key=lambda kv: float(str(kv[0]).replace(",", "."))
+                        if str(kv[0]).replace(",", ".").replace(".", "").isdigit() else 99)
+        _mx = max((n for _, n in _items), default=0) or 1
+        _w = max((len(f"гр{g}") for g, _ in _items), default=3)
+        by_g = "<pre>" + "\n".join(
+            f"{('гр' + str(g)).ljust(_w)} {'█' * max(1, round(n * 14 / _mx))} {n}"
+            for g, n in _items) + "</pre>"
         reminders = max(lr["subscribed"] - lr["rec_total"], 0)
         reco_line = (f"{lr['wtype']}, {lr['date']}: получателей {lr['subscribed']} = "
                      f"рекомендаций {lr['rec_total']} + напоминаний {reminders}\n"
@@ -1197,6 +1371,29 @@ async def cmd_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = "\n".join(lines)
     for i in range(0, len(text), 4096):
         await update.message.reply_text(text[i:i + 4096])
+
+
+async def cmd_cleanup(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/cleanup — убрать за теми, кто заблокировал бота мимо кнопки «Отключить».
+
+    Сначала только показывает список; отзыв — по кнопке подтверждения (админ)."""
+    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+        await update.message.reply_text("Нет доступа.")
+        return
+    items = _blocked_with_tokens()
+    if not items:
+        await update.message.reply_text(
+            "Чисто: у заблокировавших бота подключений Strava/Polar нет.")
+        return
+    lines = [f"🧹 Заблокировали бота, подключения остались: {len(items)}\n"]
+    for _uid, who, svcs, since in items:
+        lines.append(f"• @{who} — {', '.join(svcs)} (с {since or '—'})")
+    lines.append("\nОтозвать доступ у сервисов и удалить ключи?"
+                 "\nПрофиль, зоны и история останутся на месте.")
+    await update.message.reply_text("\n".join(lines), reply_markup=InlineKeyboardMarkup([[
+        InlineKeyboardButton("🧹 Отозвать и очистить", callback_data="cleanup_do"),
+        InlineKeyboardButton("❌ Отмена", callback_data="cleanup_cancel"),
+    ]]))
 
 
 async def cmd_debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1627,6 +1824,185 @@ async def _reanalyze_one(workout: dict, mode: str, context=None) -> str:
     return "💾 ЗАПИСАНО В БАЗУ (анализ + эталоны)\n\n" + _format_analysis_result(result, mode)
 
 
+_CAP_OLD = (
+    "Группу с финишем быстрее — risk, % ≤ 10.\n"
+    "Исключение: если повторы короткие (≤200 м) и в задании есть прогрессия "
+    "темпа, выход быстрее потолка допустим на завершающих повторах — не более "
+    "чем на пятой части их общего числа; такая группа не risk — оценивай её "
+    "по основной части повторов.\n"
+)
+_CAP_MID = (
+    "Все рабочие отрезки не должны быть быстрее этого темпа — для этих групп "
+    "risk, % ≤ 10. Если в задании есть прогрессия темпа, сравнивай с потолком "
+    "не самый быстрый край диапазона группы, а середину диапазона — темп, "
+    "который держится на основной части повторов.\n"
+)
+
+
+async def cmd_shadow_caps(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/shadow_caps [limit] — теневой А/Б по потолку скорости (21.08.2026).
+    По каждому юзеру с зонами — 4 вызова: deep с потолком / deep без /
+    fast с потолком / fast без. НИЧЕГО не шлёт пользователям и не пишет в базу:
+    результат ложится в data/shadow_caps.txt и короткой сводкой админу."""
+    user = update.effective_user
+    if user.id not in ADMIN_TELEGRAM_IDS:
+        return
+    import time as _time
+    import os as _os_sc
+    # 21.08.2026: пути — АБСОЛЮТНЫЕ от расположения кода: у службы другой рабочий
+    # каталог, и относительный data/ молча не создавался.
+    _data_dir = _os_sc.path.join(_os_sc.path.dirname(_os_sc.path.dirname(
+        _os_sc.path.abspath(__file__))), "data")
+    _os_sc.makedirs(_data_dir, exist_ok=True)
+    _raw_path = _os_sc.path.join(_data_dir, "shadow_caps_raw.jsonl")
+    _sum_path = _os_sc.path.join(_data_dir, "shadow_caps.txt")
+    limit = 0
+    if context.args:
+        try:
+            limit = int(context.args[0])
+        except ValueError:
+            limit = 0
+
+    users = [(tid, name) for tid, name, _un, has in get_all_users_with_status() if has]
+    if limit:
+        users = users[:limit]
+    TAGS = ("deep~", "fast~")
+    msg = await update.message.reply_text(
+        f"🧪 Теневой прогон потолка: {len(users)} человек × {len(TAGS)} вызова "
+        f"({', '.join(TAGS)}). Рассылки не будет.")
+
+    _sem = asyncio.Semaphore(5)
+    rows: list[str] = []
+    # 21.08.2026: попарная матрица расхождений между сценариями
+    pair_diff: dict[tuple, int] = {}
+    pair_cases: dict[tuple, list] = {}
+    t_deep = t_fast = 0.0
+    done = 0
+
+    async def _one(tid: int, name: str):
+        nonlocal t_deep, t_fast, done
+        async with _sem:
+            try:
+                db_user_id = get_or_create_user(tid, name)
+                analysis, user_data, workout_dict, _ = await _build_analysis_and_user_data(db_user_id)
+                if analysis is None:
+                    return
+                res: dict[str, tuple] = {}
+                for tag, mode, caps in (("deep~", "deep", "mid"),
+                                        ("fast~", "fast", "mid")):
+                    prompt, _ctx = await _build_variant_b_prompt(
+                        db_user_id, analysis, user_data, workout_dict,
+                        with_ceilings=(caps is not False))
+                    if caps == "mid":
+                        if _CAP_OLD in prompt:
+                            prompt = prompt.replace(_CAP_OLD, _CAP_MID)
+                        else:
+                            logger.warning("shadow_caps: блок потолка не найден для mid")
+                    _t0 = _time.time()
+                    advice = await asyncio.to_thread(claude_advisor.ask_groq, prompt, mode)
+                    _dt = _time.time() - _t0
+                    grp = str(((advice or {}).get("advice") or {}).get("recommended_group") or "—")
+                    # 21.08.2026: сохраняем ПОЛНЫЙ ответ каждого вызова — чтобы часовой
+                    # прогон не пришлось повторять ради деталей (JSONL, одна строка = один вызов)
+                    try:
+                        import json as _json_sc
+                        with open(_raw_path, "a", encoding="utf-8") as _f:
+                            _f.write(_json_sc.dumps({
+                                "user": name, "uid": db_user_id, "tag": tag,
+                                "mode": mode, "ceilings": caps, "seconds": round(_dt, 1),
+                                "advice": (advice or {}).get("advice"),
+                                "stats": (advice or {}).get("stats"),
+                            }, ensure_ascii=False) + "\n")
+                    except Exception as _e:
+                        logger.warning(f"shadow_caps raw: {_e}")
+                    res[tag] = (grp, _dt)
+                    if mode == "deep":
+                        t_deep += _dt
+                    else:
+                        t_fast += _dt
+                    await asyncio.sleep(0)
+                for _i, _a in enumerate(TAGS):
+                    for _b in TAGS[_i + 1:]:
+                        ga = res.get(_a, ("—", 0))[0]
+                        gb = res.get(_b, ("—", 0))[0]
+                        if ga != gb:
+                            pair_diff[(_a, _b)] = pair_diff.get((_a, _b), 0) + 1
+                            pair_cases.setdefault((_a, _b), []).append(f"{name[:18]} {ga}≠{gb}")
+                rows.append(
+                    f"{name[:22]:<22} "
+                    + "  ".join(f"{k}={res.get(k, ('—', 0))[0]}({res.get(k, ('—', 0))[1]:.0f}с)"
+                                for k in ("deep~", "fast~")))
+                done += 1
+            except Exception as e:
+                rows.append(f"{name[:22]:<22} ОШИБКА: {str(e)[:60]}")
+
+    await asyncio.gather(*[_one(t, n) for t, n in users])
+
+    matrix = ["Матрица расхождений (сколько человек из " + str(done) + " получили РАЗНЫЕ группы):"]
+    for _i, _a in enumerate(TAGS):
+        for _b in TAGS[_i + 1:]:
+            n = pair_diff.get((_a, _b), 0)
+            ex = "; ".join(pair_cases.get((_a, _b), [])[:5])
+            matrix.append(f"  {_a} vs {_b}: {n}" + (f"   → {ex}" if ex else ""))
+    header = (f"Теневой прогон потолка — участников: {done}\n"
+              + "\n".join(matrix) + "\n"
+              f"Среднее время deep: {t_deep / max(done * 2, 1):.0f}с · fast: {t_fast / max(done * 2, 1):.0f}с\n")
+    try:
+        with open(_sum_path, "w", encoding="utf-8") as f:
+            f.write(header + "\n" + "\n".join(rows))
+    except Exception as e:
+        logger.warning(f"shadow_caps file: {e}")
+    await msg.edit_text(header + f"\nФайлы: {_sum_path} и {_raw_path}")
+    body = "\n".join(rows)
+    for i in range(0, len(body), 3900):
+        await update.message.reply_text(f"<pre>{body[i:i + 3900]}</pre>", parse_mode="HTML")
+
+
+async def cmd_rebrief(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/rebrief [YYYYMMDD] — ПРИНУДИТЕЛЬНО пересобрать режимы (20.08.2026).
+    В отличие от /brief (рендер из кэша) всегда зовёт ИИ заново и перезаписывает
+    modes в анализе; полный переанализ анонса НЕ делается."""
+    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+        await update.message.reply_text("Нет доступа.")
+        return
+    import json as _json
+    arg = (context.args[0] if context.args else "").strip()
+    wdate = None
+    if arg:
+        digits = "".join(ch for ch in arg if ch.isdigit())
+        if len(digits) != 8:
+            await update.message.reply_text("Формат: /rebrief 20260804 (или без даты — последний)")
+            return
+        wdate = f"{digits[:4]}-{digits[4:6]}-{digits[6:]}"
+
+    row = _analysis_row(wdate)
+    if not row:
+        await update.message.reply_text(f"Анализ {'за ' + wdate if wdate else ''} не найден.")
+        return
+    post_id, found_date, ajson = row
+    try:
+        result = _json.loads(ajson or "{}")
+    except Exception:
+        await update.message.reply_text("Анализ не распарсился.")
+        return
+
+    msg = await update.message.reply_text(
+        f"🧭 Пересобираю режимы за {found_date} (deep, 2-3 минуты)…")
+    try:
+        import announce_brief
+        text = await asyncio.to_thread(
+            announce_brief.build_admin_brief, result, post_id, "deep")
+    except Exception as e:
+        await msg.edit_text(f"Ошибка генерации режимов: {str(e)[:200]}")
+        return
+    if not text:
+        await msg.edit_text("Режимы не сгенерировались (пустой ответ ИИ).")
+        return
+    await msg.edit_text(text[:4096])
+    for i in range(4096, len(text), 4096):
+        await update.message.reply_text(text[i:i + 4096])
+
+
 async def cmd_brief(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Анализ (РЦС + режимы) из истории: /brief — последний,
     /brief 20260804 — за конкретную дату. Рендер из кэша analyzed_json["modes"],
@@ -1765,7 +2141,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "⚠️ Strava временно ограничена — подключение новых пользователей на проверке у Strava.\n"
             "Используй Garmin или COROS (/connect_garmin, /connect_coros) для полноценной работы.\n\n"
             "Нажми кнопку и авторизуйся в Strava.\n\n"
-            "После авторизации ты автоматически получишь сообщение в Telegram — ничего копировать не нужно.",
+            "После авторизации ты автоматически получишь сообщение в Telegram — ничего копировать не нужно.\n\n"
+            + _strava_slots_line(),
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
@@ -1844,13 +2221,38 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data.startswith("disc_yes_"):
         svc = query.data[len("disc_yes_"):]
         db_user_id = get_or_create_user(user.id, user.full_name, user.username)
+        revoked = await _revoke_service(db_user_id, svc)
         delete_token(db_user_id, svc)
         done_msg = _svc_done_msg(svc)
-        logger.info(f"Сервис {svc} отключён для user {db_user_id}")
+        logger.info(f"Сервис {svc} отключён для user {db_user_id} "
+                    f"(отзыв у сервиса: {'да' if revoked else 'нет'})")
         await query.edit_message_text(
             f"✅ {done_msg}.",
             reply_markup=_build_screen3_keyboard(db_user_id)
         )
+
+    elif query.data == "cleanup_cancel":
+        await query.edit_message_text("Отменено — ничего не изменено.")
+
+    elif query.data == "cleanup_do":
+        if user.id not in ADMIN_TELEGRAM_IDS:
+            return
+        items = _blocked_with_tokens()
+        await query.edit_message_text(f"🧹 Отзываю доступ… ({len(items)} чел.)")
+        ok = fail = 0
+        report = []
+        for uid, who, svcs, _since in items:
+            for s in svcs:
+                if await _revoke_service(uid, s):
+                    delete_token(uid, s)
+                    ok += 1
+                    report.append(f"✅ @{who} — {s}: отозвано, ключ удалён")
+                else:
+                    fail += 1
+                    report.append(f"⚠️ @{who} — {s}: не вышло, ключ оставлен")
+        report.append(f"\nИтого: отозвано {ok}, не вышло {fail}")
+        logger.info(f"cleanup: отозвано {ok}, ошибок {fail}")
+        await query.edit_message_text("\n".join(report)[:4000])
 
     elif query.data == "get_morning":
         msg = await context.bot.send_message(user.id, "☀️ Проверяю твоё восстановление...")
@@ -1973,13 +2375,23 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "profile_set_vo2max":
         context.user_data["awaiting_profile"] = "set_vo2max"
         await query.edit_message_text(
-            "Введи значение VO2max (мл/кг/мин).\n\nНапример: 53"
+            "📊 <b>VO2max</b> — максимальное потребление кислорода, мл/кг/мин.\n"
+            "Где взять: часы (Garmin — «МПК») или лабораторный тест. У любителей обычно 35–65.\n"
+            "От него считаются все твои темповые зоны, если не задан лактатный порог.\n\n"
+            "Например: 53",
+            parse_mode="HTML"
         )
 
     elif query.data == "profile_set_lactate":
         context.user_data["awaiting_profile"] = "set_lactate_pace"
         await query.edit_message_text(
-            "Введи темп лактатного порога (мин:сек на км).\n\nНапример: 4:17"
+            "🏃 <b>Лактатный порог (ПАНО)</b> — темп, который ты удерживаешь без развала "
+            "примерно 50–60 минут подряд (≈ темп на 10 км у большинства).\n"
+            "Это НЕ темп интервалов и не темп с короткой гонки — такая ошибка сделает все зоны "
+            "слишком быстрыми.\n"
+            "Важно: если порог задан вручную, зоны считаются ОТ НЕГО, а не от VO2max.\n\n"
+            "Введи темп (мин:сек на км), например: 4:17",
+            parse_mode="HTML"
         )
 
     elif query.data == "profile_set_gender":
@@ -2189,9 +2601,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if ok:
                 name = wkt_json.get('workoutName', '')
                 await context.bot.send_message(user.id,
-                    f"✅ <b>Тренировка загружена в Garmin Connect!</b>\n\n"
-                    f"📋 {name}\n\n"
-                    f"Открой приложение Garmin Connect → Тренировки и планы → Тренировки.",
+                    f"✅ <b>Тренировка отправлена в часы!</b>\n\n"
+                    f"⌚ {name.removesuffix('.json')}\n\n"
+                    f"Синхронизируй часы — тренировка появится в списке тренировок.",
                     parse_mode="HTML",
                     reply_markup=_add_main_menu_btn(None))
             else:
@@ -2242,9 +2654,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if ok:
                 await context.bot.send_message(
                     user.id,
-                    f"✅ <b>Тренировка загружена в Garmin Connect!</b>\n\n"
-                    f"📋 {fname}\n\n"
-                    f"Открой Garmin Connect → Тренировки и планы → Тренировки.",
+                    f"✅ <b>Тренировка отправлена в часы!</b>\n\n"
+                    f"⌚ {fname.removesuffix('.json')}\n\n"
+                    f"Синхронизируй часы — тренировка появится в списке тренировок.",
                     parse_mode="HTML",
                     reply_markup=_add_main_menu_btn(None))
             else:
@@ -2537,7 +2949,8 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["awaiting_profile"] = "set_lactate_hr"
         context.user_data["lactate_pace"] = pace
         await update.message.reply_text(
-            f"Темп {pace} сохранён.\n\nТеперь введи пульс на лактатном пороге.\n\nНапример: 174"
+            f"Темп {pace} сохранён.\n\nТеперь пульс на лактатном пороге — средний за такой бег "
+            f"(обычно 85–90% от максимального).\n\nНапример: 174"
         )
 
     elif context.user_data.get("awaiting_profile") == "set_lactate_hr":
@@ -3054,10 +3467,16 @@ async def _send_recommendation(
     row, status = get_latest_workout_analysis(wtype, cur_post, cur_date, cur_edit)
 
     async def _out(text, markup=None, parse_mode=None):
+        # 19.08.2026: в лонг-карточке остаются ссылки из анонса (регистрация, камера
+        # хранения) — глушим только превью сайта, сами ссылки кликабельны.
+        _no_prev = bool(long)
         if msg:
-            await msg.edit_text(text, reply_markup=markup, parse_mode=parse_mode)
+            await msg.edit_text(text, reply_markup=markup, parse_mode=parse_mode,
+                                disable_web_page_preview=_no_prev)
         else:
-            await context.bot.send_message(telegram_id, text, reply_markup=markup, parse_mode=parse_mode)
+            await context.bot.send_message(telegram_id, text, reply_markup=markup,
+                                           parse_mode=parse_mode,
+                                           disable_web_page_preview=_no_prev)
 
     if status == "empty" or row is None:
         what = "ближайшего Long Run" if long else "ближайшей тренировки"
@@ -3763,6 +4182,7 @@ async def _build_variant_b_prompt(
     analysis: dict,
     user_data: dict,
     workout_dict: dict | None,
+    with_ceilings: bool = True,
 ) -> tuple[str, dict]:
     """Единая точка сборки промпта варианта B.
     Возвращает (prompt_str, scenario_ctx).
@@ -3810,7 +4230,7 @@ async def _build_variant_b_prompt(
     prompt = claude_advisor.build_ai_b_prompt(
         analysis, user_data, zones_map, recovery,
         recovery_scenario_text=scenario_ctx["prompt_text"],
-        speed_ceilings=_repeat_caps or None,
+        speed_ceilings=(_repeat_caps or None) if with_ceilings else None,
     )
     return prompt, scenario_ctx
 
@@ -3988,16 +4408,18 @@ async def _autoanalyze_post(workout: dict, context=None) -> None:
             )
             # Бриф режимов (Шаг 1.5) — только при ПЕРВОМ анализе анонса (доп. группы/правки
             # не дублируют). Изолированно: ошибка не роняет автоанализ.
-            if reason == "новый анонс":
-                try:
-                    import announce_brief
-                    brief = await asyncio.to_thread(
-                        announce_brief.build_admin_brief, result, post_id, "deep")
-                    if brief:
-                        for i in range(0, len(brief), 4096):
-                            await _notify_admin(context.bot, brief[i:i + 4096])
-                except Exception as e:
-                    logger.warning(f"autoanalyze: announce_brief error: {e}")
+            # 20.08.2026: режимы пересобираем при ЛЮБОМ переанализе — иначе после новых
+            # доп. групп analyzed_json остаётся без modes и вечерний бриф молча не
+            # публикуется. Текст админу — только при первом анализе, чтобы не спамить.
+            try:
+                import announce_brief
+                brief = await asyncio.to_thread(
+                    announce_brief.build_admin_brief, result, post_id, "deep")
+                if brief and reason == "новый анонс":
+                    for i in range(0, len(brief), 4096):
+                        await _notify_admin(context.bot, brief[i:i + 4096])
+            except Exception as e:
+                logger.warning(f"autoanalyze: announce_brief error: {e}")
     except Exception as e:
         logger.error(f"autoanalyze error for post {workout.get('post_id')}: {e}")
 
@@ -4405,6 +4827,57 @@ async def cmd_resend_evening(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await update.message.reply_text(f"Досылка завершена: отправлено {ok}, ошибок {fail}")
 
 
+async def _send_notify_hint(bot, telegram_id: int) -> None:
+    """20.08.2026: после каждого АВТОМАТИЧЕСКОГО сообщения — отдельная мини-плашка
+    с кнопкой на настройку рассылки: отключение должно быть на виду, а не в меню.
+    Не критична: ошибка плашки не должна ломать саму рассылку."""
+    try:
+        await bot.send_message(
+            telegram_id,
+            "⚙️ Управление рассылкой — выбери, какие сообщения получать:",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(
+                "🔔 Настройка уведомлений", callback_data="notifications")]]))
+    except Exception as e:
+        logger.warning(f"notify hint for {telegram_id}: {e}")
+
+
+async def scheduled_brief_comment(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """20.08.2026: бриф-комментарий под анонсом — ОТДЕЛЬНЫЙ джоб в 19:05 МСК,
+    а не внутри рассылки: в 20:00 бот занят рассылкой, а на бриф идут новые люди.
+    Только интервальные анонсы (в сб лонг — пропускаем, как было раньше)."""
+    now = datetime.now()
+    # 21.08.2026: бриф — только пн и чт (как вечерняя рассылка накануне вт/пт).
+    # Раньше джоб был ежедневным с исключением субботы — и в пятницу повторно
+    # публиковал бриф под тем же анонсом.
+    if now.weekday() not in (0, 3):
+        return
+    live = await find_next_workout()
+    cur_post = live.get("post_id") if live else None
+    if not cur_post:
+        logger.info("Бриф-комментарий пропущен: нет актуального анонса")
+        return
+    try:
+        from database import get_workout_analysis as _gwa
+        import json as _json_bc
+        _brec = _gwa(cur_post)
+        _bresult = _json_bc.loads(_brec.get("analyzed_json") or "{}") if _brec else None
+        _modes = (_bresult or {}).get("modes")
+        if _modes and _bresult:
+            import announce_brief as _ab
+            import telegram_reader as _tr
+            _btext = _ab.format_brief(_bresult, _modes)
+            _btext += ("\n\n🤖 Персональная группа под твою форму, тренировка в часы "
+                       "и разбор после финиша — @DD_adviser_bot")
+            if await _tr.post_comment(cur_post, _btext):
+                logger.info(f"Бриф опубликован комментарием к посту {cur_post}")
+            else:
+                logger.warning(f"Бриф-комментарий к посту {cur_post} не опубликован")
+        else:
+            logger.info("Бриф-комментарий пропущен: нет режимов в анализе")
+    except Exception as e:
+        logger.error(f"Бриф-комментарий: {e}")
+
+
 async def scheduled_evening(context: ContextTypes.DEFAULT_TYPE):
     # return  # TEMP: рассылка отключена 2026-06-01, убрать после фикса зон
     now = datetime.now()
@@ -4428,34 +4901,7 @@ async def scheduled_evening(context: ContextTypes.DEFAULT_TYPE):
     # рассылкой публикуем режимы в ветку обсуждения анонса (от аккаунта Антона
     # через Telethon — бота в чат не добавить). Только интервалы (у лонгов нет
     # режимов). Любая ошибка — только лог, рассылка не страдает.
-    if not is_long:
-        try:
-            # Режимы берём из СОХРАНЁННОГО анализа по post_id (как /brief):
-            # объект analysis рассылки режимов НЕ содержит (урок 13.08 —
-            # первый прогон молча пропустился именно на этом).
-            _bresult = None
-            _modes = None
-            if cur_post:
-                from database import get_workout_analysis as _gwa
-                import json as _json_bc
-                _brec = _gwa(cur_post)
-                if _brec:
-                    _bresult = _json_bc.loads(_brec.get("analyzed_json") or "{}")
-                    _modes = _bresult.get("modes")
-            if _modes and _bresult:
-                import announce_brief as _ab
-                import telegram_reader as _tr
-                _btext = _ab.format_brief(_bresult, _modes)
-                _btext += ("\n\n🤖 Персональная группа под твою форму, тренировка в часы "
-                           "и разбор после финиша — @DD_adviser_bot")
-                if await _tr.post_comment(cur_post, _btext):
-                    logger.info(f"Бриф опубликован комментарием к посту {cur_post}")
-                else:
-                    logger.warning(f"Бриф-комментарий к посту {cur_post} не опубликован")
-            else:
-                logger.info("Бриф-комментарий пропущен: нет режимов или post_id")
-        except Exception as e:
-            logger.error(f"Бриф-комментарий: {e}")
+    # 20.08.2026: бриф-комментарий переехал в отдельный джоб scheduled_brief_comment (19:05 МСК)
 
     users = get_all_users_with_status()
     count = 0
@@ -4472,6 +4918,7 @@ async def scheduled_evening(context: ContextTypes.DEFAULT_TYPE):
                 await _send_recommendation(telegram_id, name, context, long=is_long, live=live, is_broadcast=True)
                 count += 1
                 sent.append((telegram_id, name, _un))
+                await _send_notify_hint(context.bot, telegram_id)
                 await asyncio.sleep(0.5)
             except Forbidden:
                 await _report_block(context.bot, telegram_id, "вечерняя рассылка")
@@ -4498,30 +4945,7 @@ async def scheduled_evening(context: ContextTypes.DEFAULT_TYPE):
     report = ""
     try:
         bcast_date = live.get("workout_date") if live else None
-        recs = get_recommendations_for_date(bcast_date) if bcast_date else []
-        if recs:
-            groups: dict[str, list] = {}
-            for r in recs:
-                groups.setdefault(str(r["recommended_group"] or "—"), []).append(r)
-            summary = " · ".join(f"гр{g}: {len(lst)}" for g, lst in groups.items())
-            lines = [f"📊 Группы: {summary}"]
-            # Сверка арифметики: кому рассылка ушла, но рекомендация не строилась
-            # (нет данных/группы) — раньше эти люди в отчёте были невидимы,
-            # и «Отправлено N» не сходилось с суммой по группам.
-            rec_tids = {r.get("telegram_id") for r in recs}
-            no_rec = [(n, u) for tid, n, u in sent if tid not in rec_tids]
-            if no_rec:
-                refs = ", ".join(f"@{u}" if u else (n or "—") for n, u in no_rec)
-                lines.append(f"📭 Без рекомендации ({len(no_rec)}): {refs}")
-            if BROADCAST_REPORT_DETAILED:
-                for g, lst in groups.items():
-                    lines.append(f"\n▸ Группа {g}")
-                    for r in lst:
-                        rs = r["evening_recovery_score"]
-                        mark = "↓" if r["lowered_by_recovery"] else ""
-                        nick = f" (@{r['username']})" if r.get("username") else ""
-                        lines.append(f"   {r['name']}{nick} (rec={rs if rs is not None else '—'}{mark})")
-            report = "\n".join(lines)
+        report = _build_mailing_report(bcast_date, sent) if bcast_date else ""
     except Exception as e:
         logger.error(f"Отчёт по рассылке не собрался: {e}")
         report = ""
@@ -4743,6 +5167,7 @@ async def scheduled_morning(context: ContextTypes.DEFAULT_TYPE):
     for telegram_id, name, _ in users:
         try:
             await _send_morning_check(telegram_id, context)
+            await _send_notify_hint(context.bot, telegram_id)
             await asyncio.sleep(0.5)
         except Forbidden:
             await _report_block(context.bot, telegram_id, "утренняя рассылка")
@@ -4764,6 +5189,7 @@ async def scheduled_morning_sunday(context: ContextTypes.DEFAULT_TYPE):
     for telegram_id, name, _ in users:
         try:
             await _send_morning_check(telegram_id, context)
+            await _send_notify_hint(context.bot, telegram_id)
             await asyncio.sleep(0.5)
         except Forbidden:
             await _report_block(context.bot, telegram_id, "воскресная рассылка")
@@ -5372,6 +5798,9 @@ async def cmd_activity(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             lines.append(f"  {cmd}: {cnt} (юзеров: {uniq})")
     rep_cnt, rep_uniq = get_activity_report(days)
     lines += ["", f"📊 /report: {rep_cnt} (юзеров: {rep_uniq})"]
+    for name, username, cnt, last_d in get_report_users(days):
+        nick = f" (@{username})" if username else ""
+        lines.append(f"  {name}{nick}: {cnt} · посл. {last_d}")
     who = get_activity_users(days)
     if who:
         lines += ["", f"Кто активен ({len(who)}, по дате последней активности):"]
@@ -5707,7 +6136,10 @@ async def report_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 def main():
     init_db()
 
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    # 17.08.2026: concurrent_updates — без него PTB обрабатывает апдейты СТРОГО
+    # ПО ОДНОМУ: чей-то deep-/workout на 3-7 минут замораживал КОМАНДЫ ВСЕХ
+    # (три /stats без ответа + answerCallbackQuery 400 на протухший колбэк в логе).
+    app = ApplicationBuilder().token(BOT_TOKEN).concurrent_updates(64).build()
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("workout", cmd_workout))
@@ -5723,12 +6155,14 @@ def main():
     app.add_handler(CommandHandler("stats",    cmd_stats))
     app.add_handler(CommandHandler("users",    cmd_users))
     app.add_handler(CommandHandler("services", cmd_services))
+    app.add_handler(CommandHandler("cleanup",  cmd_cleanup))
     app.add_handler(CommandHandler("prompt",   cmd_prompt))
     app.add_handler(CommandHandler("profile", cmd_profile))
     app.add_handler(CommandHandler("mode", cmd_mode))
     app.add_handler(CommandHandler("debug", cmd_debug))
     app.add_handler(CommandHandler("debug_long", cmd_debug_long))
     app.add_handler(CommandHandler("notifications", cmd_notifications))
+    app.add_handler(CommandHandler("mailing", cmd_mailing))
     app.add_handler(MessageHandler(filters.VIDEO, admin_video_handler))
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("feedback",  cmd_feedback))
@@ -5736,6 +6170,8 @@ def main():
     app.add_handler(CommandHandler("feedbacks", cmd_feedbacks))
     app.add_handler(CommandHandler("analyze_test", cmd_analyze_test))
     app.add_handler(CommandHandler("brief", cmd_brief))
+    app.add_handler(CommandHandler("rebrief", cmd_rebrief))
+    app.add_handler(CommandHandler("shadow_caps", cmd_shadow_caps))
     app.add_handler(CommandHandler("resend_evening", cmd_resend_evening))
     app.add_handler(CommandHandler("preprocess_mode", cmd_preprocess_mode))
     app.add_handler(CommandHandler("test_workout", cmd_test_workout))
@@ -5783,6 +6219,8 @@ def main():
     job_queue.run_daily(scheduled_morning_sunday,       time=time(hour=4, minute=30), days=(0,))        # 07:30 МСК вс
     job_queue.run_repeating(scheduled_new_workout_check, interval=1800, first=60)                       # каждые 30 мин
     job_queue.run_repeating(scheduled_wakeup_poll, interval=900, first=120)                              # каждые 15 мин (окно 06:00–09:00 МСК внутри)
+    job_queue.run_repeating(check_new_users, interval=300, first=90)                                     # каждые 5 мин — новые записи в users
+    job_queue.run_daily(scheduled_brief_comment, time=time(hour=16, minute=5))                           # 19:05 МСК — бриф до рассылки
 
     import oauth_server as _oauth
     _oauth.set_telegram_app(app)

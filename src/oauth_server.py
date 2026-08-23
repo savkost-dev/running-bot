@@ -511,6 +511,71 @@ async def _strava_webhook_event(request: web.Request) -> web.Response:
     return web.Response(text="ok")
 
 
+# ── COROS push service ─────────────────────────────
+
+_COROS_PENDING_HTML = """<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DoDick — COROS connection</title>
+<style>
+  body{margin:0;background:#F7F6F2;color:#15181D;
+       font:400 17px/1.6 -apple-system,Segoe UI,Roboto,sans-serif;
+       display:flex;min-height:100vh;align-items:center;justify-content:center}
+  .box{max-width:32rem;padding:32px 28px;text-align:center}
+  h1{font-size:26px;letter-spacing:-.02em;margin:0 0 14px}
+  p{margin:0 0 12px;color:#2A2F38}
+  a{color:#2E2BD6}
+  .logo{font-weight:700;font-size:20px;margin-bottom:22px}
+  .logo span{color:#2E2BD6}
+</style></head><body><div class="box">
+  <div class="logo">Do<span>Dick</span></div>
+  <h1>COROS connection is not enabled yet</h1>
+  <p>This address is the OAuth redirect endpoint for DoDick, a training
+     assistant for the Dusty Dumbbells running club. The COROS API
+     application is under review — the endpoint is reserved and will handle
+     the authorization callback once access is granted.</p>
+  <p>More about the service: <a href="https://dodick.run">dodick.run</a> ·
+     <a href="https://dodick.run/support">support</a></p>
+</div></body></html>"""
+
+
+async def _coros_callback(request: web.Request) -> web.Response:
+    """Адрес возврата после разрешения доступа в COROS.
+
+    Пока доступ не одобрен — опрятная заглушка вместо ошибки: адрес
+    указан в заявке, его могут открыть при проверке.
+    """
+    if request.query.get("code"):
+        logger.info("coros callback: пришёл код авторизации, обмен ещё не реализован")
+    return web.Response(text=_COROS_PENDING_HTML, content_type="text/html")
+
+
+async def _coros_webhook(request: web.Request) -> web.Response:
+    """Приём уведомлений COROS о новых тренировках (их push service).
+
+    Пока только принимает и пишет в журнал, отвечая в их формате — адрес
+    должен быть рабочим на момент подачи заявки. Разбор данных — после
+    одобрения доступа.
+    """
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = await request.text()
+    logger.info(f"coros webhook: {str(payload)[:500]}")
+    return web.Response(
+        text=json.dumps({"message": "ok", "result": "0000"}),
+        content_type="application/json",
+    )
+
+
+async def _coros_webhook_check(request: web.Request) -> web.Response:
+    """GET на тот же адрес — проверка доступности (и для нас, и для них)."""
+    return web.Response(
+        text=json.dumps({"message": "ok", "result": "0000"}),
+        content_type="application/json",
+    )
+
+
 # ── Health check ──────────────────────────────────────────────
 
 async def _health(request: web.Request) -> web.Response:
@@ -530,5 +595,8 @@ def create_web_app() -> web.Application:
     app.router.add_post("/strava/webhook", _strava_webhook_event)
     app.router.add_get("/whoop/callback",  _whoop_callback)
     app.router.add_get("/polar/callback",  _polar_callback)
+    app.router.add_post("/coros/webhook",  _coros_webhook)
+    app.router.add_get("/coros/webhook",   _coros_webhook_check)
+    app.router.add_get("/coros/callback",  _coros_callback)
     app.router.add_get("/health",          _health)
     return app

@@ -1184,7 +1184,8 @@ def build_ai_b_prompt_reco_champion(analysis: dict, user_data: dict, zones_map: 
         + '"preparation_tips": ["совет 1"], '
         + '"warning": "предупреждение или null", '
         + '"recovery_forecast": "прогноз восстановления к старту (1-2 предложения) или null", '
-        + '"lowered_by_recovery": false'
+        + '"lowered_by_recovery": false, '
+        + '"group_if_recovered": "только номер группы или null"'
         + "}"
     )
     return (
@@ -1208,7 +1209,12 @@ def build_ai_b_prompt_reco_champion(analysis: dict, user_data: dict, zones_map: 
             (
                 f"\nМаксимально повторяемый темп (отрезок {speed_ceilings[0]['distance_m']}м): "
                 f"{speed_ceilings[0]['ceiling']}/км. "
-                "Группу с финишем быстрее — risk, % ≤ 10.\n"
+                "Если прогрессии нет (темп постоянный) — весь диапазон группы должен быть не быстрее этого темпа.\n"
+                "Если прогрессия есть (диапазон от медленного к быстрому) — сравнивай с потолком "
+                "середину диапазона. Группа risk, если даже середина быстрее потолка. "
+                "Если середина медленнее потолка, группа допустима, даже если финальный край "
+                "быстрее — главное, чтобы не весь диапазон был быстрее потолка. "
+                "Не корректируй финальный темп отдельно, если середина прошла проверку.\n"
             ) if speed_ceilings and len(speed_ceilings) == 1 else (
                 "\nМаксимально повторяемый темп по блокам: " +
                 ", ".join(f"{sc['distance_m']}м → {sc['ceiling']}/км" for sc in speed_ceilings) +
@@ -1242,6 +1248,9 @@ def build_ai_b_prompt_reco_champion(analysis: dict, user_data: dict, zones_map: 
         "- Длительный бег: зоны marathon/easy.\n"
         "Рекомендованная группа должна давать темп близкий к целевому ориентиру\n"
         "для ДАННОГО типа работы, а не универсально-средний.\n"
+        "Ориентир задаёт БАЗОВУЮ часть работы, а не потолок: дрейф прогрессии выше "
+        "ориентира — в соседнюю зону — допустим, если структура и восстановление "
+        "позволяют; недопустима тренировка целиком выше ориентира.\n"
         + "\nДай рекомендацию строго в формате JSON:\n\n"
         f"{json_schema}\n\n"
         "Порядок групп по скорости (от быстрой к медленной): "
@@ -1280,6 +1289,9 @@ def build_ai_b_prompt_reco_champion(analysis: dict, user_data: dict, zones_map: 
         "именно из-за низкого TR/Recovery Score (не из-за темпов, специализации или структуры тренировки). "
         "Если восстановление нормальное или не повлияло на выбор — false. "
         "Если поставил true — упомяни это в reason.\n"
+        "Поле group_if_recovered: если ты САМ в reason упомянул группу, которую дал бы при "
+        "нормальном восстановлении — продублируй сюда её номер. Специально альтернативу НЕ "
+        "рассчитывай; если не упоминал — null.\n"
         "Отвечай только JSON, без лишнего текста."
     )
 
@@ -1386,7 +1398,8 @@ def build_ai_b_prompt_reco_challenger(analysis: dict, user_data: dict, zones_map
         + '"preparation_tips": ["совет 1"], '
         + '"warning": "предупреждение или null", '
         + '"recovery_forecast": "прогноз восстановления к старту (1-2 предложения) или null", '
-        + '"lowered_by_recovery": false'
+        + '"lowered_by_recovery": false, '
+        + '"group_if_recovered": "только номер группы или null"'
         + "}"
     )
     return (
@@ -1410,7 +1423,12 @@ def build_ai_b_prompt_reco_challenger(analysis: dict, user_data: dict, zones_map
             (
                 f"\nМаксимально повторяемый темп (отрезок {speed_ceilings[0]['distance_m']}м): "
                 f"{speed_ceilings[0]['ceiling']}/км. "
-                "Группу с финишем быстрее — risk, % ≤ 10.\n"
+                "Если прогрессии нет (темп постоянный) — весь диапазон группы должен быть не быстрее этого темпа.\n"
+                "Если прогрессия есть (диапазон от медленного к быстрому) — сравнивай с потолком "
+                "середину диапазона. Группа risk, если даже середина быстрее потолка. "
+                "Если середина медленнее потолка, группа допустима, даже если финальный край "
+                "быстрее — главное, чтобы не весь диапазон был быстрее потолка. "
+                "Не корректируй финальный темп отдельно, если середина прошла проверку.\n"
             ) if speed_ceilings and len(speed_ceilings) == 1 else (
                 "\nМаксимально повторяемый темп по блокам: " +
                 ", ".join(f"{sc['distance_m']}м → {sc['ceiling']}/км" for sc in speed_ceilings) +
@@ -1453,6 +1471,9 @@ def build_ai_b_prompt_reco_challenger(analysis: dict, user_data: dict, zones_map
         "  соседними кусками умеренный, базовая часть — не трусца, она ближе к рабочей зоне.\n"
         "Рекомендованная группа должна давать темп близкий к целевому ориентиру\n"
         "для ДАННОГО типа работы, а не универсально-средний.\n"
+        "Ориентир задаёт БАЗОВУЮ часть работы, а не потолок: дрейф прогрессии выше "
+        "ориентира — в соседнюю зону — допустим, если структура и восстановление "
+        "позволяют; недопустима тренировка целиком выше ориентира.\n"
         "Не занижай без причины: при хорошем восстановлении недогруз — такая же ошибка,\n"
         "как перегруз; консервативность оправдана низким восстановлением, большим объёмом\n"
         "или коротким/быстрым отдыхом.\n"
@@ -1494,6 +1515,9 @@ def build_ai_b_prompt_reco_challenger(analysis: dict, user_data: dict, zones_map
         "именно из-за низкого TR/Recovery Score (не из-за темпов, специализации или структуры тренировки). "
         "Если восстановление нормальное или не повлияло на выбор — false. "
         "Если поставил true — упомяни это в reason.\n"
+        "Поле group_if_recovered: если ты САМ в reason упомянул группу, которую дал бы при "
+        "нормальном восстановлении — продублируй сюда её номер. Специально альтернативу НЕ "
+        "рассчитывай; если не упоминал — null.\n"
         "Отвечай только JSON, без лишнего текста."
     )
 
@@ -2988,7 +3012,22 @@ def format_evening_message(advice: dict, workout: dict, stats: dict | None = Non
 
     # Процентная шкала — перед основной рекомендацией
     if suitability:
-        sorted_s = sorted(suitability, key=lambda x: x.get("percentage", 0), reverse=True)
+        # 20.08.2026 (Антон): порядок — по НОМЕРУ группы (от быстрой к медленной),
+        # а не по проценту: так шкала читается как шкала. Группа здоровья — в конец.
+        def _grp_key(item):
+            g = str(item.get("group", "")).replace(",", ".")
+            try:
+                return (0, float(g))
+            except ValueError:
+                return (1, 99.0)
+        sorted_s = sorted(suitability, key=_grp_key)
+        # 20.08.2026: группа, которую дали бы при нормальном восстановлении — синей полосой.
+        # Берём только если занижение действительно было и группа есть в шкале (защита от выдумок).
+        _rec_grp = str(advice.get("recommended_group", "")).strip()
+        _if_rec = str(advice.get("group_if_recovered") or "").strip()
+        if not advice.get("lowered_by_recovery") or _if_rec in ("", "None", "null", _rec_grp) \
+                or _if_rec not in {str(i.get("group", "")).strip() for i in sorted_s}:
+            _if_rec = ""
         lines.append("📊 <b>Подходимость групп:</b>")
         has_dual = False
         for item in sorted_s:
@@ -2998,7 +3037,8 @@ def format_evening_message(advice: dict, workout: dict, stats: dict | None = Non
             comment = _SUIT_EPITHET_MAP.get(comment_raw, comment_raw[:10])
             comment_str = f" — {_html.escape(comment)}" if comment else ""
             g_disp = g if any(c.isdigit() for c in g) else "Здоровье"
-            lines.append(f"<code>Гр.{g_disp:<4} {_pct_bar(pct)} {pct:>3}%{comment_str}</code>")
+            _bar_color = "🟨" if (_if_rec and str(item.get("group", "")).strip() == _if_rec) else "🟩"
+            lines.append(f"<code>Гр.{g_disp:<4} {_pct_bar(pct, color=_bar_color)} {pct:>3}%{comment_str}</code>")
             # Второй ряд (🟦) — если есть значимая альтернатива (другая цель)
             alt_pct = item.get("alt_pct")
             if alt_pct is not None:
@@ -3013,6 +3053,8 @@ def format_evening_message(advice: dict, workout: dict, stats: dict | None = Non
                                if it.get('alt_pct') is not None and it.get('alt_label')), "другая цель")
             lines.append(f"🟩 — по твоим силам сегодня (цель: {spec_label})")
             lines.append(f"🟦 — ценность этой зоны если бы цель была: {_html.escape(legend_alt)}")
+        if _if_rec:
+            lines.append("<i>🟨 — группа при нормальном восстановлении</i>")
         lines.append(sep)
 
     # Прогноз восстановления к старту (вариант B)
@@ -3376,18 +3418,34 @@ def format_long_run_message(advice: dict, workout: dict, stats: dict | None = No
     # Шкала подходимости
     suitability = advice.get("suitability_percentages") or []
     if suitability:
-        sorted_s = sorted(suitability, key=lambda x: x.get("percentage", 0), reverse=True)
+        # 20.08.2026 (Антон): порядок — по НОМЕРУ группы (от быстрой к медленной),
+        # а не по проценту. Группа здоровья — в конец.
+        def _grp_key_long(item):
+            g = str(item.get("group", "")).replace(",", ".")
+            try:
+                return (0, float(g))
+            except ValueError:
+                return (1, 99.0)
+        sorted_s = sorted(suitability, key=_grp_key_long)
+        # 20.08.2026: группа при нормальном восстановлении — синей полосой (только при занижении)
+        _rec_grp_l = str(advice.get("recommended_group", "")).strip()
+        _if_rec_l = str(advice.get("group_if_recovered") or "").strip()
+        if not advice.get("lowered_by_recovery") or _if_rec_l in ("", "None", "null", _rec_grp_l) \
+                or _if_rec_l not in {str(i.get("group", "")).strip() for i in sorted_s}:
+            _if_rec_l = ""
         lines.append("📊 <b>Подходимость групп:</b>")
         for item in sorted_s:
             g = _sanitize_group_name(str(item.get("group", "?")))
             pct = int(item.get("percentage", 0))
-            bar = _pct_bar(pct)
+            bar = _pct_bar(pct, color=("🟨" if (_if_rec_l and str(item.get("group", "")).strip() == _if_rec_l) else "🟩"))
             comment_raw = (item.get('comment') or '').strip()
             _key = comment_raw.split(':')[0].strip().lower()
             comment = _SUIT_EPITHET_MAP.get(_key, _SUIT_EPITHET_MAP.get(comment_raw, comment_raw[:10]))
             comment_str = f" — {_html.escape(comment)}" if comment else ""
             g_disp = g if any(c.isdigit() for c in g) else "Здоровье"
             lines.append(f"<code>Гр.{g_disp:<4} {bar} {pct:>3}%{comment_str}</code>")
+        if _if_rec_l:
+            lines.append("<i>🟨 — группа при нормальном восстановлении</i>")
         lines.append(sep)
 
     group_raw = str(advice.get("recommended_group", "—"))

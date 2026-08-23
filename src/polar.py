@@ -179,6 +179,39 @@ async def refresh_access_token(db_user_id: int) -> str | None:
     return None
 
 
+async def deregister(db_user_id: int) -> bool:
+    """Удаляет регистрацию пользователя НА СТОРОНЕ Polar (отзыв доступа).
+
+    DELETE /v3/users/{polar_user_id}: 204 — удалён, 404 — уже нет (тоже успех).
+    """
+    polar_user_id = _load_polar_user_id(db_user_id)
+    token = _load_token(db_user_id)
+    if not token or not polar_user_id:
+        return False
+
+    url = f"{_BASE_URL}/users/{polar_user_id}"
+    try:
+        async with aiohttp.ClientSession(timeout=_TIMEOUT) as session:
+            async with session.delete(url, headers=_headers(token)) as resp:
+                if resp.status == 401:
+                    token = await refresh_access_token(db_user_id)
+                    if not token:
+                        return False
+                    async with session.delete(url, headers=_headers(token)) as resp2:
+                        if resp2.status in (200, 204, 404):
+                            return True
+                        print(f"Polar deregister uid={db_user_id}: HTTP {resp2.status}")
+                        return False
+                if resp.status in (200, 204, 404):
+                    return True
+                text = await resp.text()
+                print(f"Polar deregister uid={db_user_id}: HTTP {resp.status} {text[:120]}")
+                return False
+    except Exception as e:
+        print(f"Polar deregister error uid={db_user_id}: {e}")
+        return False
+
+
 # ── HTTP хелпер ───────────────────────────────────────────────
 
 async def _get(db_user_id: int, path: str, params: dict | None = None,

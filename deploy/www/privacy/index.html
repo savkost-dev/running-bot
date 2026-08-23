@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Политика приватности — DoDick</title>
+<meta name="description" content="Какие данные собирает DoDick, зачем, где хранит и как их удалить.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{--ink:#15181D;--paper:#F7F6F2;--line:#E3E0D8;--muted:#6E7480;--mark:#2E2BD6}
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{margin:0;background:var(--paper);color:var(--ink);
+       font:400 17px/1.6 "IBM Plex Sans",-apple-system,Segoe UI,Roboto,sans-serif}
+  .wrap{max-width:760px;margin:0 auto;padding:0 24px}
+  header{border-bottom:1px solid var(--line)}
+  .bar{display:flex;align-items:baseline;justify-content:space-between;gap:16px;padding:22px 0}
+  .logo{font-weight:700;letter-spacing:-.02em;font-size:20px;color:var(--ink);text-decoration:none}
+  .logo span{color:var(--mark)}
+  nav a{color:var(--muted);text-decoration:none;font-size:15px;margin-left:20px}
+  nav a:hover{color:var(--ink)}
+  h1{font-size:clamp(28px,5vw,40px);line-height:1.1;letter-spacing:-.03em;margin:52px 0 10px}
+  .upd{color:var(--muted);font-size:15px;margin:0 0 40px}
+  h2{font:600 12px/1 "IBM Plex Mono",monospace;letter-spacing:.14em;text-transform:uppercase;
+     color:var(--muted);margin:0 0 14px}
+  section{padding:24px 0;border-top:1px solid var(--line)}
+  p{margin:0 0 12px;max-width:64ch}
+  ul{margin:0 0 12px;padding-left:20px;max-width:64ch}
+  li{margin-bottom:8px}
+  a{color:var(--mark)}
+  .en{color:#2A2F38}
+  footer{border-top:1px solid var(--line);padding:24px 0 48px;color:var(--muted);font-size:15px;margin-top:28px}
+  footer a{color:var(--muted)}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap bar">
+    <a class="logo" href="/">Do<span>Dick</span></a>
+    <nav>
+      <a href="/">Главная</a>
+      <a href="/support">Поддержка</a>
+      <a href="https://t.me/DD_adviser_bot">Telegram</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <h1>Политика приватности</h1>
+  <p class="upd">Обновлено 23 августа 2026 · вопросы: <a href="mailto:privacy@dodick.run">privacy@dodick.run</a></p>
+
+  <section>
+    <h2>Кто обрабатывает данные</h2>
+    <p>DoDick — тренировочный помощник бегового клуба «Пыльные гантели» в виде
+       Telegram-бота. Сервис ведёт частное лицо; компании за сервисом нет.
+       Контакт по любым вопросам о данных —
+       <a href="mailto:privacy@dodick.run">privacy@dodick.run</a>.</p>
+  </section>
+
+  <section>
+    <h2>Какие данные мы получаем</h2>
+    <ul>
+      <li>Из Telegram: ваш идентификатор, имя и имя пользователя — чтобы отвечать именно вам.</li>
+      <li>Из подключённого сервиса (Garmin, COROS, Polar, Whoop, Strava), если вы его подключили:
+          тренировки и их отрезки, пульс, сон и показатели восстановления.</li>
+      <li>То, что вы указали сами: беговые зоны, лактатный порог, VO2max, год рождения, пол, цель.</li>
+      <li>Ключ доступа к подключённому сервису — он хранится на нашем сервере,
+          чтобы бот мог забирать ваши тренировки.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Зачем</h2>
+    <p>Данные используются только для того, чтобы посчитать вашу тренировочную группу
+       и темп на клубную тренировку и разобрать вашу выполненную тренировку по кругам.
+       Обезличенные суммарные показатели (сколько человек пользуется, сколько тренировок
+       разобрано) могут использоваться для развития сервиса.</p>
+    <p>Мы не продаём данные, не передаём их третьим лицам, не используем для рекламы
+       и не строим на их основе профили для кого-либо, кроме вас самих.</p>
+  </section>
+
+  <section>
+    <h2>Где хранится</h2>
+    <p>Данные лежат в базе на арендованном сервере (DigitalOcean, дата-центр во Франкфурте,
+       Германия). Доступ к серверу есть только у автора сервиса. Обмен с сервисами часов
+       и с сайтом идёт по защищённому соединению.</p>
+  </section>
+
+  <section>
+    <h2>Сколько храним</h2>
+    <p>Пока вы пользуетесь ботом. Если вы отключаете сервис в разделе «Профиль»,
+       доступ отзывается на стороне этого сервиса, а ключ у нас удаляется сразу.
+       Если вы просите удалить профиль целиком — удаляем профиль, зоны, историю
+       тренировок и рекомендаций, обычно в течение нескольких дней.</p>
+  </section>
+
+  <section>
+    <h2>Ваши права</h2>
+    <ul>
+      <li>Отключить любой сервис в любой момент — в боте, «Профиль».</li>
+      <li>Узнать, какие данные о вас есть, и получить их копию.</li>
+      <li>Потребовать удалить профиль и историю.</li>
+      <li>Отказаться от рассылок — в боте, «Уведомления».</li>
+    </ul>
+    <p>Пишите на <a href="mailto:privacy@dodick.run">privacy@dodick.run</a> с того же
+       аккаунта, что подключён к боту.</p>
+  </section>
+
+  <section class="en">
+    <h2>English</h2>
+    <p><b>Who we are.</b> DoDick is a Telegram bot that helps runners of the Dusty Dumbbells
+       club pick the right training group and pace. It is run by an individual developer.
+       Contact for any data question:
+       <a href="mailto:privacy@dodick.run">privacy@dodick.run</a>.</p>
+    <p><b>What we collect.</b> From Telegram — your user id, name and username. From the
+       tracking service you connect (Garmin, COROS, Polar, Whoop, Strava) — workouts and
+       their laps, heart rate, sleep and recovery metrics. From you — pace zones, lactate
+       threshold, VO2max, year of birth, sex and training goal. We also store the access
+       token of the connected service so the bot can fetch your workouts.</p>
+    <p><b>Why.</b> The data is used solely to calculate that athlete's own training group
+       and pace for the club session and to review their completed workout lap by lap.
+       Aggregated, anonymous counts may be used to improve the service. We never sell the
+       data, never share it with third parties, and never use it for advertising.</p>
+    <p><b>Where and how long.</b> Data is stored in a database on a rented server
+       (DigitalOcean, Frankfurt, Germany), accessible only to the developer, and transferred
+       over encrypted connections. Disconnecting a service in the bot revokes access on that
+       service's side and deletes the stored token immediately. On request we delete the
+       whole profile, zones and history, usually within a few days.</p>
+    <p><b>Your rights.</b> Disconnect any service at any time, request a copy of your data,
+       request deletion, or turn off notifications in the bot. Write to
+       <a href="mailto:privacy@dodick.run">privacy@dodick.run</a> from the account connected
+       to the bot.</p>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    DoDick · беговой клуб «Пыльные гантели» ·
+    <a href="/">Главная</a> · <a href="/support">Поддержка</a>
+  </div>
+</footer>
+
+</body>
+</html>

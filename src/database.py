@@ -18,6 +18,17 @@ def get_connection():
     return sqlite3.connect(DB_PATH)
 
 
+def count_service_tokens(service: str) -> int:
+    """Сколько пользователей сейчас имеют сохранённый токен сервиса.
+    Для Strava это = занятые слоты в лимите приложения (athlete connections)."""
+    with get_connection() as conn:
+        cur = conn.execute(
+            "SELECT COUNT(*) FROM user_tokens "
+            "WHERE service = ? AND access_token IS NOT NULL",
+            (service,))
+        return cur.fetchone()[0]
+
+
 def init_db():
     """Создаём таблицы при первом запуске"""
     with get_connection() as conn:
@@ -658,6 +669,24 @@ def get_activity_report(days: int = 14) -> tuple:
             (f"-{int(days)} days",)
         ).fetchone()
     return (row[0], row[1]) if row else (0, 0)
+
+
+def get_report_users(days: int = 14) -> list:
+    """Кто запускал разбор за период — команда /report и кнопка меню.
+
+    [(name, username, сколько раз, последняя дата), ...] по убыванию числа запусков.
+    """
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT COALESCE(u.name, '—'), u.username, COUNT(*), "
+            "MAX(date(a.created_at)) "
+            "FROM user_activity a JOIN users u ON u.id = a.user_id "
+            "WHERE a.command IN ('/report', 'btn:get_report') "
+            "AND a.created_at >= datetime('now', ?) "
+            "GROUP BY a.user_id ORDER BY COUNT(*) DESC",
+            (f"-{int(days)} days",)
+        ).fetchall()
+    return [tuple(r) for r in rows]
 
 
 def get_bot_stats() -> dict:

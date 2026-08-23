@@ -99,6 +99,35 @@ async def ensure_valid_token(db_user_id: int) -> str | None:
     return token_data["access_token"]
 
 
+async def deauthorize(db_user_id: int) -> bool:
+    """Отзывает доступ НА СТОРОНЕ Strava — освобождает слот в лимите приложения.
+
+    Удаление токена у нас слот не освобождает: счётчик подключённых атлетов
+    у Strava падает только после этого запроса.
+    """
+    from database import get_token
+
+    if not get_token(db_user_id, "strava"):
+        return False
+    access = await ensure_valid_token(db_user_id)
+    if not access:
+        return False
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                "https://www.strava.com/oauth/deauthorize",
+                data={"access_token": access},
+            ) as resp:
+                if resp.status in (200, 204):
+                    return True
+                body = await resp.text()
+                print(f"Strava deauthorize uid={db_user_id}: HTTP {resp.status} {body[:120]}")
+                return False
+    except Exception as e:
+        print(f"Strava deauthorize error uid={db_user_id}: {e}")
+        return False
+
+
 async def get_recent_activities(access_token: str, days: int = 90) -> list:
     """Получает все активности за последние N дней"""
     after = int((datetime.now() - timedelta(days=days)).timestamp())
