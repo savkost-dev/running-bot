@@ -36,6 +36,88 @@ async def connect(db_user_id: int, email: str, password: str) -> bool:
     return True
 
 
+async def connect_start(email: str, password: str) -> tuple[bool, dict]:
+    """Первый шаг входа в Garmin Connect.
+
+    Возвращает (needs_mfa, session).
+    needs_mfa=True — аккаунт с двухфакторкой, нужен код: передать session
+    и код в connect_finish(). needs_mfa=False — вошли сразу, звать connect_finish()
+    без кода, чтобы сохранить токен.
+    """
+    def _login():
+        from garminconnect import Garmin
+        client = Garmin(email=email, password=password, return_on_mfa=True)
+        status, state = client.login()
+        return client, status, state
+
+    client, status, state = await asyncio.to_thread(_login)
+    needs_mfa = str(status or "").lower() == "needs_mfa"
+    return needs_mfa, {"client": client, "state": state}
+
+
+async def connect_finish(db_user_id: int, session: dict, code: str | None = None) -> bool:
+    """Завершает вход и сохраняет токен. С code — доводит двухфакторку."""
+    client = session["client"]
+    if code:
+        state = session.get("state")
+        await asyncio.to_thread(client.resume_login, state, code.strip())
+    token_json = client.client.dumps()
+    _save_token(db_user_id, token_json)
+    print(f"Garmin: авторизован user_id={db_user_id} (mfa={bool(code)})")
+    return True
+
+
+async def apply_profile_after_connect(db_user_id: int) -> list[str]:
+    """После успешного входа: тянем показатели, пишем в профиль, пересчитываем зоны.
+
+    Возвращает готовые строки для сообщения пользователю. Ошибки отдельных
+    показателей не валят подключение.
+    """
+    from database import save_user_profile, save_vo2max_device, save_lt_device
+    import zones
+
+    vo2max, readiness, body_battery, hrv, lt = await asyncio.gather(
+        get_vo2max(db_user_id),
+        get_training_readiness(db_user_id),
+        get_body_battery(db_user_id),
+        get_hrv_status(db_user_id),
+        get_lactate_threshold(db_user_id),
+        return_exceptions=True,
+    )
+    ok_vo2 = not isinstance(vo2max, Exception) and vo2max is not None
+    ok_lt = not isinstance(lt, Exception) and lt
+
+    if ok_vo2:
+        save_user_profile(db_user_id, vo2max=vo2max, vo2max_source="garmin")
+        save_vo2max_device(db_user_id, float(vo2max), "garmin")
+    if ok_lt:
+        save_lt_device(db_user_id, lt["pace"], lt.get("hr"), "garmin")
+        save_user_profile(db_user_id,
+                          lactate_threshold_pace=lt["pace"],
+                          lactate_threshold_hr=lt["hr"],
+                          lactate_source="auto")
+    if ok_vo2 or ok_lt:
+        try:
+            zones.recalculate_and_save(db_user_id)
+        except Exception as e:
+            print(f"Garmin: пересчёт зон не удался для user_id={db_user_id}: {e}")
+
+    lines = []
+    if ok_vo2:
+        lines.append(f"📊 VO2max: {vo2max:.1f} мл/кг/мин")
+    else:
+        lines.append("📊 VO2max: не найден — укажи вручную в /profile")
+    if ok_lt:
+        lines.append(f"⚡ Лактатный порог: {lt['pace']} мин/км при ЧСС {lt['hr']}")
+    if not isinstance(body_battery, Exception) and body_battery is not None:
+        lines.append(f"🔋 Body Battery: {body_battery}/100")
+    if not isinstance(hrv, Exception) and hrv:
+        lines.append(f"💗 HRV: {hrv.get('hrv_last_night', '—')} мс")
+    if not isinstance(readiness, Exception) and readiness and readiness.get("score") is not None:
+        lines.append(f"🎯 Training Readiness: {readiness['score']}/100 ({readiness.get('level', '')})")
+    return lines
+
+
 async def _reauth(db_user_id: int):
     """Повторная авторизация Garmin через сохранённые credentials.
 

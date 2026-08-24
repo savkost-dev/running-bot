@@ -2972,6 +2972,44 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     # Email для Garmin
+    elif context.user_data.get("awaiting_garmin") == "mfa":
+        code = text.strip()
+        pending = context.user_data.get("garmin_mfa") or {}
+        if code.lower() in ("отмена", "cancel", "/cancel"):
+            context.user_data.pop("awaiting_garmin", None)
+            context.user_data.pop("garmin_mfa", None)
+            await update.message.reply_text("Отменено. Подключить заново — /connect_garmin")
+            return
+        context.user_data.pop("awaiting_garmin", None)
+        context.user_data.pop("garmin_mfa", None)
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+        db_user_id = get_or_create_user(user.id, user.full_name, user.username)
+        msg = await update.effective_chat.send_message("⏳ Проверяю код...")
+        try:
+            from garmin import connect_finish, apply_profile_after_connect
+            await connect_finish(db_user_id, pending["session"], code)
+            save_user_profile(db_user_id,
+                              garmin_email=pending.get("email", ""),
+                              garmin_password=pending.get("password", ""))
+            lines = ["✅ Garmin подключён!", ""] + await apply_profile_after_connect(db_user_id)
+            keyboard = InlineKeyboardMarkup(
+                [[InlineKeyboardButton("← Сервисы", callback_data="show_services")]])
+            await msg.edit_text("\n".join(lines), reply_markup=keyboard)
+            n = count_users_with_service("garmin")
+            uname = f" (@{user.username})" if user.username else ""
+            await _notify_admin(
+                context.bot,
+                f"🔵 {user.full_name}{uname} подключил Garmin (двухфакторка)\n"
+                f"Всего с Garmin: {n}")
+        except Exception as e:
+            logger.error(f"Garmin MFA error: {e}")
+            await msg.edit_text(
+                "❌ Код не подошёл или истёк срок его жизни.\n"
+                "Начни заново: /connect_garmin")
+        return
     elif context.user_data.get("awaiting_garmin") == "email":
         context.user_data["garmin_email"] = text.strip()
         context.user_data["awaiting_garmin"] = "password"
@@ -2996,7 +3034,18 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db_user_id = get_or_create_user(user.id, user.full_name, user.username)
         msg = await update.effective_chat.send_message("⏳ Подключаюсь к Garmin Connect...")
         try:
-            await garmin_connect(db_user_id, email, password)
+            from garmin import connect_start, connect_finish
+            needs_mfa, session = await connect_start(email, password)
+            if needs_mfa:
+                context.user_data["awaiting_garmin"] = "mfa"
+                context.user_data["garmin_mfa"] = {
+                    "session": session, "email": email, "password": password}
+                await msg.edit_text(
+                    "🔐 В аккаунте включена двухфакторная защита.\n"
+                    "Garmin прислал код на почту — пришли его следующим сообщением "
+                    "(или напиши «отмена»).")
+                return
+            await connect_finish(db_user_id, session)
             save_user_profile(db_user_id, garmin_email=email, garmin_password=password)
 
             from garmin import get_body_battery, get_hrv_status, get_lactate_threshold
