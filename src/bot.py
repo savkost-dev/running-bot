@@ -1184,6 +1184,7 @@ def _build_help_text(is_admin: bool) -> str:
             "\n/resend_evening — дослать вечернюю тем, кому не ушла (/resend_evening 20260814 [fast|smart|deep])"
             "\n/msg_user <id> <текст> — написать юзеру от имени бота"
             "\n/msg_service — написать всем, у кого подключён выбранный сервис"
+            "\n/profile_user — посмотреть профиль выбранного пользователя"
             "\n/last — разбор последней выполненной тренировки (графики факт vs план; /last dark — тёмная тема)"
             "\n/report — ИИ-анализ последней тренировки (/report DD_20260612 — выбрать; /report data — сырой пакет+промпт)"
         )
@@ -5884,6 +5885,47 @@ async def cmd_activity(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await update.message.reply_text("\n".join(lines))
 
 
+async def cmd_profile_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/profile_user (admin) — показать профиль выбранного пользователя (только текст)."""
+    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+        return
+    users = get_users_list_for_b()
+    if not users:
+        await update.message.reply_text("Нет пользователей.")
+        return
+    keyboard = [
+        [InlineKeyboardButton(
+            u["name"] + (f" (@{u['username']})" if u.get("username") else ""),
+            callback_data=f"profile_user_{u['db_user_id']}"
+        )]
+        for u in users
+    ]
+    await update.message.reply_text(
+        "Выбери пользователя — покажу его профиль:",
+        reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+async def profile_user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Нажатие на юзера в списке /profile_user — вывод его профиля."""
+    query = update.callback_query
+    if query.from_user.id not in ADMIN_TELEGRAM_IDS:
+        await query.answer("Нет доступа.")
+        return
+    await query.answer()
+    db_uid = int(query.data.rsplit("_", 1)[-1])
+    users = get_users_list_for_b()
+    target = next((u for u in users if u["db_user_id"] == db_uid), None)
+    if not target:
+        await query.edit_message_text("Пользователь не найден.")
+        return
+    from database import get_user_profile
+    profile = get_user_profile(db_uid)
+    uname = f" (@{target['username']})" if target.get("username") else ""
+    text = _build_profile_text(profile, db_uid).replace("Твой профиль:", f"Профиль: {target['name']}{uname}", 1)
+    text = text.replace("Твои скорости:", "Скорости:", 1)
+    await query.edit_message_text(text)
+
+
 async def cmd_msg_service(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/msg_service (admin) — рассылка текста всем, у кого подключён выбранный сервис.
     Показывает кнопки по _SERVICES с числом получателей; текст ждём следующим сообщением."""
@@ -6294,11 +6336,13 @@ def main():
     app.add_handler(CommandHandler("activity",  cmd_activity))
     app.add_handler(CommandHandler("msg_user",  cmd_msg_user))
     app.add_handler(CommandHandler("msg_service", cmd_msg_service))
+    app.add_handler(CommandHandler("profile_user", cmd_profile_user))
     app.add_handler(CommandHandler("last",      cmd_last))
     app.add_handler(CommandHandler("report",    cmd_report))
     app.add_handler(CommandHandler("report_user", report_user_command))
     app.add_handler(CallbackQueryHandler(msg_user_callback,  pattern=r"^msgu_\d+$"))
     app.add_handler(CallbackQueryHandler(msg_service_callback, pattern=r"^msgsvc_\w+$"))
+    app.add_handler(CallbackQueryHandler(profile_user_callback, pattern=r"^profile_user_\d+$"))
     app.add_handler(CallbackQueryHandler(b_user_callback,   pattern=r"^b_user_\d+$"))
     app.add_handler(CallbackQueryHandler(a_user_callback,   pattern=r"^a_user_\d+$"))
     app.add_handler(CallbackQueryHandler(w_user_callback,   pattern=r"^w_user_\d+$"))
