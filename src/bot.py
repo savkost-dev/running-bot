@@ -1183,6 +1183,7 @@ def _build_help_text(is_admin: bool) -> str:
             "\n/rebrief — ПРИНУДИТЕЛЬНО пересобрать режимы заново (/rebrief 20260804), без переанализа анонса"
             "\n/resend_evening — дослать вечернюю тем, кому не ушла (/resend_evening 20260814 [fast|smart|deep])"
             "\n/msg_user <id> <текст> — написать юзеру от имени бота"
+            "\n/msg_service — написать всем, у кого подключён выбранный сервис"
             "\n/last — разбор последней выполненной тренировки (графики факт vs план; /last dark — тёмная тема)"
             "\n/report — ИИ-анализ последней тренировки (/report DD_20260612 — выбрать; /report data — сырой пакет+промпт)"
         )
@@ -3170,6 +3171,29 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── ОБРАТНАЯ СВЯЗЬ (текст) ────────────────────────────────
 
+    # ── /msg_service: текст всем с подключённым сервисом (admin) ──
+    elif context.user_data.get("awaiting_msg_service"):
+        svc = context.user_data.pop("awaiting_msg_service")
+        if text.strip().lower() in ("отмена", "cancel", "/cancel"):
+            await update.message.reply_text("Отменено, ничего не отправлено.")
+            return
+        targets = get_users_with_service_full(svc)
+        sent, failed = 0, []
+        for tg_id, name, uname in targets:
+            try:
+                await context.bot.send_message(tg_id, text)
+                sent += 1
+            except Forbidden:
+                await _report_block(context.bot, tg_id, "msg_service")
+                failed.append(f"{name or tg_id}: заблокировал бота")
+            except Exception as e:
+                failed.append(f"{name or tg_id}: {type(e).__name__}")
+            await asyncio.sleep(0.05)
+        report = f"✅ {_svc_name(svc)}: отправлено {sent} из {len(targets)}"
+        if failed:
+            report += "\n❌ Не дошло:\n" + "\n".join(failed[:20])
+        await update.message.reply_text(report)
+        return
     # ── /msg_user: текст юзеру от имени бота (admin) ──
     elif context.user_data.get("awaiting_msg_user"):
         target = context.user_data.pop("awaiting_msg_user")
@@ -5811,6 +5835,36 @@ async def cmd_activity(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await update.message.reply_text("\n".join(lines))
 
 
+async def cmd_msg_service(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/msg_service (admin) — рассылка текста всем, у кого подключён выбранный сервис.
+    Показывает кнопки по _SERVICES с числом получателей; текст ждём следующим сообщением."""
+    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+        return
+    rows = []
+    for svc, emoji, name, _, _ in _SERVICES:
+        n = len(get_users_with_service_full(svc))
+        rows.append([InlineKeyboardButton(f"{emoji} {name} — {n}",
+                                          callback_data=f"msgsvc_{svc}")])
+    await update.message.reply_text(
+        "✉️ Кому отправить? Выбери сервис — получат все, у кого он подключён.",
+        reply_markup=InlineKeyboardMarkup(rows))
+
+
+async def msg_service_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Выбор сервиса в /msg_service — ждём текст следующим сообщением."""
+    query = update.callback_query
+    if query.from_user.id not in ADMIN_TELEGRAM_IDS:
+        await query.answer("Нет доступа.")
+        return
+    await query.answer()
+    svc = query.data.rsplit("_", 1)[-1]
+    n = len(get_users_with_service_full(svc))
+    context.user_data["awaiting_msg_service"] = svc
+    await query.edit_message_text(
+        f"✉️ Напиши текст для пользователей {_svc_name(svc)} ({n} чел.) "
+        f"следующим сообщением (или напиши «отмена»).")
+
+
 async def cmd_msg_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/msg_user <id> <текст> (admin) — отправить сообщение юзеру от имени бота.
     id — внутренний db_user_id (как в отчётах/слепках). Текст — всё после id,
@@ -6190,10 +6244,12 @@ def main():
     app.add_handler(CommandHandler("p_analyze", p_analyze_command))
     app.add_handler(CommandHandler("activity",  cmd_activity))
     app.add_handler(CommandHandler("msg_user",  cmd_msg_user))
+    app.add_handler(CommandHandler("msg_service", cmd_msg_service))
     app.add_handler(CommandHandler("last",      cmd_last))
     app.add_handler(CommandHandler("report",    cmd_report))
     app.add_handler(CommandHandler("report_user", report_user_command))
     app.add_handler(CallbackQueryHandler(msg_user_callback,  pattern=r"^msgu_\d+$"))
+    app.add_handler(CallbackQueryHandler(msg_service_callback, pattern=r"^msgsvc_\w+$"))
     app.add_handler(CallbackQueryHandler(b_user_callback,   pattern=r"^b_user_\d+$"))
     app.add_handler(CallbackQueryHandler(a_user_callback,   pattern=r"^a_user_\d+$"))
     app.add_handler(CallbackQueryHandler(w_user_callback,   pattern=r"^w_user_\d+$"))
