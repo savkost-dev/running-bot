@@ -3377,6 +3377,7 @@ async def _send_ai_variant_b(
     weather_line: str = "",
     msg=None,
     is_broadcast: bool = False,
+    force_mode: str | None = None,
 ) -> None:
     """Вариант B: ИИ сам выбирает группу.
     Для deep/fast/smart — основной путь рекомендации (вместо A).
@@ -3384,7 +3385,7 @@ async def _send_ai_variant_b(
     """
     import functools
     db_user_id = user_data.get("db_user_id")
-    rec_mode = (get_preferences(db_user_id) or {}).get("ai_mode", "smart")
+    rec_mode = force_mode or (get_preferences(db_user_id) or {}).get("ai_mode", "smart")
 
     prompt, scenario_ctx = await _build_variant_b_prompt(
         db_user_id, analysis, user_data, workout_dict
@@ -3628,7 +3629,7 @@ async def _send_recommendation(
                 pass
         await _send_ai_variant_b(telegram_id, analysis, user_data, context,
                                  workout_dict=workout_dict_b, weather_line=weather_line_b,
-                                 msg=msg, is_broadcast=is_broadcast)
+                                 msg=msg, is_broadcast=is_broadcast, force_mode=force_mode)
         return
 
     # Для long: жара влияет на ВЫБОР группы. Погоду берём ДО recommend_long
