@@ -4948,7 +4948,8 @@ async def scheduled_brief_comment(context: ContextTypes.DEFAULT_TYPE) -> None:
             import telegram_reader as _tr
             _btext = _ab.format_brief(_bresult, _modes)
             _btext += ("\n\n🤖 Персональная группа под твою форму, тренировка в часы "
-                       "и разбор после финиша — @DD_adviser_bot")
+                       "и разбор после финиша — @DD_adviser_bot\n"
+                       "🌐 О сервисе — dodick.run")
             if await _tr.post_comment(cur_post, _btext):
                 logger.info(f"Бриф опубликован комментарием к посту {cur_post}")
             else:
