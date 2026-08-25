@@ -250,7 +250,7 @@ def _blocked_with_tokens() -> list:
             "WHERE p.is_active = 0 ORDER BY u.id").fetchall()
     out = []
     for uid, who, since in rows:
-        svcs = [s for s in ("strava", "polar") if get_token(uid, s)]
+        svcs = [s for s in ("strava", "polar", "garmin", "coros", "whoop") if get_token(uid, s)]
         if svcs:
             out.append((uid, who, svcs, (since or "")[:10]))
     return out
@@ -1386,7 +1386,7 @@ async def cmd_cleanup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     items = _blocked_with_tokens()
     if not items:
         await update.message.reply_text(
-            "Чисто: у заблокировавших бота подключений Strava/Polar нет.")
+            "Чисто: у заблокировавших бота подключений не осталось.")
         return
     lines = [f"🧹 Заблокировали бота, подключения остались: {len(items)}\n"]
     for _uid, who, svcs, since in items:
@@ -2246,6 +2246,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         report = []
         for uid, who, svcs, _since in items:
             for s in svcs:
+                if s not in ("strava", "polar"):
+                    delete_token(uid, s)
+                    ok += 1
+                    report.append(f"✅ @{who} — {s}: ключ удалён")
+                    continue
                 if await _revoke_service(uid, s):
                     delete_token(uid, s)
                     ok += 1

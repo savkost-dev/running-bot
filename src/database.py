@@ -898,10 +898,13 @@ def delete_token(user_id: int, service: str) -> None:
 
 
 def count_users_with_service(service: str) -> int:
-    """Количество пользователей с подключённым сервисом."""
+    """Количество АКТИВНЫХ пользователей с подключённым сервисом
+    (заблокировавшие бота не считаются — для уведомлений «Всего с X»)."""
     with get_connection() as conn:
         return conn.execute(
-            "SELECT COUNT(*) FROM user_tokens WHERE service = ?", (service,)
+            "SELECT COUNT(*) FROM user_tokens t "
+            "LEFT JOIN user_preferences p ON p.user_id = t.user_id "
+            "WHERE t.service = ? AND COALESCE(p.is_active, 1) = 1", (service,)
         ).fetchone()[0]
 
 
