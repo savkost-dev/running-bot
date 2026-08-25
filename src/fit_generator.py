@@ -483,7 +483,7 @@ def build_garmin_from_analysis(analysis: dict, group_num: str) -> dict:
                                    child_id=1))
 
         steps.append(_repeat_group(top_order, reps, inner,
-                                   skip_last_rest=(rec_m > 0)))
+                                   skip_last_rest=(rec_m > 0 and reps > 1)))
         top_order += 1
 
     d = date.replace('-', '')
