@@ -423,15 +423,21 @@ def build_garmin_from_analysis(analysis: dict, group_num: str) -> dict:
                 group_blocks[int(b.get('block', 1))] = b
             break
 
-    repeat_structs = [b for b in (analysis.get('structure') or [])
-                      if b.get('type') == 'repeat']
-    if not repeat_structs:
+    structs = [b for b in (analysis.get('structure') or [])
+               if b.get('type') in ('repeat', 'easy')]
+    if not any(b.get('type') == 'repeat' for b in structs):
         raise ValueError(f"No repeat blocks in analysis for group {group_num}")
 
     steps = []
     top_order = 1
 
-    for struct in repeat_structs:
+    for struct in structs:
+        if struct.get('type') == 'easy':
+            _ed = float(struct.get('distance_m') or 0)
+            if _ed > 0:
+                steps.append(_step(top_order, dist_m=_ed, stype='recovery'))
+                top_order += 1
+            continue
         block_num = int(struct.get('block', 1))
         reps = int(struct.get('reps') or 1)
         work_m = float(struct.get('work_distance_m') or 0)
@@ -483,7 +489,7 @@ def build_garmin_from_analysis(analysis: dict, group_num: str) -> dict:
                                    child_id=1))
 
         steps.append(_repeat_group(top_order, reps, inner,
-                                   skip_last_rest=(rec_m > 0 and reps > 1)))
+                                   skip_last_rest=(rec_m > 0)))
         top_order += 1
 
     d = date.replace('-', '')
