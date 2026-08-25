@@ -435,7 +435,10 @@ def build_garmin_from_analysis(analysis: dict, group_num: str) -> dict:
         if struct.get('type') == 'easy':
             _ed = float(struct.get('distance_m') or 0)
             if _ed > 0:
-                steps.append(_step(top_order, dist_m=_ed, stype='recovery'))
+                _eb = group_blocks.get(int(struct.get('block', 0)), {})
+                _ev = _pace_to_ms(_eb.get('recovery_pace') or '')
+                steps.append(_step(top_order, dist_m=_ed, stype='recovery',
+                                   v_fast=_ev or None, v_slow=_ev or None))
                 top_order += 1
             continue
         block_num = int(struct.get('block', 1))
