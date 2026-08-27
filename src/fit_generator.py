@@ -462,13 +462,30 @@ def build_garmin_from_analysis(analysis: dict, group_num: str) -> dict:
         # Составной рабочий отрезок: segments у группы → ПОДРЯД по interval-шагу
         # на каждый сегмент (свой темп), recovery ОДИН после всей связки.
         # Масштабируется на любое число сегментов (2, 3, 5 темпов без отдыха).
-        segs = [s for s in (bdata.get('segments') or [])
-                if isinstance(s, dict) and s.get('distance_m')]
+        st_segs = [s for s in (struct.get('segments') or [])
+                   if isinstance(s, dict) and s.get('distance_m')]
+        g_segs = [s for s in (bdata.get('segments') or [])
+                  if isinstance(s, dict) and s.get('distance_m')]
+        g_work = [s for s in g_segs if not s.get('rest')]
+        g_rest = [s for s in g_segs if s.get('rest')]
+        segs = st_segs if st_segs else g_segs
         if len(segs) >= 2:
             idx = 1
+            wi = 0
+            ri = 0
             for s in segs:
-                sv_fast = _pace_to_ms(s.get('work_pace_end') or '')
-                sv_slow = _pace_to_ms(s.get('work_pace_start') or '')
+                if s.get('rest'):
+                    gp = g_rest[ri] if ri < len(g_rest) else {}
+                    ri += 1
+                    rv = _pace_to_ms(gp.get('recovery_pace') or s.get('recovery_pace') or '') or v_rec
+                    inner.append(_step(idx, dist_m=float(s['distance_m']), stype='recovery',
+                                       v_fast=rv or None, v_slow=rv or None, child_id=1))
+                    idx += 1
+                    continue
+                gp = g_work[wi] if wi < len(g_work) else s
+                wi += 1
+                sv_fast = _pace_to_ms(gp.get('work_pace_end') or '')
+                sv_slow = _pace_to_ms(gp.get('work_pace_start') or '')
                 if sv_fast > 0 and sv_slow == 0.0:
                     sv_slow = sv_fast
                 elif sv_slow > 0 and sv_fast == 0.0:
