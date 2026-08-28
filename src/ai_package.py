@@ -625,7 +625,8 @@ def _series_model(ordered, plan_steps):
 
 
 async def build_charts_stacked(splits, plan_steps, name: str, out_dir: str,
-                               tag: str, dark: bool = False) -> str | None:
+                               tag: str, dark: bool = False,
+                               source: str = "") -> str | None:
     """Оба графика (работа + отдых) на ОДНОЙ вертикальной картинке под телефон:
     сверху интервалы (сегменты/эталон/тренд/дельты), снизу отдых (коридоры).
     Логика отрисовки повторяет activity_review._plot_work_segmented/_plot_rest,
@@ -756,7 +757,8 @@ async def build_charts_stacked(splits, plan_steps, name: str, out_dir: str,
             ax2.grid(True, linestyle=":", alpha=0.6)
             ax2.legend(loc="best", fontsize=7.5, framealpha=0.9)
 
-        fig.text(0.985, 0.005, "DoDick · @DD_adviser_bot", fontsize=8, alpha=0.6,
+        _sig = "DoDick · @DD_adviser_bot" + (" · Powered by Strava" if source == "strava" else "")
+        fig.text(0.985, 0.005, _sig, fontsize=8, alpha=0.6,
                  ha="right", va="bottom")
         out_path = os.path.join(out_dir, f"charts_{tag}.png")
         fig.savefig(out_path, dpi=120)
@@ -1086,7 +1088,8 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
                       ha="center", va="center", transform=ax_b.transAxes)
             ax_b.text(cx, 0.26, small, fontsize=8.5, alpha=0.85,
                       ha="center", va="center", transform=ax_b.transAxes)
-        ax_b.text(0.99, 0.0, "DoDick · @DD_adviser_bot", fontsize=8.5, alpha=0.6,
+        _sig = "DoDick · @DD_adviser_bot" + (" · Powered by Strava" if source == "strava" else "")
+        ax_b.text(0.99, 0.0, _sig, fontsize=8.5, alpha=0.6,
                   ha="right", va="bottom", transform=ax_b.transAxes)
 
         out_path = os.path.join(out_dir, f"card_{tag}.png")

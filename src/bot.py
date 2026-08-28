@@ -6284,7 +6284,7 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
         if card:
             stacked = await build_charts_stacked(
                 res.get("splits"), res.get("plan_steps"), res["name"],
-                "/tmp", str(db_user_id), dark=False)
+                "/tmp", str(db_user_id), dark=False, source=res.get("source") or "")
             chart_items = [(p, c) for p, c in (
                 (card, None), (stacked, "Графики")) if p]
     except Exception as e:
@@ -6329,7 +6329,11 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
             _plaque = (f"⏱ {_ai_stats.get('time_sec', '?')}с | {_mstr} | "
                        f"📥 {_ai_stats.get('input_tokens', '?')} / "
                        f"📤 {_ai_stats.get('output_tokens', '?')} | v{VERSION}")
-            ai_chunks = _send_chunks("\n".join(_clean).strip() + "\n\n" + _plaque)
+            _sv_link = ""
+            if res.get("source") == "strava" and res.get("act_id"):
+                _sv_link = (f"\n🔗 View on Strava: "
+                            f"https://www.strava.com/activities/{res['act_id']}")
+            ai_chunks = _send_chunks("\n".join(_clean).strip() + _sv_link + "\n\n" + _plaque)
         else:
             ai_chunks = ["⚠️ ИИ не ответил."]
 
