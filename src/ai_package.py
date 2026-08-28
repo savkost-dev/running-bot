@@ -538,7 +538,8 @@ async def build_package(db_user_id: int, selector=None) -> dict:
 
     return {"ok": True, "name": name, "text": "\n".join(L), "msg": "",
             "splits": splits, "plan_steps": plan_steps,
-            "wdate": wdate, "wgroup": cand["wgroup"], "source": cand["source"], "s4": s4}
+            "wdate": wdate, "wgroup": cand["wgroup"], "source": cand["source"],
+            "act_id": act_id, "s4": s4}
 
 
 async def build_charts(splits, plan_steps, name: str, out_dir: str,
