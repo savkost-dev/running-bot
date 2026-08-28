@@ -1270,6 +1270,25 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
                      f"рекомендаций {lr['rec_total']} + напоминаний {reminders}\n"
                      f"{by_g}")
 
+    from database import get_pace_feedback_last
+    _pfd, _pfc, _pfg = get_pace_feedback_last()
+    if _pfd:
+        def _pf3(c):
+            return (f"🚀 {c.get('faster', 0)} · 🎯 {c.get('ok', 0)} · "
+                    f"🐢 {c.get('slower', 0)}")
+        def _gkey(g):
+            try:
+                return (0, float(g))
+            except ValueError:
+                return (1, 0.0)
+        _lines = [f"гр{g}: " + _pf3(c)
+                  for g, c in sorted(_pfg.items(), key=lambda kv: _gkey(kv[0]))]
+        _pfn = sum(_pfc.values())
+        _lines.append(f"итого: " + _pf3(_pfc) + f" (ответили {_pfn})")
+        pfb_line = (f"Темп по ощущениям {_pfd[8:10]}.{_pfd[5:7]}:\n"
+                    + "\n".join(_lines) + "\n\n")
+    else:
+        pfb_line = ""
     text = (
         "📊 <b>Статистика бота</b>\n\n"
         f"👥 Пользователи: {o['total']} — активных {o['active']}, заблокировали {o['blocked']}\n"
@@ -1282,6 +1301,7 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"<b>Подключения</b> (диагональ — всего, клетки — вместе):\n"
         f"<pre>{matrix}</pre>\n"
         f"📨 <b>Последняя рассылка</b>:\n{reco_line}\n\n"
+        f"{pfb_line}"
         "Запросы за 7 дней (в скобках — уникальных):\n"
         f"📋 /workout: {s['workout_7d']} ({s.get('workout_users_7d', 0)})\n"
         f"🕐 /long: {s['long_7d']} ({s.get('long_users_7d', 0)})\n"

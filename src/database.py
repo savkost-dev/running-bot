@@ -55,6 +55,30 @@ def get_users_profile_only() -> list:
         """).fetchall()
 
 
+def get_pace_feedback_last() -> tuple:
+    """(workout_date, {answer: count}, {group: {answer: count}}) последней
+    тренировки с ответами; (None, {}, {}) если ответов нет или таблицы нет."""
+    try:
+        with get_connection() as conn:
+            row = conn.execute(
+                "SELECT workout_date FROM pace_feedback "
+                "ORDER BY workout_date DESC LIMIT 1").fetchone()
+            if not row:
+                return None, {}, {}
+            counts = dict(conn.execute(
+                "SELECT answer, COUNT(*) FROM pace_feedback "
+                "WHERE workout_date = ? GROUP BY answer", (row[0],)).fetchall())
+            by_group: dict = {}
+            for grp, ans, n in conn.execute(
+                    "SELECT COALESCE(rec_group, '?'), answer, COUNT(*) "
+                    "FROM pace_feedback WHERE workout_date = ? "
+                    "GROUP BY 1, 2", (row[0],)):
+                by_group.setdefault(grp, {})[ans] = n
+            return row[0], counts, by_group
+    except Exception:
+        return None, {}, {}
+
+
 def count_service_tokens(service: str) -> int:
     """Сколько пользователей сейчас имеют сохранённый токен сервиса.
     Для Strava это = занятые слоты в лимите приложения (athlete connections)."""
