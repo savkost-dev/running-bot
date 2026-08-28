@@ -2842,6 +2842,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                answers[query.data],
                                rec_group=str(ctx.get("rec_group") or "") or None,
                                ai_mode=ctx.get("ai_mode"))
+            try:
+                _km = (query.message.reply_markup.inline_keyboard
+                       if query.message and query.message.reply_markup else [])
+                _rows = [r for r in _km
+                         if not any((b.callback_data or "").startswith("pfb_") for b in r)]
+                await query.edit_message_reply_markup(
+                    reply_markup=InlineKeyboardMarkup(_rows))
+            except Exception:
+                pass
             await query.answer("Записал, спасибо! 🙌")
         except Exception as e:
             logger.error(f"pace_feedback: {e}")
