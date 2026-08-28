@@ -18,6 +18,43 @@ def get_connection():
     return sqlite3.connect(DB_PATH)
 
 
+def save_pace_feedback(user_id: int, workout_date: str, answer: str,
+                       rec_group: str | None = None, ai_mode: str | None = None) -> None:
+    """Ответ на кнопки «быстрее/в точку/медленнее» под рекомендацией.
+    Повторное нажатие перезаписывает ответ того же дня. answer: faster|ok|slower."""
+    with get_connection() as conn:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS pace_feedback ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, "
+            "workout_date TEXT NOT NULL, rec_group TEXT, ai_mode TEXT, "
+            "answer TEXT NOT NULL, created_at TEXT DEFAULT (datetime('now')), "
+            "UNIQUE(user_id, workout_date))")
+        conn.execute(
+            "INSERT INTO pace_feedback (user_id, workout_date, rec_group, ai_mode, answer) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(user_id, workout_date) DO UPDATE SET "
+            "answer=excluded.answer, rec_group=excluded.rec_group, "
+            "ai_mode=excluded.ai_mode, created_at=datetime('now')",
+            (user_id, workout_date, rec_group, ai_mode, answer))
+        conn.commit()
+
+
+def get_users_profile_only() -> list:
+    """Активные с заполненным профилем, но без единого токена трекера:
+    (telegram_id, name, username). Для адресной рассылки /msg_service."""
+    with get_connection() as conn:
+        return conn.execute("""
+            SELECT u.telegram_id, u.name, u.username
+            FROM users u
+            JOIN user_profile up ON u.id = up.user_id
+            LEFT JOIN user_preferences p ON p.user_id = u.id
+            WHERE (up.vo2max IS NOT NULL OR up.lactate_threshold_pace IS NOT NULL)
+              AND COALESCE(p.is_active, 1) = 1
+              AND u.id NOT IN (SELECT user_id FROM user_tokens)
+            ORDER BY u.id
+        """).fetchall()
+
+
 def count_service_tokens(service: str) -> int:
     """Сколько пользователей сейчас имеют сохранённый токен сервиса.
     Для Strava это = занятые слоты в лимите приложения (athlete connections)."""

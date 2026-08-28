@@ -687,6 +687,15 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _show_status(update, db_user_id)
 
 
+def _pace_feedback_row() -> list:
+    """Строка кнопок фидбека по темпу рекомендации (перед оценкой)."""
+    return [
+        InlineKeyboardButton("🚀 Готов быстрее", callback_data="pfb_faster"),
+        InlineKeyboardButton("🎯 В точку", callback_data="pfb_ok"),
+        InlineKeyboardButton("🐢 Помедленнее бы", callback_data="pfb_slower"),
+    ]
+
+
 def _strava_slots_line() -> str:
     """Строка «Сейчас свободно мест: X из 10» для экранов подключения Strava.
     Лимит — 10 athlete connections у неодобренного приложения."""
@@ -2823,6 +2832,22 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── ОЦЕНКА РЕКОМЕНДАЦИИ ───────────────────────────────────
 
+    elif query.data in ("pfb_faster", "pfb_ok", "pfb_slower"):
+        ctx = _rating_data.get(user.id) or {}
+        db_user_id = get_or_create_user(user.id, user.full_name, user.username)
+        answers = {"pfb_faster": "faster", "pfb_ok": "ok", "pfb_slower": "slower"}
+        try:
+            from database import save_pace_feedback
+            save_pace_feedback(db_user_id, ctx.get("workout_date") or "",
+                               answers[query.data],
+                               rec_group=str(ctx.get("rec_group") or "") or None,
+                               ai_mode=ctx.get("ai_mode"))
+            await query.answer("Записал, спасибо! 🙌")
+        except Exception as e:
+            logger.error(f"pace_feedback: {e}")
+            await query.answer("Не сохранилось, попробуй позже.")
+        return
+
     elif query.data == "rate_show":
         data = _rating_data.get(user.id)
         if not data:
@@ -3233,7 +3258,11 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if text.strip().lower() in ("отмена", "cancel", "/cancel"):
             await update.message.reply_text("Отменено, ничего не отправлено.")
             return
-        targets = get_users_with_service_full(svc)
+        if svc == "profileonly":
+            from database import get_users_profile_only
+            targets = get_users_profile_only()
+        else:
+            targets = get_users_with_service_full(svc)
         sent, failed = 0, []
         for tg_id, name, uname in targets:
             try:
@@ -3245,7 +3274,8 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 failed.append(f"{name or tg_id}: {type(e).__name__}")
             await asyncio.sleep(0.05)
-        report = f"✅ {_svc_name(svc)}: отправлено {sent} из {len(targets)}"
+        _lbl = "только профиль" if svc == "profileonly" else _svc_name(svc)
+        report = f"✅ {_lbl}: отправлено {sent} из {len(targets)}"
         if failed:
             report += "\n❌ Не дошло:\n" + "\n".join(failed[:20])
         await update.message.reply_text(report)
@@ -3443,10 +3473,12 @@ async def _send_ai_variant_b(
         _rating_data[telegram_id] = {
             "workout_date": analysis.get("workout_date", ""),
             "ai_mode": rec_mode,
+            "rec_group": advice.get("recommended_group"),
         }
-        rating_markup = InlineKeyboardMarkup([[
-            InlineKeyboardButton("⭐ Оценить рекомендацию", callback_data="rate_show"),
-        ]])
+        rating_markup = InlineKeyboardMarkup([
+            _pace_feedback_row(),
+            [InlineKeyboardButton("⭐ Оценить рекомендацию", callback_data="rate_show")],
+        ])
         final_b_markup = _merge_keyboards(rating_markup, get_main_keyboard(from_recommendation=True))
         # Сохранять для утренней — только при плановой рассылке (is_broadcast=True)
         if is_broadcast:
@@ -3660,10 +3692,12 @@ async def _send_recommendation(
     _rating_data[telegram_id] = {
         "workout_date": analysis.get("workout_date", ""),
         "ai_mode": row.get("analysis_mode", ""),
+        "rec_group": (rec or {}).get("recommended_group"),
     }
-    rating_markup = InlineKeyboardMarkup([[
-        InlineKeyboardButton("⭐ Оценить рекомендацию", callback_data="rate_show"),
-    ]])
+    rating_markup = InlineKeyboardMarkup([
+        _pace_feedback_row(),
+        [InlineKeyboardButton("⭐ Оценить рекомендацию", callback_data="rate_show")],
+    ])
     final_markup = _merge_keyboards(rating_markup, get_main_keyboard(from_recommendation=True))
 
     # Шапка/погода из live (для current/past совпадает с кэшем)
@@ -3938,13 +3972,15 @@ async def _send_workout_recommendation(
         _rating_data[telegram_id] = {
             'workout_date': workout.get('workout_date', ''),
             'ai_mode': ai_mode,
+            'rec_group': rec_group,
         }
         fit_markup = InlineKeyboardMarkup([[
             InlineKeyboardButton("⌚ Загрузить в Garmin", callback_data="fit_up"),
         ]])
-        rating_markup = InlineKeyboardMarkup([[
-            InlineKeyboardButton("⭐ Оценить рекомендацию", callback_data="rate_show"),
-        ]])
+        rating_markup = InlineKeyboardMarkup([
+            _pace_feedback_row(),
+            [InlineKeyboardButton("⭐ Оценить рекомендацию", callback_data="rate_show")],
+        ])
 
     final_markup = _merge_keyboards(fit_markup, rating_markup, get_main_keyboard(from_recommendation=True))
     if msg:
@@ -4245,9 +4281,10 @@ async def _send_long_run_recommendation(
         fit_markup = InlineKeyboardMarkup([[
             InlineKeyboardButton("⌚ Загрузить в Garmin", callback_data="fit_up"),
         ]])
-        rating_markup = InlineKeyboardMarkup([[
-            InlineKeyboardButton("⭐ Оценить рекомендацию", callback_data="rate_show"),
-        ]])
+        rating_markup = InlineKeyboardMarkup([
+            _pace_feedback_row(),
+            [InlineKeyboardButton("⭐ Оценить рекомендацию", callback_data="rate_show")],
+        ])
 
     scenario_header = scenario_ctx["user_text"] + "\n\n" if scenario_ctx.get("user_text") else ""
     final_markup = _merge_keyboards(fit_markup, rating_markup, get_main_keyboard(from_recommendation=True))
@@ -5989,6 +6026,10 @@ async def cmd_msg_service(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         n = len(get_users_with_service_full(svc))
         rows.append([InlineKeyboardButton(f"{emoji} {name} — {n}",
                                           callback_data=f"msgsvc_{svc}")])
+    from database import get_users_profile_only
+    rows.append([InlineKeyboardButton(
+        f"📝 Только профиль (без трекера) — {len(get_users_profile_only())}",
+        callback_data="msgsvc_profileonly")])
     await update.message.reply_text(
         "✉️ Кому отправить? Выбери сервис — получат все, у кого он подключён.",
         reply_markup=InlineKeyboardMarkup(rows))
@@ -6002,10 +6043,16 @@ async def msg_service_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         return
     await query.answer()
     svc = query.data.rsplit("_", 1)[-1]
-    n = len(get_users_with_service_full(svc))
+    if svc == "profileonly":
+        from database import get_users_profile_only
+        n = len(get_users_profile_only())
+        lbl = "«только профиль»"
+    else:
+        n = len(get_users_with_service_full(svc))
+        lbl = _svc_name(svc)
     context.user_data["awaiting_msg_service"] = svc
     await query.edit_message_text(
-        f"✉️ Напиши текст для пользователей {_svc_name(svc)} ({n} чел.) "
+        f"✉️ Напиши текст для пользователей {lbl} ({n} чел.) "
         f"следующим сообщением (или напиши «отмена»).")
 
 
