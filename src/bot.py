@@ -3779,8 +3779,9 @@ async def _send_recommendation(
     }
     rating_markup = InlineKeyboardMarkup([
         _pace_feedback_row(),
-        [InlineKeyboardButton("⭐ Оценить рекомендацию", callback_data="rate_show"),
-         InlineKeyboardButton("📖 Как получить разбор", callback_data="howto_garmin")],
+        [InlineKeyboardButton("⭐ Оценить рекомендацию", callback_data="rate_show")]
+        + ([] if long else
+           [InlineKeyboardButton("📖 Как получить разбор", callback_data="howto_garmin")]),
     ])
     final_markup = _merge_keyboards(rating_markup, get_main_keyboard(from_recommendation=True))
 
