@@ -315,7 +315,7 @@ def _build_main_menu_content(user, db_user_id: int) -> tuple[str, InlineKeyboard
             f"☀️ Утром в день тренировки проверяю восстановление и корректирую план\n"
             "📢 Автоматически уведомляю когда выходит новый анонс тренировки\n"
             "📊 Разбираю прошедшую тренировку — графики и анализ от ИИ. "
-            "Пошаговая инструкция — кнопка «📖 Как получить разбор» под каждой рекомендацией\n\n"
+            "Пошаговая инструкция — /howto (и кнопка «📖 Как получить разбор» под рекомендациями)\n\n"
             "Выбери действие 👇"
         )
     else:
@@ -716,6 +716,14 @@ GARMIN_HOWTO = (
     "Итого — 4 клика: отправить эталон в часы → старт → стоп → разбор.\n"
     "Вопросы — в обратную связь."
 )
+
+
+async def cmd_howto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/howto — инструкция «Как получить разбор» (тот же текст, что по кнопке)."""
+    _mark_user_active_if_needed(update.effective_user.id,
+                                update.effective_user.full_name,
+                                update.effective_user.username)
+    await update.message.reply_text(GARMIN_HOWTO)
 
 
 def _pace_feedback_row() -> list:
@@ -6528,6 +6536,7 @@ def main():
     app.add_handler(CommandHandler("msg_user",  cmd_msg_user))
     app.add_handler(CommandHandler("msg_service", cmd_msg_service))
     app.add_handler(CommandHandler("profile_user", cmd_profile_user))
+    app.add_handler(CommandHandler("howto",     cmd_howto))
     app.add_handler(CommandHandler("last",      cmd_last))
     app.add_handler(CommandHandler("report",    cmd_report))
     app.add_handler(CommandHandler("report_user", report_user_command))

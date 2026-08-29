@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Как получить разбор тренировки — DoDick</title>
+<meta name="description" content="Пошаговая инструкция: как загрузить тренировку в часы Garmin и получить разбор в боте DoDick.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{--ink:#15181D;--paper:#F7F6F2;--line:#E3E0D8;--muted:#6E7480;--mark:#2E2BD6}
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{margin:0;background:var(--paper);color:var(--ink);
+       font:400 17px/1.6 "IBM Plex Sans",-apple-system,Segoe UI,Roboto,sans-serif}
+  .wrap{max-width:760px;margin:0 auto;padding:0 24px}
+  header{border-bottom:1px solid var(--line)}
+  .bar{display:flex;align-items:baseline;justify-content:space-between;gap:16px;padding:22px 0}
+  .logo{font-weight:700;letter-spacing:-.02em;font-size:20px;color:var(--ink);text-decoration:none}
+  .logo span{color:var(--mark)}
+  nav a{color:var(--muted);text-decoration:none;font-size:15px;margin-left:20px}
+  nav a:hover{color:var(--ink)}
+  h1{font-size:clamp(28px,5vw,40px);line-height:1.1;letter-spacing:-.03em;margin:52px 0 10px}
+  .upd{color:var(--muted);font-size:15px;margin:0 0 40px}
+  h2{font:600 12px/1 "IBM Plex Mono",monospace;letter-spacing:.14em;text-transform:uppercase;
+     color:var(--muted);margin:0 0 14px}
+  section{padding:24px 0;border-top:1px solid var(--line)}
+  p{margin:0 0 12px;max-width:64ch}
+  ul,ol{margin:0 0 12px;padding-left:20px;max-width:64ch}
+  li{margin-bottom:8px}
+  a{color:var(--mark)}
+  code{font:400 15px "IBM Plex Mono",monospace;background:#EFEDE6;padding:1px 6px;border-radius:4px}
+  .note{border-left:3px solid var(--mark);padding:2px 0 2px 14px;color:#2A2F38}
+  footer{border-top:1px solid var(--line);padding:24px 0 48px;color:var(--muted);font-size:15px;margin-top:28px}
+  footer a{color:var(--muted)}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap bar">
+    <a class="logo" href="/">Do<span>Dick</span></a>
+    <nav>
+      <a href="/">Главная</a>
+      <a href="/support">Поддержка</a>
+      <a href="https://t.me/DD_adviser_bot">Telegram</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <h1>Как получить разбор тренировки</h1>
+  <p class="upd">Инструкция для часов Garmin · обновлено 29 августа 2026</p>
+
+  <section>
+    <p><a href="https://t.me/DD_adviser_bot">@DD_adviser_bot</a> — это не только рекомендации
+       до тренировки, но и автоматизация с анализом после неё: сравнение с заданием по отрезкам,
+       графики и советы от ИИ. Чтобы это работало, достаточно четырёх кликов.</p>
+  </section>
+
+  <section>
+    <h2>Шаг 1 — загрузите тренировку в часы</h2>
+    <p>При получении рекомендации нажмите кнопку с нужной группой (можно сразу две,
+       если сложно определиться). Больше ничего делать не надо — за ночь часы
+       синхронизируются с Garmin Connect и заберут тренировку. Если этого не произошло,
+       выполните синхронизацию вручную.</p>
+  </section>
+
+  <section>
+    <h2>Шаг 2 — запустите её на стадионе</h2>
+    <p>Выбирайте тип «Бег на стадионе», а из библиотеки — соответствующую тренировку.
+       Название будет в формате <code>DD_YYYYMMDD-&lt;группа&gt;_lvl</code>. Этот файл
+       ведёт вас во время тренировки и служит эталоном для разбора. Дальше выберите
+       «Начать тренировку» и дождитесь, пока часы поймают сигнал GPS.
+       Разминку и заминку не включайте в тренировку.</p>
+  </section>
+
+  <section>
+    <h2>Шаг 3 — только старт и стоп</h2>
+    <p>За всю тренировку нужно дважды нажать кнопку: старт в начале и стоп по окончании.
+       Часы сами отсекают все отрезки — не отсекайте их кнопкой, иначе собьёте структуру!</p>
+    <p class="note">Будьте внимательны: пейсеры иногда начинают тренировку с дальнего виража.
+       Нажимайте старт с началом первого рабочего отрезка.</p>
+  </section>
+
+  <section>
+    <h2>Если проблемы с GPS</h2>
+    <p>Выберите тип тренировки «Беговой тренажёр». Тренировку из библиотеки не запускайте —
+       она не сможет вас вести, а будет только эталоном. Круги отсекайте самостоятельно по
+       разметке на стадионе, сохраняя структуру тренировки: бот сопоставит отрезки эталона
+       с фактом. Расстояние берётся из задания, а время — фактическое из часов: если вы
+       пробежали круг, а часы показали 370 метров, расчёт всё равно будет верным.</p>
+    <p>По окончании переименуйте активность вручную по маске
+       <code>DD_YYYYMMDD-&lt;группа&gt;_lvl</code> (в обычном режиме часы делают это сами).</p>
+  </section>
+
+  <section>
+    <h2>Шаг 4 — разбор в боте</h2>
+    <p>После синхронизации нажмите в боте кнопку «Разбор тренировки» — придёт таблица
+       сравнения эталона с фактом, графики, а также персональный анализ качества
+       выполненной работы с рекомендациями на будущее.</p>
+  </section>
+
+  <section>
+    <h2>Итого — 4 клика</h2>
+    <ol>
+      <li>Отправить эталон в часы</li>
+      <li>Запустить тренировку</li>
+      <li>Остановить тренировку</li>
+      <li>Вызвать разбор тренировки</li>
+    </ol>
+    <p>Вопросы — в обратную связь в боте или на <a href="mailto:support@dodick.run">support@dodick.run</a>.</p>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    DoDick · <a href="https://t.me/DD_adviser_bot">@DD_adviser_bot</a> ·
+    <a href="/support">Поддержка</a> · <a href="/privacy">Приватность</a> · <a href="/guide">Инструкция</a>
+  </div>
+</footer>
+
+</body>
+</html>
