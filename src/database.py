@@ -76,10 +76,13 @@ def get_pace_feedback_last(target_date: str | None = None) -> tuple:
                 "WHERE workout_date = ? GROUP BY answer", (row[0],)).fetchall())
             by_group: dict = {}
             for grp, ans, n in conn.execute(
-                    "SELECT COALESCE(rec_group, '?'), answer, COUNT(*) "
-                    "FROM pace_feedback WHERE workout_date = ? "
+                    "SELECT COALESCE(lr.recommended_group, p.rec_group, '?'), p.answer, COUNT(*) "
+                    "FROM pace_feedback p "
+                    "LEFT JOIN last_recommendation lr "
+                    "  ON lr.user_id = p.user_id AND lr.workout_date = p.workout_date "
+                    "WHERE p.workout_date = ? "
                     "GROUP BY 1, 2", (row[0],)):
-                by_group.setdefault(grp, {})[ans] = n
+                by_group.setdefault(str(grp), {})[ans] = n
             return row[0], counts, by_group
     except Exception:
         return None, {}, {}

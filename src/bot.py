@@ -1295,38 +1295,35 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     reco_line = "—"
     lr = o.get("last_reco")
+    from database import get_pace_feedback_last
+    _pfd, _pfc, _pfg = get_pace_feedback_last((lr or {}).get("date"))
+
+    def _pf3(c):
+        return (f"🚀{c.get('faster', 0)} 🎯{c.get('ok', 0)} 🐢{c.get('slower', 0)}")
+
     if lr:
-        # 19.08.2026: распределение по группам — столбиками (моноширинный блок)
+        # 19.08.2026: распределение по группам — столбиками; справа — ответы кнопок темпа
         _items = sorted(lr["by_group"].items(),
                         key=lambda kv: float(str(kv[0]).replace(",", "."))
                         if str(kv[0]).replace(",", ".").replace(".", "").isdigit() else 99)
         _mx = max((n for _, n in _items), default=0) or 1
         _w = max((len(f"гр{g}") for g, _ in _items), default=3)
+
+        def _tail(g):
+            c = _pfg.get(str(g))
+            return f"  {_pf3(c)}" if c else ""
+
         by_g = "<pre>" + "\n".join(
-            f"{('гр' + str(g)).ljust(_w)} {'█' * max(1, round(n * 14 / _mx))} {n}"
+            f"{('гр' + str(g)).ljust(_w)} {'█' * max(1, round(n * 14 / _mx))} {n}{_tail(g)}"
             for g, n in _items) + "</pre>"
         reminders = max(lr["subscribed"] - lr["rec_total"], 0)
         reco_line = (f"{lr['wtype']}, {lr['date']}: получателей {lr['subscribed']} = "
                      f"рекомендаций {lr['rec_total']} + напоминаний {reminders}\n"
                      f"{by_g}")
 
-    from database import get_pace_feedback_last
-    _pfd, _pfc, _pfg = get_pace_feedback_last((lr or {}).get("date"))
-    if _pfd:
-        def _pf3(c):
-            return (f"🚀 {c.get('faster', 0)} · 🎯 {c.get('ok', 0)} · "
-                    f"🐢 {c.get('slower', 0)}")
-        def _gkey(g):
-            try:
-                return (0, float(g))
-            except ValueError:
-                return (1, 0.0)
-        _lines = [f"гр{g}: " + _pf3(c)
-                  for g, c in sorted(_pfg.items(), key=lambda kv: _gkey(kv[0]))]
+    if _pfd and _pfc:
         _pfn = sum(_pfc.values())
-        _lines.append(f"итого: " + _pf3(_pfc) + f" (ответили {_pfn})")
-        pfb_line = (f"Темп по ощущениям {_pfd[8:10]}.{_pfd[5:7]}:\n"
-                    + "\n".join(_lines) + "\n\n")
+        pfb_line = f"Темп по ощущениям: {_pf3(_pfc)} · ответили {_pfn}\n\n"
     else:
         pfb_line = ""
     text = (
@@ -3776,7 +3773,7 @@ async def _send_recommendation(
     _rating_data[telegram_id] = {
         "workout_date": analysis.get("workout_date", ""),
         "ai_mode": row.get("analysis_mode", ""),
-        "rec_group": ("лонг" if long else (rec or {}).get("recommended_group")),
+        "rec_group": (rec or {}).get("recommended_group"),
     }
     rating_markup = InlineKeyboardMarkup([
         _pace_feedback_row(),
