@@ -1,53 +1,15 @@
-нировочный помощник бегового клуба</h1>
-    <p class="lede">DoDick читает анонс клубной тренировки, сверяет его с вашими беговыми зонами и данными о восстановлении с часов — и говорит, в какой группе и каким темпом бежать сегодня. После тренировки разбирает, что получилось.</p>
-    <a class="cta" href="https://t.me/DD_adviser_bot">Войти через Telegram</a>
-    <p class="cta-note">Отдельной регистрации нет: вход и все настройки — внутри бота.</p>
-  </section>
-
-  <section class="card" aria-label="Пример рекомендации">
-    <div class="card-label">Пример рекомендации на вечер</div>
-    <div class="lane"><b>Группа 2</b><div class="bar-track"><div class="bar-fill" style="width:34%"></div></div><i>34%</i></div>
-    <div class="lane"><b>Группа 3</b><div class="bar-track"><div class="bar-fill" style="width:85%"></div></div><i>85%</i></div>
-    <div class="lane"><b>Группа 3.5</b><div class="bar-track"><div class="bar-fill" style="width:62%"></div></div><i>62%</i></div>
-    <div class="lane"><b>Группа 4</b><div class="bar-track"><div class="bar-fill" style="width:28%"></div></div><i>28%</i></div>
-    <div class="card-foot">Задание: 10 × 600 м, отдых 200 м трусцой. Подходимость групп считается по вашим зонам и восстановлению за ночь.</div>
-  </section>
-
-  <section class="cols">
-    <div>
-      <h2>Что делает</h2>
-      <ul>
-        <li>Подбирает группу и темп под конкретное задание клуба</li>
-        <li>Учитывает сон, пульс покоя и готовность с часов</li>
-        <li>Разбирает выполненную тренировку по кругам</li>
-        <li>Отправляет тренировку прямо в часы Garmin</li>
-      </ul>
-    </div>
-    <div>
-      <h2>Часы и сервисы</h2>
-      <ul>
-        <li>Garmin, COROS, Polar, Whoop — подключение в разделе «Профиль»</li>
-        <li>Strava — подключение по кнопке, без пароля</li>
-        <li>Данные используются только для ваших рекомендаций</li>
-        <li>Отключить трекер и стереть данные можно в любой момент</li>
-      </ul>
-    </div>
-  </section>
-
-  <section class="en">
-    <h2>English</h2>
-    <p>DoDick is a training assistant for the Dusty Dumbbells running club. It reads the club's workout announcement, compares it with the runner's own pace zones and recovery data from their watch, and recommends which training group and pace to run that evening. After the session it reviews the completed workout lap by lap.</p>
-    <p>Sign-in is done through Telegram — there is no separate account. Connecting a watch (Garmin, COROS, Polar, Whoop) or Strava happens inside the bot, and any connection can be revoked there at any time. Questions and data requests: <a href="/support">Support</a>.</p>
-    <p><a class="cta" href="https://t.me/DD_adviser_bot">Sign in with Telegram</a></p>
-  </section>
-
-</main>
-
-<footer>
-  <div class="wrap">
-    DoDick · беговой клуб «Пыльные гантели» · <a href="/support">Поддержка</a> · <a href="/privacy">Приватность</a> · <a href="/guide">Инструкция</a>
-  </div>
-</footer>
-
-</body>
-</html>
+.card{
+    margin:56px 0;
+    border:1px solid var(--line);
+    background:#fff;
+    padding:26px 28px;
+  }
+  .card-label{
+    font:600 12px/1 "IBM Plex Mono",monospace;
+    letter-spacing:.14em;
+    text-transform:uppercase;
+    color:var(--muted);
+    margin-bottom:18px;
+  }
+  .lane{display:flex;align-items:center;gap:14px;padding:9px 0;border-top:1px solid var(--line)}
+  .lane:first-of-type{bor

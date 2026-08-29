@@ -3776,7 +3776,7 @@ async def _send_recommendation(
     _rating_data[telegram_id] = {
         "workout_date": analysis.get("workout_date", ""),
         "ai_mode": row.get("analysis_mode", ""),
-        "rec_group": (rec or {}).get("recommended_group"),
+        "rec_group": ("лонг" if long else (rec or {}).get("recommended_group")),
     }
     rating_markup = InlineKeyboardMarkup([
         _pace_feedback_row(),
