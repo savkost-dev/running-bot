@@ -3290,6 +3290,9 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if svc == "profileonly":
             from database import get_users_profile_only
             targets = get_users_profile_only()
+        elif svc == "emptyusers":
+            from database import get_users_empty
+            targets = get_users_empty()
         else:
             targets = get_users_with_service_full(svc)
         sent, failed = 0, []
@@ -3303,7 +3306,8 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 failed.append(f"{name or tg_id}: {type(e).__name__}")
             await asyncio.sleep(0.05)
-        _lbl = "только профиль" if svc == "profileonly" else _svc_name(svc)
+        _lbl = {"profileonly": "только профиль",
+                "emptyusers": "без профиля и трекера"}.get(svc) or _svc_name(svc)
         report = f"✅ {_lbl}: отправлено {sent} из {len(targets)}"
         if failed:
             report += "\n❌ Не дошло:\n" + "\n".join(failed[:20])
@@ -6055,10 +6059,13 @@ async def cmd_msg_service(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         n = len(get_users_with_service_full(svc))
         rows.append([InlineKeyboardButton(f"{emoji} {name} — {n}",
                                           callback_data=f"msgsvc_{svc}")])
-    from database import get_users_profile_only
+    from database import get_users_profile_only, get_users_empty
     rows.append([InlineKeyboardButton(
         f"📝 Только профиль (без трекера) — {len(get_users_profile_only())}",
         callback_data="msgsvc_profileonly")])
+    rows.append([InlineKeyboardButton(
+        f"👻 Без профиля и трекера — {len(get_users_empty())}",
+        callback_data="msgsvc_emptyusers")])
     await update.message.reply_text(
         "✉️ Кому отправить? Выбери сервис — получат все, у кого он подключён.",
         reply_markup=InlineKeyboardMarkup(rows))
@@ -6076,6 +6083,10 @@ async def msg_service_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         from database import get_users_profile_only
         n = len(get_users_profile_only())
         lbl = "«только профиль»"
+    elif svc == "emptyusers":
+        from database import get_users_empty
+        n = len(get_users_empty())
+        lbl = "«без профиля и трекера»"
     else:
         n = len(get_users_with_service_full(svc))
         lbl = _svc_name(svc)

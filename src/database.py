@@ -79,6 +79,22 @@ def get_pace_feedback_last() -> tuple:
         return None, {}, {}
 
 
+def get_users_empty() -> list:
+    """Активные без заполненного профиля и без токенов трекеров («молчуны»):
+    (telegram_id, name, username). Для адресной рассылки /msg_service."""
+    with get_connection() as conn:
+        return conn.execute("""
+            SELECT u.telegram_id, u.name, u.username
+            FROM users u
+            LEFT JOIN user_profile up ON u.id = up.user_id
+            LEFT JOIN user_preferences p ON p.user_id = u.id
+            WHERE COALESCE(p.is_active, 1) = 1
+              AND (up.user_id IS NULL OR (up.vo2max IS NULL AND up.lactate_threshold_pace IS NULL))
+              AND u.id NOT IN (SELECT user_id FROM user_tokens)
+            ORDER BY u.id
+        """).fetchall()
+
+
 def count_service_tokens(service: str) -> int:
     """Сколько пользователей сейчас имеют сохранённый токен сервиса.
     Для Strava это = занятые слоты в лимите приложения (athlete connections)."""
