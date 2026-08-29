@@ -127,6 +127,25 @@
     <div class="card-foot">Задание: 10 × 600 м, отдых 200 м трусцой. Подходимость групп считается по вашим зонам и восстановлению за ночь.</div>
   </section>
 
+  <style>
+    .shots{display:flex;gap:14px;flex-wrap:wrap;margin-top:14px}
+    .shots img{height:230px;width:auto;max-width:31%;object-fit:cover;object-position:top;
+               border:1px solid var(--line);border-radius:8px;cursor:zoom-in;background:#fff}
+    @media (max-width:640px){.shots img{max-width:47%;height:170px}}
+  </style>
+  <section class="card" aria-label="Разбор тренировки">
+    <div class="card-label">После тренировки — разбор</div>
+    <p style="margin:0;max-width:64ch">Загрузите эталон в часы одним нажатием, пробегите
+       тренировку — и получите сравнение с заданием по каждому отрезку:
+       таблицу, графики и советы от ИИ. Всего 4 клика: эталон в часы → старт → стоп → разбор.</p>
+    <div class="shots">
+      <img src="/guide/img/workout-garmin.png" alt="Тренировка в Garmin Connect" loading="lazy">
+      <img src="/guide/img/analysis-card.png" alt="Карточка разбора тренировки" loading="lazy">
+      <img src="/guide/img/analysis-charts.png" alt="Графики разбора" loading="lazy">
+    </div>
+    <p style="margin:18px 0 4px"><a class="cta" href="/guide">Читать инструкцию</a></p>
+  </section>
+
   <section class="cols">
     <div>
       <h2>Что делает</h2>
@@ -162,6 +181,17 @@
     DoDick · беговой клуб «Пыльные гантели» · <a href="/support">Поддержка</a> · <a href="/privacy">Приватность</a> · <a href="/guide">Инструкция</a>
   </div>
 </footer>
+
+<div id="lb" style="display:none;position:fixed;inset:0;background:rgba(21,24,29,.92);z-index:50;align-items:center;justify-content:center;cursor:zoom-out;padding:24px">
+  <img id="lb-img" style="max-width:96%;max-height:96%;border-radius:8px" alt="">
+</div>
+<script>
+  var lb=document.getElementById('lb'),im=document.getElementById('lb-img');
+  document.querySelectorAll('.shots img').forEach(function(el){
+    el.addEventListener('click',function(){im.src=el.src;lb.style.display='flex';});
+  });
+  lb.addEventListener('click',function(){lb.style.display='none';im.src='';});
+</script>
 
 </body>
 </html>

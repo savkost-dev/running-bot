@@ -1,111 +1,53 @@
-                    lactate_threshold_pace=lt["pace"],
-                    lactate_threshold_hr=lt["hr"],
-                    lactate_source="auto")
-            if garmin_vo2max_found or garmin_lt_found:
-                try:
-                    zones.recalculate_and_save(db_user_id)
-                except Exception as e:
-                    logger.warning(f"Zones recalc error (garmin connect) for {user.id}: {e}")
+нировочный помощник бегового клуба</h1>
+    <p class="lede">DoDick читает анонс клубной тренировки, сверяет его с вашими беговыми зонами и данными о восстановлении с часов — и говорит, в какой группе и каким темпом бежать сегодня. После тренировки разбирает, что получилось.</p>
+    <a class="cta" href="https://t.me/DD_adviser_bot">Войти через Telegram</a>
+    <p class="cta-note">Отдельной регистрации нет: вход и все настройки — внутри бота.</p>
+  </section>
 
-            lines = ["✅ Garmin подключён!\n"]
+  <section class="card" aria-label="Пример рекомендации">
+    <div class="card-label">Пример рекомендации на вечер</div>
+    <div class="lane"><b>Группа 2</b><div class="bar-track"><div class="bar-fill" style="width:34%"></div></div><i>34%</i></div>
+    <div class="lane"><b>Группа 3</b><div class="bar-track"><div class="bar-fill" style="width:85%"></div></div><i>85%</i></div>
+    <div class="lane"><b>Группа 3.5</b><div class="bar-track"><div class="bar-fill" style="width:62%"></div></div><i>62%</i></div>
+    <div class="lane"><b>Группа 4</b><div class="bar-track"><div class="bar-fill" style="width:28%"></div></div><i>28%</i></div>
+    <div class="card-foot">Задание: 10 × 600 м, отдых 200 м трусцой. Подходимость групп считается по вашим зонам и восстановлению за ночь.</div>
+  </section>
 
-            if garmin_vo2max_found or garmin_lt_found or (not isinstance(body_battery, Exception) and body_battery is not None):
-                lines.append("Загружено из Garmin:")
-                if garmin_vo2max_found:
-                    lines.append(f"📊 VO2max: {vo2max:.1f} мл/кг/мин")
-                else:
-                    lines.append("📊 VO2max: не найден — укажи вручную в /profile")
-                if garmin_lt_found:
-                    lines.append(f"⚡ Лактатный порог: {lt['pace']} мин/км при ЧСС {lt['hr']}")
-                if not isinstance(body_battery, Exception) and body_battery is not None:
-                    lines.append(f"🔋 Body Battery: {body_battery}/100")
-                if not isinstance(hrv, Exception) and hrv:
-                    lines.append(f"💗 HRV: {hrv.get('hrv_last_night', '—')} мс (среднеенедельное: {hrv.get('hrv_weekly_avg', '—')})")
-                if not isinstance(readiness, Exception) and readiness and readiness.get("score") is not None:
-                    lines.append(f"🎯 Training Readiness: {readiness['score']}/100 ({readiness.get('level', '')})")
-            else:
-                lines.append("📊 VO2max не найден в данных.")
-                lines.append("Укажи его вручную в профиле → /profile")
+  <section class="cols">
+    <div>
+      <h2>Что делает</h2>
+      <ul>
+        <li>Подбирает группу и темп под конкретное задание клуба</li>
+        <li>Учитывает сон, пульс покоя и готовность с часов</li>
+        <li>Разбирает выполненную тренировку по кругам</li>
+        <li>Отправляет тренировку прямо в часы Garmin</li>
+      </ul>
+    </div>
+    <div>
+      <h2>Часы и сервисы</h2>
+      <ul>
+        <li>Garmin, COROS, Polar, Whoop — подключение в разделе «Профиль»</li>
+        <li>Strava — подключение по кнопке, без пароля</li>
+        <li>Данные используются только для ваших рекомендаций</li>
+        <li>Отключить трекер и стереть данные можно в любой момент</li>
+      </ul>
+    </div>
+  </section>
 
-            if garmin_vo2max_found:
-                lines.append("\nХочешь уточнить лактатный порог? → /profile")
-                lines.append("Или сразу попробуй /workout")
+  <section class="en">
+    <h2>English</h2>
+    <p>DoDick is a training assistant for the Dusty Dumbbells running club. It reads the club's workout announcement, compares it with the runner's own pace zones and recovery data from their watch, and recommends which training group and pace to run that evening. After the session it reviews the completed workout lap by lap.</p>
+    <p>Sign-in is done through Telegram — there is no separate account. Connecting a watch (Garmin, COROS, Polar, Whoop) or Strava happens inside the bot, and any connection can be revoked there at any time. Questions and data requests: <a href="/support">Support</a>.</p>
+    <p><a class="cta" href="https://t.me/DD_adviser_bot">Sign in with Telegram</a></p>
+  </section>
 
-            lines.append(
-                "\nТы носишь Garmin постоянно (включая сон)?\n"
-                "Это влияет на то, используем ли Body Battery и HRV утром."
-            )
-            keyboard = _merge_keyboards(
-                InlineKeyboardMarkup([[
-                    InlineKeyboardButton("✅ Да, постоянно", callback_data="garmin_recovery_yes"),
-                    InlineKeyboardButton("🏃 Только на тренировках", callback_data="garmin_recovery_no"),
-                ]]),
-                InlineKeyboardMarkup([[InlineKeyboardButton("← Сервисы", callback_data="show_services")]])
-            )
-            await msg.edit_text("\n".join(lines), reply_markup=keyboard)
+</main>
 
-            n = count_users_with_service("garmin")
-            uname = f" (@{user.username})" if user.username else ""
-=====
-    fitness_ok   = bool(strava or garmin or coros or polar)
-    recovery_ok  = bool(whoop or garmin or coros or polar)
-    all_set      = profile_ok and fitness_ok and recovery_ok
+<footer>
+  <div class="wrap">
+    DoDick · беговой клуб «Пыльные гантели» · <a href="/support">Поддержка</a> · <a href="/privacy">Приватность</a> · <a href="/guide">Инструкция</a>
+  </div>
+</footer>
 
-    if all_set:
-        status_lines = ["✅ Профиль заполнен"]
-        if strava:
-            status_lines.append("✅ Strava подключена")
-        if garmin:
-            status_lines.append("✅ Garmin подключён")
-        if whoop:
-            status_lines.append("✅ Whoop подключён")
-
-        fitness_src   = "CTL/ATL/TSB (Strava)" if strava else "Training Load (Garmin)"
-        recovery_name = "Whoop" if whoop else "Garmin"
-
-        text = (
-            f"Привет, {user.first_name}! 👋\n\n"
-            + "\n".join(status_lines) + "\n\n"
-            "Что умею:\n"
-            f"🏃 Анализирую форму ({fitness_src}), восстановление и рекомендую группу "
-            "для тренировки вт/пт с процентной шкалой подходимости\n"
-            "🕐 То же самое для воскресного Long Run с рекомендацией стратегии "
-            "(ровный темп или прогрессия)\n"
-            f"☀️ Утром в день тренировки проверяю восстановление и корректирую план\n"
-            "📢 Автоматически уведомляю когда выходит новый анонс тренировки\n"
-            "📊 Разбираю прошедшую тренировку — графики и анализ от ИИ. Чтобы я её нашёл, назови тренировку в Strava/Garmin по маске "
-            "DD_ГГГГММДД-группа_lvl (например DD_20260612-3.5_lvl)\n\n"
-            "Выбери действие 👇"
-        )
-    else:
-        # Показываем чек-лист того, что уже подключено
-        done = []
-        if profile_ok:
-            done.append("✅ Профиль заполнен")
-        if fitness_ok:
-            svc_names = []
-            if garmin: svc_names.append("Garmin")
-            if coros:  svc_names.append("COROS")
-            if polar:  svc_names.append("Polar")
-            if strava: svc_names.append("Strava")
-            done.append("✅ Трекер: " + ", ".join(svc_names))
-        if whoop:
-            done.append("✅ Whoop подключён")
-
-        done_block = ("\n" + "\n".join(done) + "\n") if done else ""
-
-        text = (
-            f"Привет, {user.first_name}! 👋\n"
-            f"{done_block}\n"
-            "Я помогу подготовиться к тренировкам Dusty Dumbbells.\n\n"
-            "Для начала сделай два шага:\n"
-            "1️⃣ Заполни профиль — VO2max и лактатный порог\n"
-            "2️⃣ Подключи трекер — Garmin, COROS, Polar или Strava\n\n"
-            "Выбери действие 👇"
-        )
-        return text, _build_screen1_onboarding_keyboard()
-
-    return text, _build_screen1_keyboard()
-
-
-async def _show_main_menu(query_or_update, user, db_user_id: int):
+</body>
+</html>
