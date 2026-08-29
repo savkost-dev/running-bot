@@ -55,14 +55,20 @@ def get_users_profile_only() -> list:
         """).fetchall()
 
 
-def get_pace_feedback_last() -> tuple:
-    """(workout_date, {answer: count}, {group: {answer: count}}) последней
-    тренировки с ответами; (None, {}, {}) если ответов нет или таблицы нет."""
+def get_pace_feedback_last(target_date: str | None = None) -> tuple:
+    """(workout_date, {answer: count}, {group: {answer: count}}) по кнопкам темпа.
+    target_date — взять конкретную тренировку (напр. дату последней рассылки);
+    без неё — последняя дата с ответами. (None, {}, {}) если ответов нет."""
     try:
         with get_connection() as conn:
-            row = conn.execute(
-                "SELECT workout_date FROM pace_feedback "
-                "ORDER BY workout_date DESC LIMIT 1").fetchone()
+            if target_date:
+                row = conn.execute(
+                    "SELECT workout_date FROM pace_feedback "
+                    "WHERE workout_date = ? LIMIT 1", (target_date,)).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT workout_date FROM pace_feedback "
+                    "ORDER BY workout_date DESC LIMIT 1").fetchone()
             if not row:
                 return None, {}, {}
             counts = dict(conn.execute(

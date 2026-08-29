@@ -314,8 +314,8 @@ def _build_main_menu_content(user, db_user_id: int) -> tuple[str, InlineKeyboard
             "(ровный темп или прогрессия)\n"
             f"☀️ Утром в день тренировки проверяю восстановление и корректирую план\n"
             "📢 Автоматически уведомляю когда выходит новый анонс тренировки\n"
-            "📊 Разбираю прошедшую тренировку — графики и анализ от ИИ. Чтобы я её нашёл, назови тренировку в Strava/Garmin по маске "
-            "DD_ГГГГММДД-группа_lvl (например DD_20260612-3.5_lvl)\n\n"
+            "📊 Разбираю прошедшую тренировку — графики и анализ от ИИ. "
+            "Пошаговая инструкция — кнопка «📖 Как получить разбор» под каждой рекомендацией\n\n"
             "Выбери действие 👇"
         )
     else:
@@ -685,6 +685,37 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db_user_id = _mark_user_active_if_needed(user.id, user.full_name, user.username)
     await _show_status(update, db_user_id)
+
+
+GARMIN_HOWTO = (
+    "📖 Как получить разбор тренировки (Garmin)\n\n"
+    "1. При получении рекомендации загрузи тренировку в часы — нажми кнопку "
+    "с нужной группой (можно сразу две, если сложно определиться). "
+    "Больше ничего делать не надо — за ночь часы синхронизируются с Garmin "
+    "Connect и заберут тренировку. Если этого не произошло — выполни "
+    "синхронизацию вручную.\n\n"
+    "2. На тренировке выбирай тип «Бег на стадионе», а из библиотеки — "
+    "соответствующую тренировку (имя вида DD_YYYYMMDD-<группа>_lvl). "
+    "Дальше выбери «Начать тренировку» и дождись сигнала GPS. "
+    "Разминку и заминку не включай в тренировку.\n\n"
+    "3. За всю тренировку нужно только дважды нажать кнопку: старт в начале "
+    "и стоп по окончании. Часы сами отсекают все отрезки — не отсекай их "
+    "кнопкой, иначе собьёшь структуру! И будь внимателен: пейсеры иногда "
+    "начинают с дальнего виража — нажимай старт с началом первого рабочего "
+    "отрезка.\n\n"
+    "4. Если проблема с GPS — выбери тип «Беговой тренажёр». Тренировку из "
+    "библиотеки не запускай — она будет только эталоном. Круги отсекай "
+    "самостоятельно по разметке стадиона, сохраняя структуру тренировки: "
+    "бот сопоставит отрезки эталона с фактом — расстояние берётся из задания, "
+    "а время — фактическое из часов.\n\n"
+    "5. По окончании часы сами отправят файл в Garmin Connect с именем по маске. "
+    "В режиме «Беговой тренажёр» переименуй активность вручную по маске.\n\n"
+    "6. Дальше в боте нажми кнопку «Разбор тренировки» — придёт таблица "
+    "сравнения эталона с фактом, графики и персональный анализ качества "
+    "работы с рекомендациями на будущее.\n\n"
+    "Итого — 4 клика: отправить эталон в часы → старт → стоп → разбор.\n"
+    "Вопросы — в обратную связь."
+)
 
 
 def _pace_feedback_row() -> list:
@@ -1271,7 +1302,7 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
                      f"{by_g}")
 
     from database import get_pace_feedback_last
-    _pfd, _pfc, _pfg = get_pace_feedback_last()
+    _pfd, _pfc, _pfg = get_pace_feedback_last((lr or {}).get("date"))
     if _pfd:
         def _pf3(c):
             return (f"🚀 {c.get('faster', 0)} · 🎯 {c.get('ok', 0)} · "
@@ -2852,6 +2883,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── ОЦЕНКА РЕКОМЕНДАЦИИ ───────────────────────────────────
 
+    elif query.data == "howto_garmin":
+        await query.answer()
+        await context.bot.send_message(user.id, GARMIN_HOWTO)
+        return
+
     elif query.data in ("pfb_faster", "pfb_ok", "pfb_slower"):
         ctx = _rating_data.get(user.id) or {}
         db_user_id = get_or_create_user(user.id, user.full_name, user.username)
@@ -3056,8 +3092,10 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                               garmin_email=pending.get("email", ""),
                               garmin_password=pending.get("password", ""))
             lines = ["✅ Garmin подключён!", ""] + await apply_profile_after_connect(db_user_id)
-            keyboard = InlineKeyboardMarkup(
-                [[InlineKeyboardButton("← Сервисы", callback_data="show_services")]])
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("📖 Как получить разбор", callback_data="howto_garmin")],
+                [InlineKeyboardButton("← Сервисы", callback_data="show_services")],
+            ])
             await msg.edit_text("\n".join(lines), reply_markup=keyboard)
             n = count_users_with_service("garmin")
             uname = f" (@{user.username})" if user.username else ""
@@ -3170,7 +3208,10 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     InlineKeyboardButton("✅ Да, постоянно", callback_data="garmin_recovery_yes"),
                     InlineKeyboardButton("🏃 Только на тренировках", callback_data="garmin_recovery_no"),
                 ]]),
-                InlineKeyboardMarkup([[InlineKeyboardButton("← Сервисы", callback_data="show_services")]])
+                InlineKeyboardMarkup([
+                    [InlineKeyboardButton("📖 Как получить разбор", callback_data="howto_garmin")],
+                    [InlineKeyboardButton("← Сервисы", callback_data="show_services")],
+                ])
             )
             await msg.edit_text("\n".join(lines), reply_markup=keyboard)
 
@@ -3510,7 +3551,8 @@ async def _send_ai_variant_b(
         }
         rating_markup = InlineKeyboardMarkup([
             _pace_feedback_row(),
-            [InlineKeyboardButton("⭐ Оценить рекомендацию", callback_data="rate_show")],
+            [InlineKeyboardButton("⭐ Оценить рекомендацию", callback_data="rate_show"),
+             InlineKeyboardButton("📖 Как получить разбор", callback_data="howto_garmin")],
         ])
         final_b_markup = _merge_keyboards(rating_markup, get_main_keyboard(from_recommendation=True))
         # Сохранять для утренней — только при плановой рассылке (is_broadcast=True)
@@ -3729,7 +3771,8 @@ async def _send_recommendation(
     }
     rating_markup = InlineKeyboardMarkup([
         _pace_feedback_row(),
-        [InlineKeyboardButton("⭐ Оценить рекомендацию", callback_data="rate_show")],
+        [InlineKeyboardButton("⭐ Оценить рекомендацию", callback_data="rate_show"),
+         InlineKeyboardButton("📖 Как получить разбор", callback_data="howto_garmin")],
     ])
     final_markup = _merge_keyboards(rating_markup, get_main_keyboard(from_recommendation=True))
 
@@ -4012,7 +4055,8 @@ async def _send_workout_recommendation(
         ]])
         rating_markup = InlineKeyboardMarkup([
             _pace_feedback_row(),
-            [InlineKeyboardButton("⭐ Оценить рекомендацию", callback_data="rate_show")],
+            [InlineKeyboardButton("⭐ Оценить рекомендацию", callback_data="rate_show"),
+             InlineKeyboardButton("📖 Как получить разбор", callback_data="howto_garmin")],
         ])
 
     final_markup = _merge_keyboards(fit_markup, rating_markup, get_main_keyboard(from_recommendation=True))
@@ -4310,13 +4354,15 @@ async def _send_long_run_recommendation(
         _rating_data[telegram_id] = {
             'workout_date': workout.get('workout_date', ''),
             'ai_mode': ai_mode,
+            'rec_group': 'лонг',
         }
         fit_markup = InlineKeyboardMarkup([[
             InlineKeyboardButton("⌚ Загрузить в Garmin", callback_data="fit_up"),
         ]])
         rating_markup = InlineKeyboardMarkup([
             _pace_feedback_row(),
-            [InlineKeyboardButton("⭐ Оценить рекомендацию", callback_data="rate_show")],
+            [InlineKeyboardButton("⭐ Оценить рекомендацию", callback_data="rate_show"),
+             InlineKeyboardButton("📖 Как получить разбор", callback_data="howto_garmin")],
         ])
 
     scenario_header = scenario_ctx["user_text"] + "\n\n" if scenario_ctx.get("user_text") else ""
