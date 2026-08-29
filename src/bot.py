@@ -1311,11 +1311,17 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         def _tail(g):
             c = _pfg.get(str(g))
-            return f"  {_pf3(c)}" if c else ""
+            if not c:
+                return ""
+            parts = [f"{e}{c[k]}" for e, k in (("🚀", "faster"), ("🎯", "ok"), ("🐢", "slower")) if c.get(k)]
+            return " ".join(parts)
 
+        _left = [f"{('гр' + str(g)).ljust(_w)} {'█' * max(1, round(n * 14 / _mx))} {n}"
+                 for g, n in _items]
+        _lw = max(len(x) for x in _left) + 2
         by_g = "<pre>" + "\n".join(
-            f"{('гр' + str(g)).ljust(_w)} {'█' * max(1, round(n * 14 / _mx))} {n}{_tail(g)}"
-            for g, n in _items) + "</pre>"
+            (l.ljust(_lw) + _tail(g)).rstrip()
+            for l, (g, _) in zip(_left, _items)) + "</pre>"
         reminders = max(lr["subscribed"] - lr["rec_total"], 0)
         reco_line = (f"{lr['wtype']}, {lr['date']}: получателей {lr['subscribed']} = "
                      f"рекомендаций {lr['rec_total']} + напоминаний {reminders}\n"
