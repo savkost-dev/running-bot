@@ -4063,8 +4063,7 @@ async def _send_workout_recommendation(
         ]])
         rating_markup = InlineKeyboardMarkup([
             _pace_feedback_row(),
-            [InlineKeyboardButton("⭐ Оценить рекомендацию", callback_data="rate_show"),
-             InlineKeyboardButton("📖 Как получить разбор", callback_data="howto_garmin")],
+            [InlineKeyboardButton("⭐ Оценить рекомендацию", callback_data="rate_show")],
         ])
 
     final_markup = _merge_keyboards(fit_markup, rating_markup, get_main_keyboard(from_recommendation=True))
@@ -4369,8 +4368,7 @@ async def _send_long_run_recommendation(
         ]])
         rating_markup = InlineKeyboardMarkup([
             _pace_feedback_row(),
-            [InlineKeyboardButton("⭐ Оценить рекомендацию", callback_data="rate_show"),
-             InlineKeyboardButton("📖 Как получить разбор", callback_data="howto_garmin")],
+            [InlineKeyboardButton("⭐ Оценить рекомендацию", callback_data="rate_show")],
         ])
 
     scenario_header = scenario_ctx["user_text"] + "\n\n" if scenario_ctx.get("user_text") else ""
