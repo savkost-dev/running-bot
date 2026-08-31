@@ -6062,7 +6062,16 @@ async def cmd_activity(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             nick = f" (@{username})" if username else ""
             lines.append(f"  {name}{nick}: {cnt} действий, посл. {last_d}")
     lines += ["", "Кнопки Тренировка/Long Run/Утро считаются как /workout, /long, /morning."]
-    await update.message.reply_text("\n".join(lines))
+    # 31.08: отчёт перерос лимит Telegram (4096) — шлём частями по строкам
+    _chunk, _sent = [], 0
+    for _ln in lines:
+        if sum(len(x) + 1 for x in _chunk) + len(_ln) + 1 > 3800:
+            await update.message.reply_text("\n".join(_chunk))
+            _sent += 1
+            _chunk = []
+        _chunk.append(_ln)
+    if _chunk:
+        await update.message.reply_text("\n".join(_chunk))
 
 
 async def cmd_profile_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
