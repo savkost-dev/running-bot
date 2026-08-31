@@ -431,7 +431,7 @@ def build_garmin_from_analysis(analysis: dict, group_num: str) -> dict:
     steps = []
     top_order = 1
 
-    for struct in structs:
+    for _si, struct in enumerate(structs):
         if struct.get('type') == 'easy':
             _ed = float(struct.get('distance_m') or 0)
             if _ed > 0:
@@ -508,8 +508,14 @@ def build_garmin_from_analysis(analysis: dict, group_num: str) -> dict:
                                    v_fast=v_rec or None, v_slow=v_rec or None,
                                    child_id=1))
 
+        # Срез последнего восстановления в блоке — по тому, что идёт ПОСЛЕ блока:
+        # дальше отдых (easy) или конец тренировки — режем (хвостовой отдых не нужен);
+        # дальше рабочий блок — НЕ режем (это связка перед следующей работой,
+        # напр. 4×(800/1600) + финальный 400 — последний 1600 нужен).
+        _nxt = structs[_si + 1] if _si + 1 < len(structs) else None
+        _next_is_work = bool(_nxt) and _nxt.get('type') == 'repeat'
         steps.append(_repeat_group(top_order, reps, inner,
-                                   skip_last_rest=(rec_m > 0)))
+                                   skip_last_rest=(rec_m > 0 and not _next_is_work)))
         top_order += 1
 
     d = date.replace('-', '')
