@@ -6163,7 +6163,7 @@ async def cmd_msg_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     from database import get_connection
     # Без аргументов — список юзеров кнопками (как /w_user)
     if not args:
-        users = get_users_list_for_b()
+        users = get_users_list_for_b(all_users=True)
         if not users:
             await update.message.reply_text("Нет пользователей.")
             return
@@ -6222,7 +6222,7 @@ async def msg_user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
     await query.answer()
     db_uid = int(query.data.rsplit("_", 1)[-1])
-    users = get_users_list_for_b()
+    users = get_users_list_for_b(all_users=True)
     user = next((u for u in users if u["db_user_id"] == db_uid), None)
     if not user:
         await query.edit_message_text("Пользователь не найден.")
