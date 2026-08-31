@@ -2006,13 +2006,28 @@ def get_morning_caught(user_id: int) -> dict | None:
     }
 
 
-def get_users_list_for_b() -> list[dict]:
-    """Пользователи для кнопок /b и /a_user."""
+def get_users_list_for_b(all_users: bool = False) -> list[dict]:
+    """Пользователи для кнопок /b, /a_user, /w_user и др.
+    По умолчанию — только те, по кому есть что считать: активные с якорем для зон
+    (VO2max или лактатный порог). Без этого рекомендация не считается, а длинный
+    список ещё и обрезается лимитом клавиатуры Telegram.
+    all_users=True — все без фильтра (для /msg_user: писать можно кому угодно)."""
     with get_connection() as conn:
-        rows = conn.execute(
-            "SELECT id, telegram_id, COALESCE(name, username, 'user_' || id), username "
-            "FROM users ORDER BY id"
-        ).fetchall()
+        if all_users:
+            rows = conn.execute(
+                "SELECT id, telegram_id, COALESCE(name, username, 'user_' || id), username "
+                "FROM users ORDER BY id"
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT u.id, u.telegram_id, COALESCE(u.name, u.username, 'user_' || u.id), u.username "
+                "FROM users u "
+                "JOIN user_profile up ON up.user_id = u.id "
+                "LEFT JOIN user_preferences p ON p.user_id = u.id "
+                "WHERE COALESCE(p.is_active, 1) = 1 "
+                "  AND (up.vo2max IS NOT NULL OR up.lactate_threshold_pace IS NOT NULL) "
+                "ORDER BY u.id"
+            ).fetchall()
     return [{"db_user_id": r[0], "telegram_id": r[1], "name": r[2], "username": r[3]} for r in rows]
 
 
