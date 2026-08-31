@@ -1,25 +1,12 @@
-        return
-    args = context.args or []
-    from database import get_connection
-    # Без аргументов — список юзеров кнопками (как /w_user)
-    if not args:
-        users = get_users_list_for_b()
-        if not users:
-            await update.message.reply_text("Нет пользователей.")
-            return
-        keyboard = [
-            [InlineKeyboardButton(
-                u["name"] + (f" (@{u['username']})" if u.get("username") else ""),
-=====
-        await query.answer("Нет доступа.")
-        return
-    await query.answer()
-    db_uid = int(query.data.rsplit("_", 1)[-1])
-    users = get_users_list_for_b()
-    user = next((u for u in users if u["db_user_id"] == db_uid), None)
-    if not user:
-        await query.edit_message_text("Пользователь не найден.")
-        return
-    context.user_data["awaiting_msg_user"] = {
-        "uid": db_uid, "tg_id": user["telegram_id"], "name": user["name"]}
-    await query.edit_message_text(
+            ) if speed_ceilings and len(speed_ceilings) == 1 else (
+                "\nМаксимально повторяемый темп по блокам: " +
+                ", ".join(f"{sc['distance_m']}м → {sc['ceiling']}/км" for sc in speed_ceilings) +
+                ". Для КАЖДОГО блока сравнивай середину его диапазона с его потолком; допуски"
+                " по числу повторов блока: 100-200м и ≤6 повторов (отдых ≥2×) — до +3 сек/км"
+                " (ambitious); 7-8 повторов — до +2 (% ≤ 55-60); 9-12 — без превышения;"
+                " длиннее 200м или >12 повторов — середина МЕДЛЕННЕЕ потолка на 2-3 сек/км."
+                " Группа risk/hard (% ≤ 10), если хоть один блок превышает СВОЙ допуск.\n"
+            ) if speed_ceilings else ""
+        )
+        + "\nСВЯЗЬ ТИПА РАБОТЫ С ЗОНАМИ — критично для выбора группы:\n"
+        "Смотри на СУТЬ тренировки (выше) и выбирай ориентир по зонам:\n"
