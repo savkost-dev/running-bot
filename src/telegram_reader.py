@@ -143,6 +143,9 @@ def _mark_admin_comments(comments: list) -> str:
         txt = (c.get("text") or "").strip()
         if not txt:
             continue
+        # Собственный бриф бота в анализ не подаём — иначе модель читает свой же разбор
+        if txt.startswith("🧭 Режимы тренировки"):
+            continue
         if txt.startswith("::") and c.get("sender_id") in _ADM:
             out.append("[ИНСТРУКЦИЯ АДМИНИСТРАТОРА] " + txt.lstrip(":").strip())
         else:
