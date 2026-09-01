@@ -158,7 +158,7 @@ async def get_post_comments(post_id: int) -> list:
         async for message in client.iter_messages(
             CHANNEL,
             reply_to=post_id,
-            limit=50
+            limit=300
         ):
             if message.text:
                 comments.append({

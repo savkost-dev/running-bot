@@ -1,6 +1,13 @@
-﻿import sqlite3, json
-con = sqlite3.connect("/opt/running-bot/running_bot.db")
-r = con.execute("SELECT analyzed_json FROM workout_analysis WHERE workout_date=? AND is_valid=1 ORDER BY id DESC LIMIT 1", ("2026-09-01",)).fetchone()
-a = json.loads(r[0])
-print("groups:", [g.get("number") for g in a.get("groups", [])])
-print("extra:", a.get("extra_groups"))
+﻿import asyncio, sys
+sys.path.insert(0, "/opt/running-bot/src")
+import telegram_reader as tr
+async def main():
+    cl = await tr._get_shared_client()
+    n = 0
+    async for m in cl.iter_messages(tr.CHANNEL, reply_to=2438, limit=300):
+        n += 1
+        t = (m.text or "").replace("\n", " ")
+        if "876" in t or "1314" in t:
+            print("НАЙДЕНО:", m.id, m.sender_id, t[:150])
+    print("всего:", n)
+asyncio.run(main())
