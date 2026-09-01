@@ -3288,9 +3288,36 @@ def build_group_zone_table(analysis: dict, zones_map: dict | None) -> str:
             rec_m = float(st.get("recovery_distance_m") or 0)
             wp = gb.get("work_pace_end") or gb.get("work_pace_start")
             rp = gb.get("recovery_pace")
-            for _label, _pace, _dist in (("работа", wp, work_m), ("отдых", rp, rec_m)):
+
+            # Шаги одного повтора: составная серия (segments) или однородный отрезок
+            st_segs = [s for s in (st.get("segments") or [])
+                       if isinstance(s, dict) and s.get("distance_m")]
+            g_segs = [s for s in (gb.get("segments") or [])
+                      if isinstance(s, dict) and s.get("distance_m")]
+            steps = []  # (дистанция, темп, рабочий?)
+            if st_segs or g_segs:
+                base = st_segs if st_segs else g_segs
+                g_work = [s for s in g_segs if not s.get("rest")]
+                g_rest = [s for s in g_segs if s.get("rest")]
+                wi = ri = 0
+                for s in base:
+                    dist = float(s.get("distance_m") or 0)
+                    if s.get("rest"):
+                        gp = g_rest[ri] if ri < len(g_rest) else s
+                        ri += 1
+                        steps.append((dist, gp.get("recovery_pace") or rp, False))
+                    else:
+                        gp = g_work[wi] if wi < len(g_work) else s
+                        wi += 1
+                        steps.append((dist, gp.get("work_pace_end") or gp.get("work_pace_start") or wp, True))
+            elif work_m > 0:
+                steps.append((work_m, wp, True))
+            if rec_m > 0:
+                steps.append((rec_m, rp, False))
+
+            for _dist, _pace, _is_work in steps:
                 if not _pace or _dist <= 0:
-                    if _label == "отдых" and _dist > 0:
+                    if _dist > 0 and not _is_work:
                         cont_best = max(cont_best, cont_sec)
                         cont_sec = 0.0
                     continue
@@ -3307,16 +3334,10 @@ def build_group_zone_table(analysis: dict, zones_map: dict | None) -> str:
                     cont_sec = 0.0
                 if ps <= itv_s + 10:
                     itv_sec_total += seg_sec
-            if wp:
                 try:
-                    d = _pace_to_sec(wp) - thr_s
-                    parts.append(f"{int(work_m)}м {wp} ({_zone_of(_pace_to_sec(wp))}, ПАНО{d:+d})")
-                except Exception:
-                    pass
-            if rp and rec_m > 0:
-                try:
-                    d = _pace_to_sec(rp) - thr_s
-                    parts.append(f"отдых {int(rec_m)}м {rp} ({_zone_of(_pace_to_sec(rp))}, ПАНО{d:+d})")
+                    d = ps - thr_s
+                    _tag = "" if _is_work else "отдых "
+                    parts.append(f"{_tag}{int(_dist)}м {_pace} ({_zone_of(ps)}, ПАНО{d:+d})")
                 except Exception:
                     pass
         cont_best = max(cont_best, cont_sec)
