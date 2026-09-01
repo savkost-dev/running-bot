@@ -6363,7 +6363,8 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
                 res.get("splits"), res.get("plan_steps"), res["name"],
                 "/tmp", str(db_user_id), dark=False, source=res.get("source") or "")
             chart_items = [(p, c) for p, c in (
-                (card, None), (stacked, "Графики")) if p]
+                (card, "@DD_adviser_bot · dodick.run"),
+                (stacked, "Графики · @DD_adviser_bot · dodick.run")) if p]
     except Exception as e:
         logger.error(f"/report card error: {e}", exc_info=True)
     if not chart_items:
@@ -6405,7 +6406,8 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
             _mstr = claude_advisor._MODE_LABELS.get(_ai_stats.get("mode"), "🧠 Глубокий (ИИ)")
             _plaque = (f"⏱ {_ai_stats.get('time_sec', '?')}с | {_mstr} | "
                        f"📥 {_ai_stats.get('input_tokens', '?')} / "
-                       f"📤 {_ai_stats.get('output_tokens', '?')} | v{VERSION}")
+                       f"📤 {_ai_stats.get('output_tokens', '?')} | v{VERSION}\n"
+                       f"@DD_adviser_bot · dodick.run")
             _sv_link = ""
             if res.get("source") == "strava" and res.get("act_id"):
                 _sv_link = (f"\n🔗 View on Strava: "

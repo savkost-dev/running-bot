@@ -1,69 +1,44 @@
-async def cmd_activity(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/activity (admin) — активность по дням + топ действий за 14 дней."""
-    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+ exc_info=True)
+        await msg.edit_text(f"❌ Ошибка сборки: {type(e).__name__}: {e}")
         return
-    days = 14
-    daily = get_activity_daily(days)
-    top = get_activity_top(days)
-    lines = [f"📈 Активность за {days} дней (дни МСК, без рассылок)", ""]
-    if daily:
-        for d, users_cnt, actions_cnt in daily:
-            lines.append(f"{d}: {users_cnt} чел · {actions_cnt} действий")
-    else:
-        lines.append("Нет данных.")
-    if top:
-        lines += ["", "Топ действий:"]
-        for cmd, cnt, uniq in top:
-            lines.append(f"  {cmd}: {cnt} (юзеров: {uniq})")
-    rep_cnt, rep_uniq = get_activity_report(days)
-    lines += ["", f"📊 /report: {rep_cnt} (юзеров: {rep_uniq})"]
-    for name, username, cnt, last_d in get_report_users(days):
-        nick = f" (@{username})" if username else ""
-        lines.append(f"  {name}{nick}: {cnt} · посл. {last_d}")
-    who = get_activity_users(days)
-    if who:
-        lines += ["", f"Кто активен ({len(who)}, по дате последней активности):"]
-        for name, username, cnt, last_d in who:
-            nick = f" (@{username})" if username else ""
-            lines.append(f"  {name}{nick}: {cnt} действий, посл. {last_d}")
-    lines += ["", "Кнопки Тренировка/Long Run/Утро считаются как /workout, /long, /morning."]
-    await update.message.reply_text("\n".join(lines))
+    if not res.get("ok"):
+        await msg.edit_text(f"⚠️ {res.get('msg')}")
+        return
 
+    # Картинки: карточка разбора + графики одной вертикальной PNG.
+    # Фолбэк на старые 3 PNG, если карточка не построилась.
+    chart_items = []
+    try:
+        from ai_package import build_report_card, build_charts_stacked
+        card = await build_report_card(
+            res.get("splits"), res.get("plan_steps"), res["name"],
+            res.get("wdate"), res.get("wgroup"), res.get("source"),
+            res.get("s4"), "/tmp", str(db_user_id), dark=False)
+        if card:
+            stacked = await build_charts_stacked(
+                res.get("splits"), res.get("plan_steps"), res["name"],
+                "/tmp", str(db_user_id), dark=False, source=res.get("source") or "")
+            chart_items = [(p, c) for p, c in (
+                (card, None), (stacked, "Графики")) if p]
+    except Exception as e:
+        logger.error(f"/report card error: {e}", exc_info=True)
+    if not chart_items:
+        try:
+            from ai_package import build_charts
+            charts = await build_charts(res.get("splits"), res.get("plan_steps"),
+                                        res["name"], "/tmp", str(db_user_id), dark=False)
+        except Exception as e:
+            logger.error(f"/report charts error: {e}", exc_info=True)
+            charts = {}
+        chart_items = [(p, c) for p, c in (
+            (charts.get("work_png"), "Рабочие интервалы"),
+            (charts.get("rest_png"), "Отдых"),
+            (charts.get("table_png"), "Таблица повторов")) if p]
 
-async def cmd_profile_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/profile_user (admin) — показать профиль выбранного пользователя (только текст)."""
-    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
-        return
-    users = get_users_list_for_b()
-    if not users:
-        await update.message.reply_text("Нет пользователей.")
-        return
-    keyboard = [
-        [InlineKeyboardButton(
-            u["name"] + (f" (@{u['username']})" if u.get("username") else ""),
-            callback_data=f"profile_user_{u['db_user_id']}"
-        )]
-        for u in users
-    ]
-    await update.message.reply_text(
-        "Выбери пользователя — покажу его профиль:",
-        reply_markup=InlineKeyboardMarkup(keyboard))
-
-
-async def profile_user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Нажатие на юзера в списке /profile_user — вывод его профиля."""
-    query = update.callback_query
-    if query.from_user.id not in ADMIN_TELEGRAM_IDS:
-        await query.answer("Нет доступа.")
-        return
-    await query.answer()
-    db_uid = int(query.data.rsplit("_", 1)[-1])
-    users = get_users_list_for_b()
-    target = next((u for u in users if u["db_user_id"] == db_uid), None)
-    if not target:
-        await query.edit_message_text("Пользователь не найден.")
-        return
-    from database import get_user_profile
-    profile = get_user_profile(db_uid)
-    uname = f" (@{target['username']})" if target.get("username") else ""
-    text = _build_profile_
+    # Полный режим: получаем анализ ИИ ДО отправки (чтобы отдать всё разом).
+    ai_chunks = None
+    if not simple_mode:
+        # 17.08.2026: разбор в РЕЖИМЕ ПОЛЬЗОВАТЕЛЯ (был всегда deep); calc → fast —
+        # текстовый разбор нужен всем, у формульного режима своего ИИ-пути нет.
+        _rmode = (get_preferences(db_user_id) or {}).get("ai_mode", "smart")
+        _rmode = {"calc": "fast"}.get(_rmode, _rmode)
