@@ -758,7 +758,7 @@ async def build_charts_stacked(splits, plan_steps, name: str, out_dir: str,
             ax2.grid(True, linestyle=":", alpha=0.6)
             ax2.legend(loc="best", fontsize=7.5, framealpha=0.9)
 
-        _sig = "DoDick · @DD_adviser_bot" + (" · Powered by Strava" if source == "strava" else "")
+        _sig = "DoDick · @DD_adviser_bot · dodick.run" + (" · Powered by Strava" if source == "strava" else "")
         fig.text(0.985, 0.005, _sig, fontsize=8, alpha=0.6,
                  ha="right", va="bottom")
         out_path = os.path.join(out_dir, f"charts_{tag}.png")
@@ -1089,7 +1089,7 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
                       ha="center", va="center", transform=ax_b.transAxes)
             ax_b.text(cx, 0.26, small, fontsize=8.5, alpha=0.85,
                       ha="center", va="center", transform=ax_b.transAxes)
-        _sig = "DoDick · @DD_adviser_bot" + (" · Powered by Strava" if source == "strava" else "")
+        _sig = "DoDick · @DD_adviser_bot · dodick.run" + (" · Powered by Strava" if source == "strava" else "")
         ax_b.text(0.99, 0.0, _sig, fontsize=8.5, alpha=0.6,
                   ha="right", va="bottom", transform=ax_b.transAxes)
 

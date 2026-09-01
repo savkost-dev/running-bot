@@ -404,6 +404,31 @@ async def upload_to_garmin(workout_json: dict, db_user_id: int) -> bool:
 
 # ── Structured analysis builder (variant B) ──────────────────
 
+def _max_pace_for_group(group_num: str) -> str:
+    """Темп для отрезков «на максимум», когда в анонсе темп не задан.
+    Фиксированная таблица по группам (Антон, 01.09.2026)."""
+    g = str(group_num).replace(",", ".").strip()
+    try:
+        n = float(g)
+    except ValueError:
+        return ""
+    if n <= 2:
+        return "2:45"
+    if n <= 4:
+        return "3:00"
+    return "3:30"
+
+
+_MAX_EFFORT_WORDS = ("максимум", "максимальн", "очень быстр", "потолок", "во всю силу",
+                     "на все деньги", "предельн", "спринт")
+
+
+def _is_max_effort(struct: dict) -> bool:
+    """Блок описан как работа на максимум (по purpose/description)."""
+    txt = " ".join(str(struct.get(k) or "") for k in ("purpose", "description", "role")).lower()
+    return any(w in txt for w in _MAX_EFFORT_WORDS)
+
+
 def build_garmin_from_analysis(analysis: dict, group_num: str) -> dict:
     """Build Garmin workout JSON from structured analysis (structure[] + groups[]).
 
@@ -457,6 +482,11 @@ def build_garmin_from_analysis(analysis: dict, group_num: str) -> dict:
             v_slow = v_fast
         elif v_slow > 0 and v_fast == 0.0:
             v_fast = v_slow
+        # Отрезок «на максимум» без темпа в анонсе — берём темп по таблице групп
+        if v_fast == 0.0 and v_slow == 0.0 and _is_max_effort(struct):
+            _mp = _pace_to_ms(_max_pace_for_group(group_num))
+            if _mp > 0:
+                v_fast = v_slow = _mp
 
         inner = []
         # Составной рабочий отрезок: segments у группы → ПОДРЯД по interval-шагу
