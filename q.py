@@ -1,6 +1,3 @@
-with open(r"D:\running-bot\src\bot.py", encoding="utf-8") as f:
-    t = f.read()
-i = t.find("async def cmd_activity")
-with open(r"D:\running-bot\q_out.txt", "w", encoding="utf-8") as out:
-    out.write(t[i:i+3000])
-print("ok")
+﻿import sqlite3
+con = sqlite3.connect("/opt/running-bot/running_bot.db")
+print(con.execute("SELECT id, telegram_id, username FROM users WHERE username=\'t_savkost\'").fetchone())

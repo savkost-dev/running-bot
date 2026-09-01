@@ -130,6 +130,26 @@ async def get_recent_posts(limit: int = 50) -> list:
     return posts
 
 
+def _mark_admin_comments(comments: list) -> str:
+    """Склейка комментариев для анализа.
+    Комментарий от админа, начинающийся с '::', помечается как инструкция
+    к заданию (высший приоритет в Промте Шага 1)."""
+    try:
+        _ADM = ADMIN_TELEGRAM_IDS
+    except NameError:
+        _ADM = set()
+    out = []
+    for c in comments:
+        txt = (c.get("text") or "").strip()
+        if not txt:
+            continue
+        if txt.startswith("::") and c.get("sender_id") in _ADM:
+            out.append("[ИНСТРУКЦИЯ АДМИНИСТРАТОРА] " + txt.lstrip(":").strip())
+        else:
+            out.append(txt)
+    return "\n".join(out)
+
+
 async def get_post_comments(post_id: int) -> list:
     """Получает комментарии к посту"""
     comments = []
@@ -145,6 +165,7 @@ async def get_post_comments(post_id: int) -> list:
                     "id": message.id,
                     "date": message.date,
                     "text": message.text,
+                    "sender_id": getattr(message, "sender_id", None),
                 })
     except Exception as e:
         print(f"Ошибка чтения комментариев: {e}")
@@ -194,7 +215,7 @@ async def find_next_workout(only_interval: bool = True) -> dict | None:
         parsed["post_id"] = post["id"]
         parsed["raw_text"] = post["text"]
         parsed["edit_date"] = post.get("edit_date")
-        parsed["comments_text"] = "\n".join(c["text"] for c in comments if c.get("text"))
+        parsed["comments_text"] = _mark_admin_comments(comments)
 
         try:
             workout_date = datetime.strptime(parsed["workout_date"], "%Y-%m-%d").date()
@@ -586,7 +607,7 @@ async def find_next_long_run() -> dict | None:
         parsed["raw_text"] = post["text"]
         parsed["edit_date"] = post.get("edit_date")
         _comments = await get_post_comments(post["id"])
-        parsed["comments_text"] = "\n".join(c["text"] for c in _comments if c.get("text"))
+        parsed["comments_text"] = _mark_admin_comments(_comments)
 
         try:
             workout_date = datetime.strptime(parsed["workout_date"], "%Y-%m-%d").date()
