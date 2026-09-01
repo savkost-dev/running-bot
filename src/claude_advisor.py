@@ -1226,6 +1226,7 @@ def build_ai_b_prompt_reco_champion(analysis: dict, user_data: dict, zones_map: 
         f"{zones_text}\n"
         f"Специализация: {spec_label}\n"
         f"Восстановление: {rec_text}\n"
+        + build_group_zone_table(analysis, zones_map)
         + (f"{time_context}\n" if time_context else "")
         + (
             (
@@ -1461,6 +1462,7 @@ def build_ai_b_prompt_reco_challenger(analysis: dict, user_data: dict, zones_map
         f"{zones_text}\n"
         f"Специализация: {spec_label}\n"
         f"Восстановление: {rec_text}\n"
+        + build_group_zone_table(analysis, zones_map)
         + (f"{time_context}\n" if time_context else "")
         + (
             (
@@ -3229,6 +3231,107 @@ def format_morning_message(advice: dict, last_rec: dict | None = None) -> str:
                 lines.append(f"• {_html.escape(str(adj))}")
 
     return '\n'.join(lines)
+
+
+def build_group_zone_table(analysis: dict, zones_map: dict | None) -> str:
+    """Сводка по группам для Промта Шага 2: только ЦИФРЫ, без вердиктов.
+
+    По каждой группе: темпы блоков с привязкой к зонам атлета и отклонением
+    от ПАНО, время в зонах «ПАНО и выше» / «МПК и выше» и самый длинный
+    непрерывный кусок. Решения (подходит/нет, проценты, эпитеты) — на стороне ИИ.
+    Границы зон: «ПАНО и выше» = темп не медленнее ПАНО+15 сек/км;
+    «МПК и выше» = не медленнее МПК+10 сек/км.
+    """
+    zones = zones_map or {}
+    thr = zones.get("threshold")
+    itv = zones.get("interval")
+    if not thr or not itv:
+        return ""
+    try:
+        thr_s = _pace_to_sec(thr)
+        itv_s = _pace_to_sec(itv)
+    except Exception:
+        return ""
+    zone_bounds = []
+    for zname in ("repetition", "interval", "threshold", "marathon", "easy"):
+        zp = zones.get(zname)
+        if zp:
+            try:
+                zone_bounds.append((zname, _pace_to_sec(zp)))
+            except Exception:
+                pass
+
+    def _zone_of(sec: int) -> str:
+        """Ближайшая зона по темпу (просто ярлык, без оценки)."""
+        if not zone_bounds:
+            return "?"
+        best = min(zone_bounds, key=lambda kv: abs(kv[1] - sec))
+        return best[0]
+
+    structure = [b for b in (analysis.get("structure") or []) if b.get("type") == "repeat"]
+    lines = []
+    for g in (analysis.get("groups") or []):
+        num = str(g.get("number") or "")
+        if not num or g.get("health_group"):
+            continue
+        blocks = {int(b.get("block", 0)): b for b in (g.get("blocks") or [])}
+        parts = []
+        thr_sec_total = 0.0
+        itv_sec_total = 0.0
+        cont_sec = 0.0
+        cont_best = 0.0
+        for st in structure:
+            bn = int(st.get("block", 0))
+            gb = blocks.get(bn) or {}
+            reps = int(st.get("reps") or 1)
+            work_m = float(st.get("work_distance_m") or 0)
+            rec_m = float(st.get("recovery_distance_m") or 0)
+            wp = gb.get("work_pace_end") or gb.get("work_pace_start")
+            rp = gb.get("recovery_pace")
+            for _label, _pace, _dist in (("работа", wp, work_m), ("отдых", rp, rec_m)):
+                if not _pace or _dist <= 0:
+                    if _label == "отдых" and _dist > 0:
+                        cont_best = max(cont_best, cont_sec)
+                        cont_sec = 0.0
+                    continue
+                try:
+                    ps = _pace_to_sec(_pace)
+                except Exception:
+                    continue
+                seg_sec = ps * (_dist / 1000.0) * reps
+                if ps <= thr_s + 15:
+                    thr_sec_total += seg_sec
+                    cont_sec += seg_sec
+                else:
+                    cont_best = max(cont_best, cont_sec)
+                    cont_sec = 0.0
+                if ps <= itv_s + 10:
+                    itv_sec_total += seg_sec
+            if wp:
+                try:
+                    d = _pace_to_sec(wp) - thr_s
+                    parts.append(f"{int(work_m)}м {wp} ({_zone_of(_pace_to_sec(wp))}, ПАНО{d:+d})")
+                except Exception:
+                    pass
+            if rp and rec_m > 0:
+                try:
+                    d = _pace_to_sec(rp) - thr_s
+                    parts.append(f"отдых {int(rec_m)}м {rp} ({_zone_of(_pace_to_sec(rp))}, ПАНО{d:+d})")
+                except Exception:
+                    pass
+        cont_best = max(cont_best, cont_sec)
+        if not parts:
+            continue
+        lines.append(
+            f"  гр.{num}: " + " · ".join(parts) +
+            f" · ПАНО+ {thr_sec_total/60:.0f} мин (непрерывно {cont_best/60:.0f})"
+            f" · МПК+ {itv_sec_total/60:.0f} мин"
+        )
+    if not lines:
+        return ""
+    return ("\nСВОДКА ПО ГРУППАМ (посчитано заранее, пересчёт не нужен; «ПАНО+» = время "
+            "в темпе ПАНО+15 сек/км и быстрее, «МПК+» = МПК+10 сек/км и быстрее):\n"
+            + "\n".join(lines) + "\n")
 
 
 def _pace_to_sec(pace: str) -> int:

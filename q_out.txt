@@ -1,44 +1,12 @@
- exc_info=True)
-        await msg.edit_text(f"❌ Ошибка сборки: {type(e).__name__}: {e}")
-        return
-    if not res.get("ok"):
-        await msg.edit_text(f"⚠️ {res.get('msg')}")
-        return
-
-    # Картинки: карточка разбора + графики одной вертикальной PNG.
-    # Фолбэк на старые 3 PNG, если карточка не построилась.
-    chart_items = []
-    try:
-        from ai_package import build_report_card, build_charts_stacked
-        card = await build_report_card(
-            res.get("splits"), res.get("plan_steps"), res["name"],
-            res.get("wdate"), res.get("wgroup"), res.get("source"),
-            res.get("s4"), "/tmp", str(db_user_id), dark=False)
-        if card:
-            stacked = await build_charts_stacked(
-                res.get("splits"), res.get("plan_steps"), res["name"],
-                "/tmp", str(db_user_id), dark=False, source=res.get("source") or "")
-            chart_items = [(p, c) for p, c in (
-                (card, None), (stacked, "Графики")) if p]
-    except Exception as e:
-        logger.error(f"/report card error: {e}", exc_info=True)
-    if not chart_items:
-        try:
-            from ai_package import build_charts
-            charts = await build_charts(res.get("splits"), res.get("plan_steps"),
-                                        res["name"], "/tmp", str(db_user_id), dark=False)
-        except Exception as e:
-            logger.error(f"/report charts error: {e}", exc_info=True)
-            charts = {}
-        chart_items = [(p, c) for p, c in (
-            (charts.get("work_png"), "Рабочие интервалы"),
-            (charts.get("rest_png"), "Отдых"),
-            (charts.get("table_png"), "Таблица повторов")) if p]
-
-    # Полный режим: получаем анализ ИИ ДО отправки (чтобы отдать всё разом).
-    ai_chunks = None
-    if not simple_mode:
-        # 17.08.2026: разбор в РЕЖИМЕ ПОЛЬЗОВАТЕЛЯ (был всегда deep); calc → fast —
-        # текстовый разбор нужен всем, у формульного режима своего ИИ-пути нет.
-        _rmode = (get_preferences(db_user_id) or {}).get("ai_mode", "smart")
-        _rmode = {"calc": "fast"}.get(_rmode, _rmode)
+        f"{groups_text}\n\n"
+        "ДАННЫЕ БЕГУНА:\n"
+        "Зоны темпа:\n"
+        f"{zones_text}\n"
+        f"Специализация: {spec_label}\n"
+        f"Восстановление: {rec_text}\n"
+        + (f"{time_context}\n" if time_context else "")
+        + (
+            (
+                f"\nМаксимально повторяемый темп (отрезок {speed_ceilings[0]['distance_m']}м): "
+                f"{speed_ceilings[0]['ceiling']}/км. "
+                "Если прогрессии нет (темп постоянный) — весь диапазон группы должен быть не быстрее этого темпа.\n"
