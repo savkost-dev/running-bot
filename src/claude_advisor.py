@@ -1172,7 +1172,8 @@ def build_ai_b_prompt_reco_champion(analysis: dict, user_data: dict, zones_map: 
         blocks = g.get("blocks") or []
         block_strs = []
         for bl in blocks:
-            rp = bl.get("recovery_pace") or "—"
+            rp = bl.get("recovery_pace")
+            rec_str = f" (recovery {rp})" if rp else ""
             segs = bl.get("segments") or []
             if segs:
                 # Составной блок (14.08.2026): сегментный формат вместо «3:53→3:20» —
@@ -1185,12 +1186,15 @@ def build_ai_b_prompt_reco_champion(analysis: dict, user_data: dict, zones_map: 
                     seg_strs.append(f"{s.get('distance_m')}м@{sp}")
                 block_strs.append(
                     f"бл{bl.get('block')} {' + '.join(seg_strs)} слитно без отдыха внутри "
-                    f"(стрелка внутри сегмента = прогрессия по повторам; recovery {rp})")
+                    f"(стрелка внутри сегмента = прогрессия по повторам){rec_str}")
                 continue
-            ps = bl.get("work_pace_start") or "?"
+            ps = bl.get("work_pace_start")
             pe = bl.get("work_pace_end")
+            if not ps:
+                block_strs.append(f"бл{bl.get('block')} темп по заданию{rec_str}")
+                continue
             pace_str = f"{ps}→{pe}" if pe and pe != ps else ps
-            block_strs.append(f"бл{bl.get('block')} {pace_str}/км (recovery {rp})")
+            block_strs.append(f"бл{bl.get('block')} {pace_str}/км{rec_str}")
         groups_lines.append(f"  Группа {g.get('number')}: {'; '.join(block_strs)}")
     groups_text = "\n".join(groups_lines) if groups_lines else "  —"
 
@@ -1414,7 +1418,8 @@ def build_ai_b_prompt_reco_challenger(analysis: dict, user_data: dict, zones_map
         blocks = g.get("blocks") or []
         block_strs = []
         for bl in blocks:
-            rp = bl.get("recovery_pace") or "—"
+            rp = bl.get("recovery_pace")
+            rec_str = f" (recovery {rp})" if rp else ""
             segs = bl.get("segments") or []
             if segs:
                 # Составной блок (14.08.2026): сегментный формат вместо «3:53→3:20» —
@@ -1427,12 +1432,15 @@ def build_ai_b_prompt_reco_challenger(analysis: dict, user_data: dict, zones_map
                     seg_strs.append(f"{s.get('distance_m')}м@{sp}")
                 block_strs.append(
                     f"бл{bl.get('block')} {' + '.join(seg_strs)} слитно без отдыха внутри "
-                    f"(стрелка внутри сегмента = прогрессия по повторам; recovery {rp})")
+                    f"(стрелка внутри сегмента = прогрессия по повторам){rec_str}")
                 continue
-            ps = bl.get("work_pace_start") or "?"
+            ps = bl.get("work_pace_start")
             pe = bl.get("work_pace_end")
+            if not ps:
+                block_strs.append(f"бл{bl.get('block')} темп по заданию{rec_str}")
+                continue
             pace_str = f"{ps}→{pe}" if pe and pe != ps else ps
-            block_strs.append(f"бл{bl.get('block')} {pace_str}/км (recovery {rp})")
+            block_strs.append(f"бл{bl.get('block')} {pace_str}/км{rec_str}")
         groups_lines.append(f"  Группа {g.get('number')}: {'; '.join(block_strs)}")
     groups_text = "\n".join(groups_lines) if groups_lines else "  —"
 
