@@ -1296,7 +1296,9 @@ def build_ai_b_prompt_reco_champion(analysis: dict, user_data: dict, zones_map: 
         f"{zones_text}\n"
         f"Специализация: {spec_label}\n"
         f"Восстановление: {rec_text}\n"
-        + build_group_zone_table(analysis, zones_map)
+        # 03.09 ВРЕМЕННО отключена сводка по группам: минуты по зонам ломают интервалы с отдыхом (гр.4 optimal на 8×500).
+        # Вернуть после правки _zone_of (зона по границам) и учёта отдыха в объёме.
+        # + build_group_zone_table(analysis, zones_map)
         + (f"{time_context}\n" if time_context else "")
         + (
             (
@@ -1571,7 +1573,9 @@ def build_ai_b_prompt_reco_challenger(analysis: dict, user_data: dict, zones_map
         f"{zones_text}\n"
         f"Специализация: {spec_label}\n"
         f"Восстановление: {rec_text}\n"
-        + build_group_zone_table(analysis, zones_map)
+        # 03.09 ВРЕМЕННО отключена сводка по группам: минуты по зонам ломают интервалы с отдыхом (гр.4 optimal на 8×500).
+        # Вернуть после правки _zone_of (зона по границам) и учёта отдыха в объёме.
+        # + build_group_zone_table(analysis, zones_map)
         + (f"{time_context}\n" if time_context else "")
         + (
             (
