@@ -206,6 +206,7 @@ _SERVICES = [
     ("whoop",  "⚪", "Whoop",   "connect_whoop_btn",   "Whoop отключён"),
     ("garmin", "🔵", "Garmin",  "connect_garmin_btn",  "Garmin отключён"),
     ("coros",  "🔴", "COROS",   "connect_coros_btn",   "COROS отключён"),
+    ("coros_mcp", "⌚", "COROS без пароля", "connect_coros_oauth_btn", "COROS отключён"),
     ("polar",  "❄️", "Polar",   "connect_polar_btn",   "Polar отключён"),
 ]
 
@@ -2250,6 +2251,21 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Подключение COROS\n\n"
             "Email и пароль хранятся в зашифрованном виде (AES-256).\n\n"
             "Введи email от аккаунта COROS:"
+        )
+
+    elif query.data == "connect_coros_oauth_btn":
+        import coros_oauth
+        auth_url = coros_oauth.build_auth_url(user.id)
+        await query.edit_message_text(
+            "Подключение COROS без пароля\n\n"
+            "Нажми кнопку ниже — откроется страница самого COROS. Введи там почту "
+            "и пароль от COROS и нажми Authorize. Бот пароль не видит и не хранит.\n\n"
+            "Важно: поставь ОБЕ галочки — вторая открывает доступ к уже записанным "
+            "тренировкам.\n\n"
+            "Ссылка действует 15 минут.",
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("⌚ Открыть страницу COROS", url=auth_url)]]
+            ),
         )
 
     elif query.data == "connect_polar_btn":
