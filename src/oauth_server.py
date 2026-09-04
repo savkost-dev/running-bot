@@ -540,14 +540,74 @@ _COROS_PENDING_HTML = """<!DOCTYPE html>
 
 
 async def _coros_callback(request: web.Request) -> web.Response:
-    """Адрес возврата после разрешения доступа в COROS.
+    """Адрес возврата после разрешения доступа в COROS (схема MCP, без пароля).
 
-    Пока доступ не одобрен — опрятная заглушка вместо ошибки: адрес
-    указан в заявке, его могут открыть при проверке.
+    Без параметров отдаёт прежнюю страницу-визитку: адрес публичный,
+    его могут открыть просто так.
     """
-    if request.query.get("code"):
-        logger.info("coros callback: пришёл код авторизации, обмен ещё не реализован")
-    return web.Response(text=_COROS_PENDING_HTML, content_type="text/html")
+    error = request.rel_url.query.get("error")
+    if error:
+        logger.warning(f"coros callback error: {error}")
+        return _err("COROS не дал разрешение на доступ. Попробуй ещё раз.")
+
+    code = request.rel_url.query.get("code")
+    state = request.rel_url.query.get("state")
+    if not code:
+        return web.Response(text=_COROS_PENDING_HTML, content_type="text/html")
+    if not state:
+        return _err("Не передан параметр state.")
+
+    import coros_oauth
+    pending = coros_oauth.take_pending(state)
+    if not pending:
+        return _err("Ссылка устарела. Начни подключение заново из бота.")
+    telegram_id, verifier = pending
+
+    try:
+        token_data = await coros_oauth.exchange_code(code, verifier)
+    except Exception as e:
+        logger.error(f"COROS token exchange error: {e}")
+        return _err("Ошибка при обмене кода на токен. Попробуй ещё раз.", 502)
+
+    if "access_token" not in token_data:
+        logger.error(f"COROS exchange bad response: {str(token_data)[:300]}")
+        return _err("COROS не вернул токен. Попробуй авторизоваться заново.")
+
+    from database import get_or_create_user
+    db_user_id = get_or_create_user(telegram_id, "")
+    coros_oauth.save_tokens(db_user_id, token_data)
+    logger.info(f"COROS OAuth OK: telegram_id={telegram_id} db_user_id={db_user_id}")
+
+    if _telegram_app:
+        asyncio.create_task(_notify_coros(telegram_id))
+
+    return _ok(
+        "⌚",
+        "COROS подключён!",
+        "Вернись в Telegram — данные подтянутся автоматически.",
+    )
+
+
+async def _notify_coros(telegram_id: int) -> None:
+    """Сообщение пользователю и админу после успешного подключения COROS."""
+    try:
+        await _telegram_app.bot.send_message(
+            telegram_id,
+            "✅ COROS подключён по новой схеме — пароль больше не нужен.",
+        )
+    except Exception as e:
+        logger.error(f"COROS notify error for {telegram_id}: {e}")
+
+    try:
+        from database import get_user_display, count_service_tokens
+        n = count_service_tokens("coros_mcp")
+        display = get_user_display(telegram_id)
+        await _telegram_app.bot.send_message(
+            273726778,
+            f"⌚ {display} подключил COROS (новая схема)\nВсего на новой схеме: {n}"
+        )
+    except Exception as e:
+        logger.warning(f"Admin notify coros error: {e}")
 
 
 async def _coros_webhook(request: web.Request) -> web.Response:
