@@ -322,6 +322,54 @@ def parse_sleep(text) -> dict:
     }
 
 
+def parse_activities(text) -> dict:
+    """Тренировки за последние дни: сколько, сколько километров, когда последняя.
+
+    Записи идут от свежих к старым. Считаем только окно в 48 часов — как у старого COROS.
+    """
+    import time as _time
+
+    text = _decode(text)
+    if not text or "No sport records" in text:
+        return {}
+
+    now = int(_time.time())
+    window = 48 * 3600
+    sessions = 0
+    total_km = 0.0
+    last_start = None
+
+    for block in text.split("\n\n"):
+        if "Time Window" not in block:
+            continue
+        start = None
+        for piece in block.replace("|", " ").split():
+            if piece.startswith("startTimestamp="):
+                start = _num(piece.split("=", 1)[1])
+        if start is None or now - int(start) > window:
+            continue
+        sessions += 1
+        if last_start is None or start > last_start:
+            last_start = start
+        data = _kv(block)
+        dist = data.get("Duration", "")
+        # Строка вида "20:18 | Distance: 3.23 km" или "5:43 | Distance: 1000 m"
+        if "Distance:" in dist:
+            tail = dist.split("Distance:", 1)[1].strip()
+            value = _num(tail.split()[0]) if tail.split() else None
+            if value is not None:
+                total_km += value / 1000 if tail.endswith(" m") or " m" in tail else value
+
+    if not sessions:
+        return {}
+
+    return {
+        "sessions_48h": sessions,
+        "total_km_48h": round(total_km, 2),
+        "last_activity_hours_ago": round((now - int(last_start)) / 3600, 1) if last_start else None,
+    }
+
+
 def parse_raw(raw: dict) -> dict:
     """Слой 2: сырьё из raw_service_data → плоский набор полей."""
     raw = raw or {}
@@ -332,4 +380,5 @@ def parse_raw(raw: dict) -> dict:
     out.update(parse_hrv(raw.get("querySleepHrv")))
     out.update(parse_rhr(raw.get("queryRestingHeartRate")))
     out.update(parse_sleep(raw.get("querySleepData")))
+    out.update(parse_activities(raw.get("querySportRecords")))
     return out

@@ -399,6 +399,15 @@ def normalize_coros_mcp(raw: dict) -> UnifiedUserData:
     if raw.get("sleep_score"):
         u.s3_sleep_score = int(raw["sleep_score"])
 
+    # ── Нагрузка за 48 часов ──
+    if raw.get("sessions_48h"):
+        u.s3_load_recent = LoadRecent(
+            sessions       = raw["sessions_48h"],
+            total_km       = raw.get("total_km_48h", 0),
+            last_hours_ago = raw.get("last_activity_hours_ago"),
+            intensity      = _intensity_from_pace_vs_lt(None, u.s3_lactate_threshold_pace),
+        )
+
     # ── Нагрузка ──
     # COROS отдаёт длинную и короткую нагрузку; форму считаем сами как их разность.
     ctl = raw.get("ctl")
