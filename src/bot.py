@@ -6645,8 +6645,8 @@ def main():
     app.add_handler(TypeHandler(Update, _activity_logger), group=-1)
 
     job_queue = app.job_queue
-    job_queue.run_daily(scheduled_recovery_prefetch, time=time(hour=16, minute=0))                       # 19:00 МСК — прогрев к рассылке
-    job_queue.run_daily(scheduled_evening,       time=time(hour=18, minute=30))                         # 21:30 МСК (временно, было 17:00 = 20:00 МСК)
+    job_queue.run_daily(scheduled_recovery_prefetch, time=time(hour=17, minute=0))                       # 20:00 МСК — прогрев к рассылке
+    job_queue.run_daily(scheduled_evening,       time=time(hour=18, minute=0))                          # 21:00 МСК (постоянно с 05.09)
     # PTB days: 0=вс, 1=пн … 6=сб → вт/пт = (2, 5), вс = (0,)
     job_queue.run_daily(scheduled_cache_refresh, time=time(hour=2,  minute=0),  days=(2, 5))            # 05:00 МСК вт/пт
     job_queue.run_daily(scheduled_morning,       time=time(hour=4,  minute=0),  days=(2, 5))            # 07:00 МСК вт/пт
