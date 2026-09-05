@@ -493,11 +493,42 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _show_main_menu(update, user, db_user_id)
 
 
+def _parse_cmd_date(arg: str) -> str | None:
+    """Дата из аргумента команды в формат базы ГГГГ-ММ-ДД.
+
+    8 цифр — ГГГГММДД, 4 цифры — ММДД с текущим годом.
+    Возвращает None, если разобрать не удалось.
+    """
+    arg = (arg or "").strip()
+    if not arg:
+        return None
+    if len(arg) == 4:
+        arg = f"{datetime.now().year}{arg}"
+    try:
+        return datetime.strptime(arg, "%Y%m%d").strftime("%Y-%m-%d")
+    except ValueError:
+        return None
+
+
 async def cmd_workout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db_user_id = _mark_user_active_if_needed(user.id, user.full_name, user.username)
-    msg = await update.message.reply_text("🔍 Ищу анонс, анализирую и подбираю группу...")
-    await _send_recommendation(user.id, user.full_name, context, long=False, msg=msg)
+
+    arg = context.args[0] if context.args else ""
+    target_date = _parse_cmd_date(arg)
+    if arg and not target_date:
+        await update.message.reply_text(
+            "Не понял дату. Формат: /workout 20260905 или /workout 0905"
+        )
+        return
+
+    if target_date:
+        msg = await update.message.reply_text(f"🔍 Ищу анонс на {arg}...")
+    else:
+        msg = await update.message.reply_text("🔍 Ищу анонс, анализирую и подбираю группу...")
+
+    await _send_recommendation(user.id, user.full_name, context, long=False, msg=msg,
+                               target_date=target_date)
 
 
 async def cmd_long(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3664,6 +3695,7 @@ async def _send_recommendation(
     live: dict | None = None,
     is_broadcast: bool = False,
     force_mode: str | None = None,
+    target_date: str | None = None,
 ):
     """И3: рекомендация из кэша workout_analysis + recommend_group/recommend_long.
     find_next_* используется ТОЛЬКО для детекта свежести анонса (post_id/edit_date) и
@@ -3675,7 +3707,7 @@ async def _send_recommendation(
     wtype = "long" if long else "interval"
 
     if live is None:
-        live = await (find_next_long_run() if long else find_next_workout())
+        live = await (find_next_long_run() if long else find_next_workout(target_date=target_date))
     cur_post = live.get("post_id") if live else None
     cur_date = live.get("workout_date") if live else None
     cur_edit = live.get("edit_date") if live else None

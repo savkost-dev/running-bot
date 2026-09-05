@@ -175,10 +175,13 @@ async def get_post_comments(post_id: int) -> list:
     return comments
 
 
-async def find_next_workout(only_interval: bool = True) -> dict | None:
+async def find_next_workout(only_interval: bool = True, target_date: str | None = None) -> dict | None:
     """
     Ищет ближайшую тренировку вт/пт в канале.
     Читает комментарии для поиска дополнительных групп.
+
+    target_date (Формат ГГГГ-ММ-ДД) — вернуть анонс ровно на эту дату.
+    Без него — прежнее поведение: ближайший будущий, иначе последний прошедший.
     """
     today = date.today()
     posts = await get_recent_posts(limit=50)
@@ -235,6 +238,11 @@ async def find_next_workout(only_interval: bool = True) -> dict | None:
         else:
             parsed["is_past"] = True
             past_workouts.append(parsed)
+
+    if target_date:
+        exact = [w for w in future_workouts + past_workouts
+                 if w["workout_date"] == target_date]
+        return exact[0] if exact else None
 
     if future_workouts:
         future_workouts.sort(key=lambda x: x["workout_date"])
