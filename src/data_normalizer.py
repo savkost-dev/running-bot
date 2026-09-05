@@ -360,6 +360,51 @@ def normalize_coros(raw: dict) -> UnifiedUserData:
     return u
 
 
+def normalize_coros_mcp(raw: dict) -> UnifiedUserData:
+    """COROS по новой схеме (MCP) → UnifiedUserData.
+
+    raw — плоский набор полей из coros_mcp.parse_raw.
+    Отдельно от normalize_coros: там свой формат и свои поля.
+    """
+    u = UnifiedUserData(sources=["coros_mcp"])
+
+    # ── Тренированность ──
+    if raw.get("vo2max"):
+        u.s3_vo2max = round(float(raw["vo2max"]), 1)
+
+    ltsp_sec = raw.get("threshold_pace_sec")
+    if ltsp_sec:
+        u.s3_lactate_threshold_pace = _sec_to_pace(int(ltsp_sec))
+        if not u.s3_vo2max:
+            u.s3_vo2max = _vdot_from_ltsp(int(ltsp_sec))
+        vdot = _vdot_from_ltsp(int(ltsp_sec))
+        if vdot:
+            u.s3_zones = _zones_from_vdot(vdot)
+
+    # ── Восстановление ──
+    # Суточный процент; пустое значение разборщик уже отсек — сюда приходит None.
+    if raw.get("recovery_pct") is not None:
+        u.s3_coros_recovery = int(raw["recovery_pct"])
+
+    # ── Нагрузка ──
+    # COROS отдаёт длинную и короткую нагрузку; форму считаем сами как их разность.
+    ctl = raw.get("ctl")
+    atl = raw.get("atl")
+    if ctl is not None or atl is not None:
+        ctl_v = float(ctl) if ctl is not None else None
+        atl_v = float(atl) if atl is not None else None
+        tsb = round(ctl_v - atl_v, 1) if ctl_v is not None and atl_v is not None else None
+        u.s3_load_chronic = LoadChronic(ctl=ctl_v, atl=atl_v, tsb=tsb,
+                                        summary=_tsb_summary(tsb))
+
+    if raw.get("date"):
+        u.data_dates["coros_mcp_measured"] = raw["date"]
+
+    logger.info(f"normalize_coros_mcp: vo2max={u.s3_vo2max} lt={u.s3_lactate_threshold_pace} "
+                f"ctl={ctl} atl={atl} rec={u.s3_coros_recovery}")
+    return u
+
+
 def normalize_polar(raw: dict) -> UnifiedUserData:
     """Polar → UnifiedUserData. Дополнительный сервис (один пользователь).
 
@@ -911,6 +956,25 @@ def _parse_strava_raw(raw: dict, athlete_cache: dict | None = None) -> dict:
     return out
 
 
+def _readiness_base(ctl, atl, tsb) -> float | None:
+    """База готовности 0-100 для источников без родного Training Readiness.
+
+    Считаем по ОТНОШЕНИЮ короткой нагрузки к длинной, а не по их разности:
+    разность зависит от объёмов бегуна и от единиц сервиса, отношение — нет.
+    Шкала: 0.8 → 100 (свежесть после отдыха), ~1.15 → 50 (обычная неделя),
+    1.5 → 0 (перегрузка). Без нагрузок — старый расчёт от формы.
+    """
+    try:
+        if ctl and atl and float(ctl) > 0:
+            ratio = float(atl) / float(ctl)
+            return max(0.0, min(100.0, (1.5 - ratio) / 0.7 * 100.0))
+    except (TypeError, ValueError, ZeroDivisionError):
+        pass
+    if tsb is None:
+        return None
+    return max(0.0, min(100.0, (float(tsb) + 20.0) / 0.4))
+
+
 def run_normalization(user_id: int) -> "UnifiedUserData | None":
     """Слой 2: читает raw_service_data из БД → нормализует → мёрджит → сохраняет в unified_cache.
 
@@ -922,7 +986,7 @@ def run_normalization(user_id: int) -> "UnifiedUserData | None":
     import json as _json
     import database as db
 
-    u_garmin = u_coros = u_polar = u_strava = u_whoop = None
+    u_garmin = u_coros = u_coros_mcp = u_polar = u_strava = u_whoop = None
 
     # Даты фиксации для каждого сервиса
     data_dates: dict = {}
@@ -948,6 +1012,19 @@ def run_normalization(user_id: int) -> "UnifiedUserData | None":
             u_coros = normalize_coros(parsed)
         except Exception as e:
             logger.warning(f"normalize_coros error user={user_id}: {e}")
+
+    # COROS по новой схеме (MCP) — отдельный источник, свой формат
+    raw_cm = db.get_raw_service_data(user_id, "coros_mcp")
+    if raw_cm:
+        data_dates["coros_mcp_fetched"] = raw_cm["fetched_at"]
+        try:
+            import coros_mcp as _cm
+            parsed = _cm.parse_raw(_json.loads(raw_cm["raw_json"]))
+            u_coros_mcp = normalize_coros_mcp(parsed)
+            if parsed.get("date"):
+                data_dates["coros_mcp_measured"] = parsed["date"]
+        except Exception as e:
+            logger.warning(f"normalize_coros_mcp error user={user_id}: {e}")
 
     # Polar
     raw_p = db.get_raw_service_data(user_id, "polar")
@@ -994,12 +1071,14 @@ def run_normalization(user_id: int) -> "UnifiedUserData | None":
         except Exception as e:
             logger.warning(f"normalize_whoop error user={user_id}: {e}")
 
-    if not any([u_garmin, u_coros, u_polar, u_strava, u_whoop]):
+    if not any([u_garmin, u_coros, u_coros_mcp, u_polar, u_strava, u_whoop]):
         logger.info(f"run_normalization: нет сырых данных для user={user_id}")
         return None
 
-    # Мёрдж: тренированность — garmin → coros → polar → strava
-    fitness_priority = [p for p in [u_garmin, u_coros, u_polar, u_strava] if p]
+    # Мёрдж: тренированность — garmin → coros_mcp → coros → polar → strava
+    # Новый COROS выше старого: там родное измерение VO2max и порога,
+    # у старого — расчёт из порога.
+    fitness_priority = [p for p in [u_garmin, u_coros_mcp, u_coros, u_polar, u_strava] if p]
     merged = merge(fitness_priority)
 
     # recovery_daily: универсальное суточное восстановление 0-100.
@@ -1007,6 +1086,7 @@ def run_normalization(user_id: int) -> "UnifiedUserData | None":
     # Один человек = одно устройство, конфликта нет.
     for val in (
         (u_garmin.s3_body_battery if u_garmin else None),
+        (u_coros_mcp.s3_coros_recovery if u_coros_mcp else None),
         (u_coros.s3_coros_recovery if u_coros else None),
         (u_polar.s3_recovery_daily if u_polar else None),
     ):
@@ -1038,15 +1118,25 @@ def run_normalization(user_id: int) -> "UnifiedUserData | None":
     # Garmin-юзеров не трогаем: родной TR приоритетен, Garmin BB в расчёт НЕ идёт.
     _tr_obj = merged.s3_training_readiness
     _has_native_tr = isinstance(_tr_obj, dict) and _tr_obj.get("score") is not None
+    # Из двух COROS берём тот, у кого форма реально есть: у старого она чаще пустая.
+    _c_any = next(
+        (c for c in (u_coros_mcp, u_coros)
+         if c and c.s3_load_chronic and c.s3_load_chronic.tsb is not None),
+        u_coros_mcp or u_coros,
+    )
     if not _has_native_tr and not u_garmin:
         _tsb = merged.s3_recovery_total
-        # Родной COROS Form (cti-ati из day_detail, только сегодняшний) приоритетнее Strava TSB
-        if (u_coros and u_coros.s3_load_chronic
-                and u_coros.s3_load_chronic.tsb is not None):
-            _tsb = u_coros.s3_load_chronic.tsb
+        # Родной COROS Form приоритетнее Strava TSB
+        if (_c_any and _c_any.s3_load_chronic
+                and _c_any.s3_load_chronic.tsb is not None):
+            _tsb = _c_any.s3_load_chronic.tsb
         if _tsb is not None:
-            _base = max(0.0, min(100.0, (float(_tsb) + 20.0) / 0.4))
-            _coros_rec = u_coros.s3_coros_recovery if u_coros else None
+            _lc = (_c_any.s3_load_chronic if (_c_any and _c_any.s3_load_chronic)
+                   else merged.s3_load_chronic)
+            _base = _readiness_base(
+                getattr(_lc, "ctl", None), getattr(_lc, "atl", None), _tsb)
+        if _tsb is not None and _base is not None:
+            _coros_rec = _c_any.s3_coros_recovery if _c_any else None
             if _coros_rec is not None:
                 _calc, _src = (_base * float(_coros_rec)) ** 0.5, "coros-calc"
             else:
@@ -1056,13 +1146,13 @@ def run_normalization(user_id: int) -> "UnifiedUserData | None":
             logger.info(f"run_normalization: расчётный TR={_score} ({_src}, tsb={_tsb}) user={user_id}")
 
     # load_recent: strava → garmin → coros
-    for p in [u_strava, u_garmin, u_coros]:
+    for p in [u_strava, u_garmin, u_coros, u_coros_mcp]:
         if p and p.s3_load_recent is not None:
             merged.s3_load_recent = p.s3_load_recent
             break
 
-    # load_chronic: strava → garmin → coros
-    for p in [u_strava, u_garmin, u_coros]:
+    # load_chronic: strava → garmin → coros_mcp → coros
+    for p in [u_strava, u_garmin, u_coros_mcp, u_coros]:
         if p and p.s3_load_chronic is not None:
             merged.s3_load_chronic = p.s3_load_chronic
             break
