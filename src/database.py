@@ -1759,6 +1759,7 @@ def get_latest_workout_analysis(
     current_post_id: int | None = None,
     current_workout_date: str | None = None,
     current_edit_date: str | None = None,
+    target_date: str | None = None,
 ) -> tuple[dict | None, str]:
     """Возвращает (analysis | None, status) для двухшагового флоу.
 
@@ -1770,23 +1771,42 @@ def get_latest_workout_analysis(
 
     current_* — что сейчас в канале (из find_next_*); сравнение по post_id/edit_date,
     без тяжёлого DeepSeek-анализа. Если current_post_id=None — статус по дате анализа.
+
+    target_date (ГГГГ-ММ-ДД) — взять разбор РОВНО на эту дату. Если его нет —
+    возвращает 'empty', а НЕ последний по времени (иначе подставляется чужая тренировка).
     """
     from datetime import date as _date
     today = _date.today().isoformat()
 
-    with get_connection() as conn:
-        row = conn.execute("""
-            SELECT * FROM workout_analysis
-            WHERE workout_type = ? AND is_valid = 1
-            ORDER BY workout_date DESC, created_at DESC
-            LIMIT 1
-        """, (workout_type,)).fetchone()
-    if not row:
-        return None, "empty"
+    if target_date:
+        with get_connection() as conn:
+            row = conn.execute("""
+                SELECT * FROM workout_analysis
+                WHERE workout_type = ? AND is_valid = 1 AND workout_date = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+            """, (workout_type, target_date)).fetchone()
+        if not row:
+            return None, "empty"
+    else:
+        with get_connection() as conn:
+            row = conn.execute("""
+                SELECT * FROM workout_analysis
+                WHERE workout_type = ? AND is_valid = 1
+                ORDER BY workout_date DESC, created_at DESC
+                LIMIT 1
+            """, (workout_type,)).fetchone()
+        if not row:
+            return None, "empty"
     cols = ["id", "post_id", "workout_date", "workout_type", "is_valid",
             "raw_text", "analyzed_json", "extra_groups_json",
             "analysis_mode", "created_at", "updated_at", "edit_date"]
     analysis = dict(zip(cols, row))
+
+    # Запрошена конкретная дата — свежесть кэша не проверяем: мы намеренно
+    # смотрим именно эту тренировку, а не ближайшую.
+    if target_date:
+        return analysis, ("current" if target_date >= today else "past")
 
     # Свежий анонс в канале новее кэша → кэш ещё в проработке
     if current_post_id is not None:

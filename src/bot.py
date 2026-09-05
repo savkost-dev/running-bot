@@ -3712,7 +3712,8 @@ async def _send_recommendation(
     cur_date = live.get("workout_date") if live else None
     cur_edit = live.get("edit_date") if live else None
 
-    row, status = get_latest_workout_analysis(wtype, cur_post, cur_date, cur_edit)
+    row, status = get_latest_workout_analysis(wtype, cur_post, cur_date, cur_edit,
+                                              target_date=target_date)
 
     async def _out(text, markup=None, parse_mode=None):
         # 19.08.2026: в лонг-карточке остаются ссылки из анонса (регистрация, камера
@@ -5807,7 +5808,8 @@ async def _build_analysis_and_user_data(db_user_id: int, target_date: str | None
     cur_post = live.get("post_id") if live else None
     cur_date = live.get("workout_date") if live else None
     cur_edit = live.get("edit_date") if live else None
-    row, status = get_latest_workout_analysis("interval", cur_post, cur_date, cur_edit)
+    row, status = get_latest_workout_analysis("interval", cur_post, cur_date, cur_edit,
+                                              target_date=target_date)
     if status == "empty" or row is None:
         return None, None, None, None
     try:
