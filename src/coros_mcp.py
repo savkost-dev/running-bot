@@ -21,11 +21,16 @@ SERVICE = coros_oauth.SERVICE          # "coros_mcp"
 PROTOCOL_VERSION = "2025-06-18"
 
 # Что забираем: нагрузка (CTL/ATL), форма (VO2max, пороговый темп, прогнозы),
-# восстановление. Список тренировок пока не берём — он вторичен.
+# восстановление, HRV во сне, пульс покоя, сон и тренировки за последние дни.
+# Этого набора хватает, чтобы полностью заменить старое подключение по паролю.
 TOOLS = [
     ("queryTrainingLoadAssessment", {}),
     ("queryFitnessAssessmentOverview", {}),
     ("queryRecoveryStatus", {}),
+    ("querySleepHrv", {}),
+    ("queryRestingHeartRate", {}),
+    ("querySleepData", {}),
+    ("querySportRecords", "RECENT_ACTIVITIES"),
 ]
 
 
@@ -66,9 +71,22 @@ async def _rpc(session, token: str, method: str, params: dict, req_id: int) -> d
     return _parse_reply(text)
 
 
-async def _call_tool(session, token: str, name: str, args: dict, req_id: int) -> str | None:
+def _tool_args(args):
+    """Аргументы инструмента. Для тренировок нужно окно дат — считаем от сегодня."""
+    if args != "RECENT_ACTIVITIES":
+        return args
+    from datetime import date, timedelta
+    today = date.today()
+    return {
+        "startDate": (today - timedelta(days=3)).strftime("%Y%m%d"),
+        "endDate": today.strftime("%Y%m%d"),
+        "limit": 20,
+    }
+
+
+async def _call_tool(session, token: str, name: str, args, req_id: int) -> str | None:
     reply = await _rpc(session, token, "tools/call",
-                       {"name": name, "arguments": args}, req_id)
+                       {"name": name, "arguments": _tool_args(args)}, req_id)
     return _text_of(reply)
 
 
@@ -108,6 +126,14 @@ async def fetch_raw(db_user_id: int) -> dict | None:
 
     for (name, _), value in zip(TOOLS, results):
         raw[name] = None if isinstance(value, Exception) else value
+
+    # В ответе про HRV после сводки идёт ряд замеров каждые 10 минут за неделю —
+    # это десятки килобайт, которые мы не используем. Обрезаем до сводки.
+    hrv_text = raw.get("querySleepHrv")
+    if hrv_text:
+        cut = hrv_text.find("Sleep HRV Time Series")
+        if cut > 0:
+            raw["querySleepHrv"] = hrv_text[:cut]
 
     if not any(v for v in raw.values()):
         logger.info(f"COROS MCP fetch_raw: пусто для user_id={db_user_id}")
@@ -235,6 +261,67 @@ def parse_recovery(text) -> dict:
     }
 
 
+def parse_hrv(text) -> dict:
+    """HRV во сне: берём самую свежую ночь — среднее и личную базу."""
+    text = _decode(text)
+    if not text or "No data" in text:
+        return {}
+    # Сводка идёт от свежей даты к старой — нужен первый блок с числом
+    out = {}
+    for line in text.split("\n"):
+        line = line.strip()
+        if line.startswith("HRV Avg:") and "hrv" not in out:
+            out["hrv"] = _num(line.split(":", 1)[1].replace("ms", "").split("\u2014")[0])
+        elif line.startswith("Baseline:") and "hrv_baseline" not in out:
+            out["hrv_baseline"] = _num(line.split(":", 1)[1].replace("ms", ""))
+        if len(out) == 2:
+            break
+    return out
+
+
+def parse_rhr(text) -> dict:
+    """Пульс покоя: первая строка с числом — самая свежая дата."""
+    text = _decode(text)
+    if not text or "No data" in text and "bpm" not in text:
+        return {}
+    for line in text.split("\n"):
+        if "bpm" not in line:
+            continue
+        value = _num(line.split(":", 1)[-1].replace("bpm", ""))
+        if value:
+            return {"rhr": int(value)}
+    return {}
+
+
+def _sleep_hours(value) -> float | None:
+    """'7h 51min' → 7.85 часа."""
+    if not value:
+        return None
+    hours = minutes = 0
+    for part in str(value).split():
+        if part.endswith("h"):
+            hours = _num(part[:-1]) or 0
+        elif part.endswith("min"):
+            minutes = _num(part[:-3]) or 0
+    total = float(hours) + float(minutes) / 60
+    return round(total, 2) if total > 0 else None
+
+
+def parse_sleep(text) -> dict:
+    """Сон: берём самую свежую ночь. Записи идут от старых к новым — нужен последний."""
+    text = _decode(text)
+    if not text or "No sleep data" in text:
+        return {}
+    blocks = [b for b in text.split("\n\n") if "Sleep Score" in b or "Main Sleep:" in b]
+    if not blocks:
+        return {}
+    data = _kv(blocks[-1])
+    return {
+        "sleep_score": int(_num(data.get("Sleep Score"))) if _num(data.get("Sleep Score")) else None,
+        "sleep_hours": _sleep_hours(data.get("Main Sleep")),
+    }
+
+
 def parse_raw(raw: dict) -> dict:
     """Слой 2: сырьё из raw_service_data → плоский набор полей."""
     raw = raw or {}
@@ -242,4 +329,7 @@ def parse_raw(raw: dict) -> dict:
     out.update(parse_load(raw.get("queryTrainingLoadAssessment")))
     out.update(parse_fitness(raw.get("queryFitnessAssessmentOverview")))
     out.update(parse_recovery(raw.get("queryRecoveryStatus")))
+    out.update(parse_hrv(raw.get("querySleepHrv")))
+    out.update(parse_rhr(raw.get("queryRestingHeartRate")))
+    out.update(parse_sleep(raw.get("querySleepData")))
     return out

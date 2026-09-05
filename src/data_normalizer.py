@@ -386,6 +386,19 @@ def normalize_coros_mcp(raw: dict) -> UnifiedUserData:
     if raw.get("recovery_pct") is not None:
         u.s3_coros_recovery = int(raw["recovery_pct"])
 
+    if raw.get("hrv"):
+        u.s3_hrv = float(raw["hrv"])
+    if raw.get("hrv_baseline"):
+        u.s3_hrv_baseline = float(raw["hrv_baseline"])
+    if raw.get("rhr"):
+        u.s3_rhr = int(raw["rhr"])
+
+    # ── Сон ──
+    if raw.get("sleep_hours"):
+        u.s3_sleep_hours = float(raw["sleep_hours"])
+    if raw.get("sleep_score"):
+        u.s3_sleep_score = int(raw["sleep_score"])
+
     # ── Нагрузка ──
     # COROS отдаёт длинную и короткую нагрузку; форму считаем сами как их разность.
     ctl = raw.get("ctl")
