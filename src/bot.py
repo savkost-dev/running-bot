@@ -4778,6 +4778,9 @@ async def _sync_night_services(db_user_id: int) -> None:
     if get_token(db_user_id, "coros"):
         import coros as _c
         await _c.fetch_raw(db_user_id)
+    if get_token(db_user_id, "coros_mcp"):
+        import coros_mcp as _cm
+        await _cm.fetch_raw(db_user_id)
     if get_token(db_user_id, "polar"):
         import polar as _p
         await _p.fetch_raw(db_user_id)
