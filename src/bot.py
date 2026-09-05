@@ -5800,10 +5800,10 @@ async def _send_prompt_text(send_fn, prompt: str) -> None:
         await send_fn(prompt[i:i + chunk_size])
 
 
-async def _build_analysis_and_user_data(db_user_id: int):
+async def _build_analysis_and_user_data(db_user_id: int, target_date: str | None = None):
     """Возвращает (analysis, user_data, workout_dict, weather_line) или (None, ...) при ошибке."""
     import json as _json
-    live = await find_next_workout()
+    live = await find_next_workout(target_date=target_date)
     cur_post = live.get("post_id") if live else None
     cur_date = live.get("workout_date") if live else None
     cur_edit = live.get("edit_date") if live else None
@@ -5840,7 +5840,14 @@ async def p_b_self_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
     admin_tid = update.effective_user.id
     db_user_id = get_or_create_user(admin_tid, update.effective_user.full_name or "admin")
-    analysis, user_data, workout_dict, _ = await _build_analysis_and_user_data(db_user_id)
+
+    arg = context.args[0] if context.args else ""
+    target_date = _parse_cmd_date(arg)
+    if arg and not target_date:
+        await update.message.reply_text("Не понял дату. Формат: /p_b 20260905 или /p_b 0905")
+        return
+
+    analysis, user_data, workout_dict, _ = await _build_analysis_and_user_data(db_user_id, target_date)
     if analysis is None:
         await update.message.reply_text("😔 Нет анонса интервальной тренировки.")
         return
