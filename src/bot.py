@@ -1208,7 +1208,7 @@ def _build_help_text(is_admin: bool) -> str:
         f"Dusty Dumbbells Running Bot  v{VERSION}\n\n"
         "Команды:\n"
         "/start — главное меню\n"
-        "/workout — рекомендация группы для вт/пт тренировки\n"
+        "/workout — рекомендация группы для вт/пт тренировки (можно с датой: /workout 0901)\n"
         "/long — рекомендация для воскресного Long Run\n"
         "/morning — утренняя проверка восстановления\n"
         "/report — разбор прошедшей тренировки: графики и анализ от ИИ\n"
@@ -1254,8 +1254,8 @@ def _build_help_text(is_admin: bool) -> str:
             "/w_user_light — то же, но принудительно в лёгком режиме (fast)\n"
             "/report_user — разбор тренировки выбранного пользователя (/report_user 18886572975 — конкретная по id/маске)\n"
             "/l_user — лонг для выбранного пользователя\n"
-            "/p_b — промпт варианта B для себя\n"
-            "/p_b_user — промпт варианта B для выбранного пользователя\n"
+            "/p_b — промпт варианта B для себя (можно с датой: /p_b 0901)\n"
+            "/p_b_user — промпт варианта B для выбранного пользователя (можно с датой: /p_b_user 0901)\n"
             "/p_a — промпт варианта A для себя\n"
             "/p_a_user — промпт варианта A для выбранного пользователя\n"
             "/p_analyze — промпт Шага 1 (анализ анонса)\n"
@@ -5862,15 +5862,23 @@ async def p_b_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not users:
         await update.message.reply_text("Нет пользователей в базе.")
         return
+
+    arg = context.args[0] if context.args else ""
+    target_date = _parse_cmd_date(arg)
+    if arg and not target_date:
+        await update.message.reply_text("Не понял дату. Формат: /p_b_user 20260905 или /p_b_user 0905")
+        return
+    date_suffix = f"_{target_date.replace('-', '')}" if target_date else ""
+
     keyboard = [
         [InlineKeyboardButton(
             u["name"] + (f" (@{u['username']})" if u.get("username") else ""),
-            callback_data=f"pb_user_{u['db_user_id']}"
+            callback_data=f"pb_user_{u['db_user_id']}{date_suffix}"
         )]
         for u in users
     ]
     await update.message.reply_text(
-        "📋 Промпт B — выбери пользователя:",
+        f"📋 Промпт B{f' на {target_date}' if target_date else ''} — выбери пользователя:",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
@@ -5881,10 +5889,12 @@ async def pb_user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await query.answer("Нет доступа.")
         return
     await query.answer()
-    db_user_id = int(query.data.rsplit("_", 1)[-1])
+    parts = query.data.split("_")            # pb_user_<id> или pb_user_<id>_<ГГГГММДД>
+    db_user_id = int(parts[2])
+    target_date = _parse_cmd_date(parts[3]) if len(parts) > 3 else None
     profile = get_user_profile(db_user_id) or {}
     user_name = profile.get("name") or profile.get("username") or f"user_{db_user_id}"
-    analysis, user_data, workout_dict, _ = await _build_analysis_and_user_data(db_user_id)
+    analysis, user_data, workout_dict, _ = await _build_analysis_and_user_data(db_user_id, target_date)
     if analysis is None:
         await query.edit_message_text("😔 Нет анонса интервальной тренировки.")
         return
@@ -6618,7 +6628,7 @@ def main():
     app.add_handler(CallbackQueryHandler(w_user_light_callback, pattern=r"^wul_\d+$"))
     app.add_handler(CallbackQueryHandler(report_user_callback, pattern=r"^report_user_\d+$"))
     app.add_handler(CallbackQueryHandler(l_user_callback,   pattern=r"^l_user_\d+$"))
-    app.add_handler(CallbackQueryHandler(pb_user_callback,  pattern=r"^pb_user_\d+$"))
+    app.add_handler(CallbackQueryHandler(pb_user_callback,  pattern=r"^pb_user_\d+(_\d{8})?$"))
     app.add_handler(CallbackQueryHandler(pa_user_callback,  pattern=r"^pa_user_\d+$"))
     app.add_handler(CallbackQueryHandler(panalyze_callback, pattern=r"^panalyze_(interval|long)$"))
     app.add_handler(CallbackQueryHandler(report_callback,   pattern=r"^get_report$"))
