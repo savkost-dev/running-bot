@@ -1306,7 +1306,7 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Матрица пересечений: диагональ — всего по сервису, клетки — вместе
     order = [("strava", "Str"), ("garmin", "Gar"), ("coros", "Cor"),
-             ("whoop", "Whp"), ("polar", "Pol")]
+             ("coros_mcp", "CoM"), ("whoop", "Whp"), ("polar", "Pol")]
     svc = o["services"]
     mrows = ["     " + "".join(f"{lbl:>5}" for _, lbl in order) + f"{'один':>7}"]
     for i, (k1, l1) in enumerate(order):
@@ -1435,6 +1435,7 @@ async def cmd_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ("whoop",  "⚪ Whoop"),
         ("garmin", "🔵 Garmin"),
         ("coros",  "🔴 COROS"),
+        ("coros_mcp", "⌚ COROS без пароля"),
         ("polar",  "❄️ Polar"),
     ]
 
