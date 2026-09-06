@@ -2080,13 +2080,18 @@ async def cmd_rebrief(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Нет доступа.")
         return
     import json as _json
-    arg = (context.args[0] if context.args else "").strip()
+    # 06.09.2026: /rebrief [дата] :: текст — разовое уточнение тренера для режимов (не хранится).
+    _raw_args = " ".join(context.args or [])
+    _hint = ""
+    if "::" in _raw_args:
+        _raw_args, _hint = (s.strip() for s in _raw_args.split("::", 1))
+    arg = _raw_args.split()[0] if _raw_args.split() else ""
     wdate = None
     if arg:
         wdate = _parse_cmd_date(arg)
         if not wdate:
             await update.message.reply_text(
-                "Формат: /rebrief 20260804 или /rebrief 0804 (без даты — последний)")
+                "Формат: /rebrief 20260804 или /rebrief 0804 (без даты — последний), уточнение — после ::")
             return
 
     row = _analysis_row(wdate)
@@ -2101,11 +2106,12 @@ async def cmd_rebrief(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     msg = await update.message.reply_text(
-        f"🧭 Пересобираю режимы за {found_date} (deep, 2-3 минуты)…")
+        f"🧭 Пересобираю режимы за {found_date} (deep, 2-3 минуты)…"
+        + (f"\n❗ Уточнение: {_hint}" if _hint else ""))
     try:
         import announce_brief
         text = await asyncio.to_thread(
-            announce_brief.build_admin_brief, result, post_id, "deep")
+            announce_brief.build_admin_brief, result, post_id, "deep", _hint)
     except Exception as e:
         await msg.edit_text(f"Ошибка генерации режимов: {str(e)[:200]}")
         return
@@ -2216,8 +2222,14 @@ async def cmd_reanalyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
         await update.message.reply_text("Нет доступа.")
         return
+    # 06.09.2026: /reanalyze :: текст — разовое уточнение тренера на один переразбор (не хранится).
+    _raw_args = " ".join(context.args or [])
+    _hint = _raw_args.split("::", 1)[1].strip() if "::" in _raw_args else ""
+    context.user_data["reanalyze_hint"] = _hint
+    _hint_line = f"\n❗ Уточнение для этого прогона: {_hint}\n" if _hint else ""
     await update.message.reply_text(
         "💾 Боевой переразбор — результат ЗАПИШЕТСЯ в базу (анализ + эталоны).\n"
+        f"{_hint_line}"
         "Какую тренировку разобрать?",
         reply_markup=InlineKeyboardMarkup([[
             InlineKeyboardButton("⚡ Интервальная (вт/пт)", callback_data="reanalyze_interval"),
@@ -2924,6 +2936,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not workout or not workout.get("post_id"):
             await query.edit_message_text("😔 Не нашёл подходящую тренировку в канале.")
             return
+        # 06.09.2026: разовое уточнение из /reanalyze :: — подклеиваем к комментариям поста
+        # с пометкой, которую промт Шага 1 уже читает с высшим приоритетом. Нигде не сохраняется.
+        _hint = (context.user_data.pop("reanalyze_hint", "") or "").strip()
+        if _hint:
+            workout["comments_text"] = ((workout.get("comments_text") or "").rstrip()
+                                       + f"\n[ИНСТРУКЦИЯ АДМИНИСТРАТОРА] {_hint}")
         await query.edit_message_text(
             f"💾 Боевой переразбор через DeepSeek (режим {mode})...\nМожет занять 1-2 минуты."
         )

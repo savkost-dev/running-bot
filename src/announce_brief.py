@@ -126,10 +126,14 @@ def build_modes_prompt(result: dict) -> str:
     return _MODES_PROMPT + json.dumps(payload, ensure_ascii=False)
 
 
-def _modes_from_ai(result: dict, mode: str) -> list | None:
+def _modes_from_ai(result: dict, mode: str, admin_hint: str = "") -> list | None:
     """Шаг 1.5: список режимов из ИИ. None при сбое (бриф уйдёт без таблицы)."""
     import claude_advisor
-    raw = claude_advisor.ask_text(build_modes_prompt(result), mode)
+    prompt = build_modes_prompt(result)
+    if admin_hint:
+        # 06.09.2026: разовое уточнение тренера из /rebrief :: — выше всего остального, не хранится
+        prompt += f"\n\nУТОЧНЕНИЕ ТРЕНЕРА (важнее анализа и правил выше): {admin_hint}\n"
+    raw = claude_advisor.ask_text(prompt, mode)
     if not raw:
         return None
     raw = raw.strip()
@@ -194,12 +198,12 @@ def format_brief(result: dict, modes: list | None) -> str:
     return "\n".join(lines)
 
 
-def build_admin_brief(result: dict, post_id: int, mode: str) -> str | None:
+def build_admin_brief(result: dict, post_id: int, mode: str, admin_hint: str = "") -> str | None:
     """Собирает бриф. Синхронный (ИИ-вызов внутри) — вызывать через asyncio.to_thread.
     Только интервальные: для лонга бриф не строится."""
     if not result.get("is_valid") or result.get("workout_type") != "interval":
         return None
-    modes = _modes_from_ai(result, mode)
+    modes = _modes_from_ai(result, mode, admin_hint)
     if modes:
         try:
             _cache_modes(post_id, modes)
