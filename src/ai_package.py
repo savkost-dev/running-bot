@@ -346,6 +346,52 @@ def _apply_plan_distances(splits, plan_steps) -> int:
     return n
 
 
+def _drop_extra_first_lap(splits, plan_steps) -> bool:
+    """Сбрасывает лишний ПЕРВЫЙ круг факта (короткая разминка перед работой).
+
+    Сравнивает первые ДВА фактических круга с ПЕРВЫМ шагом плана: у каждого считается
+    отклонение по дистанции плюс отклонение по темпу (в долях от плана). Кто в сумме
+    ближе — тот и есть первый отрезок; если это второй круг — первый убирается
+    и разбор идёт со второго. Целевой темп — середина диапазона шага; если темпа
+    в плане нет, сравнение идёт только по дистанции.
+
+    Общая для всех источников (COROS/Garmin/Strava). Звать ДО разметки кругов по плану:
+    разметка накладывается по порядку с первого круга. Если круги УЖЕ размечены (Garmin-тренировка
+    по эталону из часов) — не трогаем ничего: там шаги проставили сами часы.
+    Мутирует splits, возвращает True, если первый круг убран."""
+    laps = (splits.get("lapDTOs") or []) if isinstance(splits, dict) else []
+    laps = [l for l in laps if isinstance(l, dict)]
+    if len(laps) < 2 or not plan_steps:
+        return False
+    if any(l.get("wktStepIndex") is not None for l in laps):
+        return False
+
+    step = plan_steps[0]
+    p_dist = step.get("dist")
+    bounds = step.get("bounds")
+    p_pace = (bounds[0] + bounds[1]) / 2 if bounds else None
+    if not p_dist:
+        return False
+
+    def gap(lap):
+        """Отклонение от шага плана: доля по дистанции + доля по темпу. None — сравнить нечем."""
+        d, t = lap.get("distance"), lap.get("duration")
+        if not d or not t:
+            return None
+        total = abs(d - p_dist) / p_dist
+        if p_pace:
+            total += abs(t / (d / 1000) - p_pace) / p_pace
+        return total
+
+    first, second = gap(laps[0]), gap(laps[1])
+    if first is None or second is None:
+        return False
+    if second < first:
+        splits["lapDTOs"] = (splits.get("lapDTOs") or [])[1:]
+        return True
+    return False
+
+
 async def _garmin_candidate(db_user_id, selector):
     """Кандидат из Garmin (последняя DD-активность) или None.
     План: Garmin workout по workoutId, иначе фолбэк на workout_templates."""
@@ -373,6 +419,7 @@ async def _garmin_candidate(db_user_id, selector):
         plan_wkt = _template_json(wdate, wgroup)
         if plan_wkt:
             plan_steps = ar._flatten_plan_steps(plan_wkt)
+    _drop_extra_first_lap(splits, plan_steps)
     _assign_button_laps(splits, plan_wkt, plan_steps)
     if _no_gps(act, "garmin"):
         n = _apply_plan_distances(splits, plan_steps)
@@ -416,7 +463,11 @@ async def _strava_candidate(db_user_id, selector):
     if not plan_wkt:
         return None
     plan_steps = ar._flatten_plan_steps(plan_wkt)
-    splits = await strava.get_activity_splits(token, act.get("id"), plan_wkt)
+    # Круги берём БЕЗ разметки: сначала сбрасываем лишний первый круг (разминка),
+    # и только потом накладываем план — как у COROS и кнопочных лэпов Garmin.
+    splits = await strava.get_activity_splits(token, act.get("id"), None)
+    _drop_extra_first_lap(splits, plan_steps)
+    _assign_button_laps(splits, plan_wkt, plan_steps)
     if _no_gps(act, "strava"):
         n = _apply_plan_distances(splits, plan_steps)
         print(f"/report: Strava-активность без спутников — плановые дистанции у {n} лэпов")
@@ -425,15 +476,55 @@ async def _strava_candidate(db_user_id, selector):
             "wtype_key": "running", "splits": splits, "plan_steps": plan_steps, "pts": None}
 
 
-def _choose_candidate(g, s):
-    """Более новый по дате-из-имени; при равенстве — Garmin."""
-    if g and not s:
-        return g
-    if s and not g:
-        return s
-    if not g and not s:
+async def _coros_candidate(db_user_id, selector):
+    """Кандидат из COROS (новая схема, MCP) — последняя DD-активность или None.
+    Имя тренировки COROS отдаёт в поле Location (без имени там место — под маску не попадёт).
+    Круги — РУЧНЫЕ отрезки с часов (автоматические километры отбрасываются).
+    План всегда из workout_templates — эталон из часов у COROS не поддерживается;
+    без плана размечать круги нечем → None.
+    pts нет (COROS не отдаёт 1 Гц через этот путь) — ЧСС-перед/сплиты-200 будут пусты."""
+    import coros_mcp
+    records = coros_mcp.parse_sport_records(
+        await coros_mcp.fetch_sport_records(db_user_id, days=30))
+    runs = [r for r in records if re.search(r"DD[-_]", str(r.get("name") or ""))]
+    # На порядок выдачи не полагаемся: самая свежая по дате-из-имени — первой.
+    runs.sort(key=lambda r: _date_from_name(r.get("name"))[0] or "", reverse=True)
+    if selector is None:
+        rec = runs[0] if runs else None
+    elif str(selector).isdigit():
+        rec = next((r for r in records if str(r.get("label_id")) == str(selector)), None)
+    else:
+        rec = next((r for r in runs if str(selector) in str(r.get("name") or "")), None)
+    if not rec:
         return None
-    return s if (s["wdate"] or "") > (g["wdate"] or "") else g
+    name = rec.get("name")
+    wdate, wgroup = _date_from_name(name)
+    plan_wkt = _template_json(wdate, wgroup)
+    if not plan_wkt:
+        return None
+    splits = coros_mcp.parse_lap_data(
+        await coros_mcp.fetch_lap_data(db_user_id, rec["label_id"], rec["sport_type"]))
+    if not splits:
+        return None
+    plan_steps = ar._flatten_plan_steps(plan_wkt)
+    _drop_extra_first_lap(splits, plan_steps)
+    _assign_button_laps(splits, plan_wkt, plan_steps)
+    return {"source": "coros", "name": name, "act_id": rec["label_id"],
+            "display_date": wdate, "wdate": wdate, "wgroup": wgroup,
+            "wtype_key": "running", "splits": splits, "plan_steps": plan_steps, "pts": None}
+
+
+def _choose_candidate(*cands):
+    """Более новый по дате-из-имени; при равенстве — по порядку аргументов
+    (Garmin, COROS, Strava). Пустые кандидаты пропускаются."""
+    cands = [c for c in cands if c]
+    if not cands:
+        return None
+    best = cands[0]
+    for c in cands[1:]:
+        if (c["wdate"] or "") > (best["wdate"] or ""):
+            best = c
+    return best
 
 
 async def build_package(db_user_id: int, selector=None) -> dict:
@@ -441,11 +532,12 @@ async def build_package(db_user_id: int, selector=None) -> dict:
     selector: None → последняя DD; маска 'DD_YYYYMMDD'; либо activityId.
     Возвращает {ok, msg, name, text}. text — пакет без промпта (PROMPT добавляет вызывающий)."""
     g = await _garmin_candidate(db_user_id, selector)
+    c = await _coros_candidate(db_user_id, selector)
     s = await _strava_candidate(db_user_id, selector)
-    cand = _choose_candidate(g, s)
+    cand = _choose_candidate(g, c, s)
     if not cand:
         sel = f" по «{selector}»" if selector else ""
-        return {"ok": False, "msg": f"DD-активность{sel} не найдена (Garmin/Strava)."}
+        return {"ok": False, "msg": f"DD-активность{sel} не найдена (Garmin/COROS/Strava)."}
 
     name = cand["name"]
     act_id = cand["act_id"]

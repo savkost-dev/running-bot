@@ -10,6 +10,7 @@ COROS MCP — слой 1: сырое чтение данных по новой �
 import asyncio
 import json
 import logging
+from contextlib import asynccontextmanager
 
 import aiohttp
 
@@ -90,6 +91,50 @@ async def _call_tool(session, token: str, name: str, args, req_id: int) -> str |
     return _text_of(reply)
 
 
+@asynccontextmanager
+async def _connect(db_user_id: int):
+    """Общая часть связи: токен, сессия и приветствие (initialize).
+
+    Отдаёт (session, token); (None, None) — если доступа нет или связь не поднялась.
+    Поверх неё строятся тонкие функции: fetch_raw, fetch_lap_data.
+    """
+    token = await coros_oauth.ensure_valid_token(db_user_id)
+    if not token:
+        logger.info(f"COROS MCP: нет токена для user_id={db_user_id}")
+        yield None, None
+        return
+
+    timeout = aiohttp.ClientTimeout(total=60)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        init = await _rpc(session, token, "initialize", {
+            "protocolVersion": PROTOCOL_VERSION,
+            "capabilities": {},
+            "clientInfo": {"name": "DoDick", "version": "1.0"},
+        }, 1)
+        if not init:
+            logger.error(f"COROS MCP: initialize не прошёл, user_id={db_user_id}")
+            yield None, None
+            return
+        yield session, token
+
+
+async def fetch_lap_data(db_user_id: int, label_id: str, sport_type: int) -> str | None:
+    """Круги одной тренировки: сырой ответ queryActivityLapData as is, БЕЗ парсинга.
+
+    None — если доступа нет или ответ пустой. Разбор — слой 2.
+    """
+    try:
+        async with _connect(db_user_id) as (session, token):
+            if not session:
+                return None
+            return await _call_tool(session, token, "queryActivityLapData",
+                                    {"labelId": str(label_id),
+                                     "sportType": int(sport_type)}, 2)
+    except Exception as e:
+        logger.error(f"COROS MCP fetch_lap_data error user_id={db_user_id}: {e}")
+        return None
+
+
 async def fetch_raw(db_user_id: int) -> dict | None:
     """Слой 1: сырые ответы COROS MCP as is, БЕЗ парсинга.
 
@@ -98,22 +143,10 @@ async def fetch_raw(db_user_id: int) -> dict | None:
     """
     import database as db
 
-    token = await coros_oauth.ensure_valid_token(db_user_id)
-    if not token:
-        logger.info(f"COROS MCP fetch_raw: нет токена для user_id={db_user_id}")
-        return None
-
-    timeout = aiohttp.ClientTimeout(total=60)
     raw: dict = {}
     try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            init = await _rpc(session, token, "initialize", {
-                "protocolVersion": PROTOCOL_VERSION,
-                "capabilities": {},
-                "clientInfo": {"name": "DoDick", "version": "1.0"},
-            }, 1)
-            if not init:
-                logger.error(f"COROS MCP fetch_raw: initialize не прошёл, user_id={db_user_id}")
+        async with _connect(db_user_id) as (session, token):
+            if not session:
                 return None
 
             results = await asyncio.gather(*[
@@ -368,6 +401,108 @@ def parse_activities(text) -> dict:
         "total_km_48h": round(total_km, 2),
         "last_activity_hours_ago": round((now - int(last_start)) / 3600, 1) if last_start else None,
     }
+
+
+# Группы кругов у COROS: 10 — автоматические километры, 2 — ручные отрезки (кнопка на часах),
+# 11 — пятикилометровки, -1 — итог за тренировку. Для разбора нужны только ручные.
+LAP_GROUP_MANUAL = 2
+
+
+def parse_lap_data(text) -> dict | None:
+    """Сырой ответ queryActivityLapData → ручные отрезки в формате {"lapDTOs": [...]}.
+
+    Формат тот же, что у Garmin и у переходника Strava — чтобы рисовалки
+    и разбор работали одинаково. Дистанция у COROS в сантиметрах — переводим в метры,
+    каденс уже полный (удваивать не надо, в отличие от Strava).
+    Разметка по плану (wktStepIndex, intensityType) — не здесь, а там, где есть план.
+
+    None — если ответ пустой или ручных отрезков в нём нет.
+    """
+    text = _decode(text)
+    if not text:
+        return None
+    try:
+        data = json.loads(text)
+    except ValueError:
+        logger.error("COROS MCP parse_lap_data: ответ не разобрался как JSON")
+        return None
+
+    group = next((g for g in (data.get("lapGroups") or [])
+                  if g.get("type") == LAP_GROUP_MANUAL), None)
+    laps = (group or {}).get("laps") or []
+    if not laps:
+        return None
+
+    out = []
+    for lp in laps:
+        dist_cm = _num(lp.get("distance"))
+        out.append({
+            "wktStepIndex": None,
+            "intensityType": "",
+            "distance": round(dist_cm / 100, 1) if dist_cm is not None else None,
+            "duration": _num(lp.get("time")),
+            "averageHR": _num(lp.get("avgHr")),
+            "maxHR": _num(lp.get("maxHr")),
+            "averageRunCadence": _num(lp.get("avgCadence")),
+            "averagePower": _num(lp.get("avgPower")),
+        })
+    return {"lapDTOs": out}
+
+
+async def fetch_sport_records(db_user_id: int, days: int = 30) -> str | None:
+    """Список тренировок за последние N дней: сырой ответ querySportRecords as is.
+
+    Отдельно от fetch_raw: там окно в три дня для ночного забора, здесь нужно
+    широкое окно — искать DD-тренировку для разбора. None — если доступа нет или пусто.
+    """
+    from datetime import date, timedelta
+    today = date.today()
+    args = {
+        "startDate": (today - timedelta(days=days)).strftime("%Y%m%d"),
+        "endDate": today.strftime("%Y%m%d"),
+        "limit": 50,
+    }
+    try:
+        async with _connect(db_user_id) as (session, token):
+            if not session:
+                return None
+            return await _call_tool(session, token, "querySportRecords", args, 2)
+    except Exception as e:
+        logger.error(f"COROS MCP fetch_sport_records error user_id={db_user_id}: {e}")
+        return None
+
+
+def parse_sport_records(text) -> list:
+    """Список тренировок → [{name, label_id, sport_type}] в порядке ответа.
+
+    Имя тренировки COROS кладёт в поле Location; если имени нет, там оказывается
+    место («Москва Бег по стадиону») — отбор по маске DD_… делает вызывающий.
+    Строка вида 'LabelId: 4800… | SportType: 100' — два значения в одной строке.
+    """
+    text = _decode(text)
+    if not text or "No sport records" in text:
+        return []
+
+    out = []
+    for block in text.split("\n\n"):
+        if "LabelId" not in block:
+            continue
+        name = label_id = sport_type = None
+        for line in block.split("\n"):
+            line = line.strip()
+            if line.startswith("Location:"):
+                name = line.split(":", 1)[1].strip()
+            elif line.startswith("LabelId:"):
+                for piece in line.split("|"):
+                    key, _, value = piece.partition(":")
+                    key, value = key.strip(), value.strip()
+                    if key == "LabelId":
+                        label_id = value
+                    elif key == "SportType":
+                        sport_type = int(value) if value.isdigit() else None
+        if label_id and sport_type is not None:
+            out.append({"name": name, "label_id": label_id, "sport_type": sport_type})
+    return out
 
 
 def parse_raw(raw: dict) -> dict:
