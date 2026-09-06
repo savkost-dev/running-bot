@@ -3636,6 +3636,7 @@ async def _send_ai_variant_b(
                 "schedule": analysis.get("schedule", ""),
                 "work_text": analysis.get("work_text", ""),
             }
+        advice["low_recovery"] = bool(scenario_ctx.get("low_recovery"))
         msg_text = claude_advisor.format_evening_message(
             advice | {"athlete_line": _athlete_line(db_user_id)}, workout_for_render, stats, weather_line=weather_line
         )
@@ -4504,6 +4505,8 @@ async def _build_variant_b_prompt(
         workout_dict or {},
         (recovery or {}).get("data_fetched_at"),
     )
+    # 06.09.2026: флаг низкого восстановления по единой шкале — для жёлтой покраски рекомендации в карточке
+    scenario_ctx["low_recovery"] = claude_advisor.recovery_is_low(recovery)
     # Максимально повторяемый темп по скоростным блокам (см. PROCESS_MAP.md):
     # отсекает группы, чей финишный темп быстрее повторяемого для этой длины.
     _repeat_caps = []

@@ -2744,6 +2744,18 @@ def _sanitize_group_name(name: str) -> str:
     return m.group(0).replace(',', '.') if m else s[:5]
 
 
+LOW_RECOVERY_THRESHOLD = 90  # ВРЕМЕННО для проверки покраски, вернуть 40
+
+
+def recovery_is_low(recovery: dict | None) -> bool:
+    """Низкое восстановление по единой шкале (recovery_score). Нет данных — не низкое."""
+    try:
+        score = (recovery or {}).get("recovery_score")
+        return score is not None and float(score) < LOW_RECOVERY_THRESHOLD
+    except (TypeError, ValueError):
+        return False
+
+
 def _pct_bar(pct: int, width: int = 8, color: str = '🟩') -> str:
     filled = max(0, min(width, round(pct / 100 * width)))
     return color * filled + '⬜' * (width - filled)
@@ -3221,13 +3233,20 @@ def format_evening_message(advice: dict, workout: dict, stats: dict | None = Non
             except ValueError:
                 return (1, 99.0)
         sorted_s = sorted(suitability, key=_grp_key)
-        # 20.08.2026: группа, которую дали бы при нормальном восстановлении — синей полосой.
-        # Берём только если занижение действительно было и группа есть в шкале (защита от выдумок).
+        # 06.09.2026: при низком восстановлении (единая шкала) рекомендованная группа — жёлтой полосой,
+        # проценты и выбор ИИ не меняются; ниже сноска с группой на ступень медленнее (если она ≥ 50%).
         _rec_grp = str(advice.get("recommended_group", "")).strip()
-        _if_rec = str(advice.get("group_if_recovered") or "").strip()
-        if not advice.get("lowered_by_recovery") or _if_rec in ("", "None", "null", _rec_grp) \
-                or _if_rec not in {str(i.get("group", "")).strip() for i in sorted_s}:
-            _if_rec = ""
+        _low_rec = bool(advice.get("low_recovery"))
+        _lower_grp = ""
+        if _low_rec:
+            _nums = [str(i.get("group", "")).strip() for i in sorted_s
+                     if any(c.isdigit() for c in str(i.get("group", "")))]
+            if _rec_grp in _nums and _nums.index(_rec_grp) + 1 < len(_nums):
+                _cand = _nums[_nums.index(_rec_grp) + 1]
+                _cand_pct = next((int(i.get("percentage", 0)) for i in sorted_s
+                                  if str(i.get("group", "")).strip() == _cand), 0)
+                if _cand_pct >= 50:
+                    _lower_grp = _cand
         lines.append("📊 <b>Подходимость групп:</b>")
         has_dual = False
         for item in sorted_s:
@@ -3237,7 +3256,7 @@ def format_evening_message(advice: dict, workout: dict, stats: dict | None = Non
             comment = _SUIT_EPITHET_MAP.get(comment_raw, comment_raw[:10])
             comment_str = f" — {_html.escape(comment)}" if comment else ""
             g_disp = g if any(c.isdigit() for c in g) else "Здоровье"
-            _bar_color = "🟨" if (_if_rec and str(item.get("group", "")).strip() == _if_rec) else "🟩"
+            _bar_color = "🟨" if (_low_rec and str(item.get("group", "")).strip() == _rec_grp) else "🟩"
             lines.append(f"<code>Гр.{g_disp:<4} {_pct_bar(pct, color=_bar_color)} {pct:>3}%{comment_str}</code>")
             # Второй ряд (🟦) — если есть значимая альтернатива (другая цель)
             alt_pct = item.get("alt_pct")
@@ -3253,8 +3272,10 @@ def format_evening_message(advice: dict, workout: dict, stats: dict | None = Non
                                if it.get('alt_pct') is not None and it.get('alt_label')), "другая цель")
             lines.append(f"🟩 — по твоим силам сегодня (цель: {spec_label})")
             lines.append(f"🟦 — ценность этой зоны если бы цель была: {_html.escape(legend_alt)}")
-        if _if_rec:
-            lines.append("<i>🟨 — группа при нормальном восстановлении</i>")
+        if _low_rec:
+            _tail = (f"разумнее группа {_html.escape(_lower_grp)}" if _lower_grp
+                     else "разумнее мягче темп или меньше повторов")
+            lines.append(f"<i>🟨 — из-за слабого восстановления основная рекомендация под риском: {_tail}</i>")
         lines.append(sep)
 
     # Прогноз восстановления к старту (вариант B)
