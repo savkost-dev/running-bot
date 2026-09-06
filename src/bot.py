@@ -1387,7 +1387,8 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"💬 Обратной связи: {s.get('feedback_total', 0)} "
         f"(баги: {s.get('feedback_bugs', 0)}, идеи: {s.get('feedback_features', 0)})"
     )
-    await update.message.reply_text(text, parse_mode="HTML")
+    await update.message.reply_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(
+        [[InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu_new")]]))
 
 
 def _fmt_user_ref(name: str | None, username: str | None) -> str:
@@ -6142,7 +6143,8 @@ async def cmd_activity(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             _chunk = []
         _chunk.append(_ln)
     if _chunk:
-        await update.message.reply_text("\n".join(_chunk))
+        await update.message.reply_text("\n".join(_chunk), reply_markup=InlineKeyboardMarkup(
+            [[InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu_new")]]))
 
 
 async def cmd_profile_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
