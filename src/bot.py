@@ -2083,11 +2083,11 @@ async def cmd_rebrief(update: Update, context: ContextTypes.DEFAULT_TYPE):
     arg = (context.args[0] if context.args else "").strip()
     wdate = None
     if arg:
-        digits = "".join(ch for ch in arg if ch.isdigit())
-        if len(digits) != 8:
-            await update.message.reply_text("Формат: /rebrief 20260804 (или без даты — последний)")
+        wdate = _parse_cmd_date(arg)
+        if not wdate:
+            await update.message.reply_text(
+                "Формат: /rebrief 20260804 или /rebrief 0804 (без даты — последний)")
             return
-        wdate = f"{digits[:4]}-{digits[4:6]}-{digits[6:]}"
 
     row = _analysis_row(wdate)
     if not row:
@@ -2128,12 +2128,11 @@ async def cmd_brief(update: Update, context: ContextTypes.DEFAULT_TYPE):
     arg = (context.args[0] if context.args else "").strip()
     wdate = None
     if arg:
-        digits = "".join(ch for ch in arg if ch.isdigit())
-        if len(digits) != 8:
+        wdate = _parse_cmd_date(arg)
+        if not wdate:
             await update.message.reply_text(
-                "Формат: /brief 20260804 (или /brief без даты — последний)")
+                "Формат: /brief 20260804 или /brief 0804 (без даты — последний)")
             return
-        wdate = f"{digits[:4]}-{digits[4:6]}-{digits[6:]}"
 
     row = _analysis_row(wdate)
     if not row:
@@ -2175,12 +2174,11 @@ async def cmd_brief_p(update: Update, context: ContextTypes.DEFAULT_TYPE):
     arg = (context.args[0] if context.args else "").strip()
     wdate = None
     if arg:
-        digits = "".join(ch for ch in arg if ch.isdigit())
-        if len(digits) != 8:
+        wdate = _parse_cmd_date(arg)
+        if not wdate:
             await update.message.reply_text(
-                "Формат: /brief_p 20260904 (или /brief_p без даты — последний)")
+                "Формат: /brief_p 20260904 или /brief_p 0904 (без даты — последний)")
             return
-        wdate = f"{digits[:4]}-{digits[4:6]}-{digits[6:]}"
     row = _analysis_row(wdate)
     if not row:
         await update.message.reply_text(
