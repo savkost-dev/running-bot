@@ -39,22 +39,6 @@ def save_pace_feedback(user_id: int, workout_date: str, answer: str,
         conn.commit()
 
 
-def get_users_profile_only() -> list:
-    """Активные с заполненным профилем, но без единого токена трекера:
-    (telegram_id, name, username). Для адресной рассылки /msg_service."""
-    with get_connection() as conn:
-        return conn.execute("""
-            SELECT u.telegram_id, u.name, u.username
-            FROM users u
-            JOIN user_profile up ON u.id = up.user_id
-            LEFT JOIN user_preferences p ON p.user_id = u.id
-            WHERE (up.vo2max IS NOT NULL OR up.lactate_threshold_pace IS NOT NULL)
-              AND COALESCE(p.is_active, 1) = 1
-              AND u.id NOT IN (SELECT user_id FROM user_tokens)
-            ORDER BY u.id
-        """).fetchall()
-
-
 # Кому шлём массовые сообщения: условие отбора для каждого вида получателей.
 # Общая часть (только активные, три поля, сортировка) живёт в get_users_by_audience.
 _HAS_PROFILE = "(up.vo2max IS NOT NULL OR up.lactate_threshold_pace IS NOT NULL)"
@@ -121,22 +105,6 @@ def get_pace_feedback_last(target_date: str | None = None) -> tuple:
             return row[0], counts, by_group
     except Exception:
         return None, {}, {}
-
-
-def get_users_empty() -> list:
-    """Активные без заполненного профиля и без токенов трекеров («молчуны»):
-    (telegram_id, name, username). Для адресной рассылки /msg_service."""
-    with get_connection() as conn:
-        return conn.execute("""
-            SELECT u.telegram_id, u.name, u.username
-            FROM users u
-            LEFT JOIN user_profile up ON u.id = up.user_id
-            LEFT JOIN user_preferences p ON p.user_id = u.id
-            WHERE COALESCE(p.is_active, 1) = 1
-              AND (up.user_id IS NULL OR (up.vo2max IS NULL AND up.lactate_threshold_pace IS NULL))
-              AND u.id NOT IN (SELECT user_id FROM user_tokens)
-            ORDER BY u.id
-        """).fetchall()
 
 
 def count_service_tokens(service: str) -> int:
