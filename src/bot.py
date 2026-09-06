@@ -1262,6 +1262,7 @@ def _build_help_text(is_admin: bool) -> str:
             "/activity — активность по дням и топ действий за 14 дней"
             "\n/mailing — отчёт по рассылке поимённо (без даты — последняя; /mailing 2026-08-18)"
             "\n/brief — бриф режимов из кэша (/brief 20260804 — за дату); если режимов нет — кнопка «Сгенерировать режимы» (deep, без полного переанализа)"
+            "\n/brief_p — показать промт режимов целиком (/brief_p 20260904 — за дату), ИИ не зовётся"
             "\n/rebrief — ПРИНУДИТЕЛЬНО пересобрать режимы заново (/rebrief 20260804), без переанализа анонса"
             "\n/resend_evening — дослать вечернюю тем, кому не ушла (/resend_evening 20260814 [fast|smart|deep])"
             "\n/msg_user <id> <текст> — написать юзеру от имени бота"
@@ -2159,6 +2160,42 @@ async def cmd_brief(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     import announce_brief
     text = announce_brief.format_brief(result, modes)
+    for i in range(0, len(text), 4096):
+        await update.message.reply_text(text[i:i + 4096])
+
+
+async def cmd_brief_p(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/brief_p [YYYYMMDD] — показать промт режимов целиком (admin).
+    Без даты — последний анализ. ИИ НЕ зовётся: это ровно тот текст,
+    который уходит в ИИ при сборке режимов (announce_brief.build_modes_prompt)."""
+    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+        await update.message.reply_text("Нет доступа.")
+        return
+    import json as _json
+    arg = (context.args[0] if context.args else "").strip()
+    wdate = None
+    if arg:
+        digits = "".join(ch for ch in arg if ch.isdigit())
+        if len(digits) != 8:
+            await update.message.reply_text(
+                "Формат: /brief_p 20260904 (или /brief_p без даты — последний)")
+            return
+        wdate = f"{digits[:4]}-{digits[4:6]}-{digits[6:]}"
+    row = _analysis_row(wdate)
+    if not row:
+        await update.message.reply_text(
+            f"Анализ {'за ' + wdate if wdate else ''} не найден.")
+        return
+    _post_id, found_date, ajson = row
+    try:
+        result = _json.loads(ajson or "{}")
+    except Exception:
+        await update.message.reply_text("Анализ не распарсился.")
+        return
+    import announce_brief
+    prompt = announce_brief.build_modes_prompt(result)
+    header = f"🧭 Промт режимов за {found_date} ({len(prompt)} знаков):\n\n"
+    text = header + prompt
     for i in range(0, len(text), 4096):
         await update.message.reply_text(text[i:i + 4096])
 
@@ -6609,6 +6646,7 @@ def main():
     app.add_handler(CommandHandler("feedbacks", cmd_feedbacks))
     app.add_handler(CommandHandler("analyze_test", cmd_analyze_test))
     app.add_handler(CommandHandler("brief", cmd_brief))
+    app.add_handler(CommandHandler("brief_p", cmd_brief_p))
     app.add_handler(CommandHandler("rebrief", cmd_rebrief))
     app.add_handler(CommandHandler("shadow_caps", cmd_shadow_caps))
     app.add_handler(CommandHandler("resend_evening", cmd_resend_evening))

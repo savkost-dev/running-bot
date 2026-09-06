@@ -111,17 +111,25 @@ _MODES_PROMPT = (
 )
 
 
-def _modes_from_ai(result: dict, mode: str) -> list | None:
-    """Шаг 1.5: список режимов из ИИ. None при сбое (бриф уйдёт без таблицы)."""
-    import claude_advisor
+def build_modes_prompt(result: dict) -> str:
+    """Промт режимов целиком: текст правил + данные тренировки.
+
+    Единственное место сборки: его зовёт и боевой вызов ИИ (_modes_from_ai),
+    и показ промта админу (/brief_p) — чтобы они не разъехались.
+    """
     payload = {
         "work_text": result.get("work_text") or "",
         "summary": result.get("summary") or "",
         "structure": result.get("structure") or [],
         "groups": result.get("groups") or [],
     }
-    raw = claude_advisor.ask_text(
-        _MODES_PROMPT + json.dumps(payload, ensure_ascii=False), mode)
+    return _MODES_PROMPT + json.dumps(payload, ensure_ascii=False)
+
+
+def _modes_from_ai(result: dict, mode: str) -> list | None:
+    """Шаг 1.5: список режимов из ИИ. None при сбое (бриф уйдёт без таблицы)."""
+    import claude_advisor
+    raw = claude_advisor.ask_text(build_modes_prompt(result), mode)
     if not raw:
         return None
     raw = raw.strip()
