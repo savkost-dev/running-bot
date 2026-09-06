@@ -3853,7 +3853,12 @@ async def _send_recommendation(
         weather_line_b = format_weather_for_message(weather_b) if weather_b else ""
         if msg:
             try:
-                await msg.edit_text("🧪 ИИ анализирует тренировку и подбирает группу... (до 1-2 мин)")
+                if rec_mode == "fast":
+                    _wait_txt = "🧪 ИИ подбирает группу… (лёгкий режим, около 10 секунд)"
+                else:
+                    _wait_txt = ("🧪 ИИ анализирует тренировку и подбирает группу… (до 3-5 мин)\n"
+                                 "Быстрее — 🪶 Лёгкий режим в настройках: рекомендация за ~10 секунд с хорошей точностью.")
+                await msg.edit_text(_wait_txt)
             except Exception:
                 pass
         await _send_ai_variant_b(telegram_id, analysis, user_data, context,
