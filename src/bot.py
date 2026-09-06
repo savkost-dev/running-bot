@@ -1417,8 +1417,12 @@ async def cmd_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines.append(f"{i}. {name_str}{uname_str} — {date_fmt}")
 
     text = "\n".join(lines)
-    for i in range(0, len(text), 4096):
-        await update.message.reply_text(text[i:i + 4096])
+    # Текст режется на куски по 4096 — кнопку вешаем только на последний.
+    chunks = [text[i:i + 4096] for i in range(0, len(text), 4096)]
+    for n, chunk in enumerate(chunks, start=1):
+        markup = InlineKeyboardMarkup([[InlineKeyboardButton(
+            "🏠 Главное меню", callback_data="main_menu_new")]]) if n == len(chunks) else None
+        await update.message.reply_text(chunk, reply_markup=markup)
 
 
 async def cmd_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
