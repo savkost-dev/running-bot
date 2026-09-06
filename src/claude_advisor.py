@@ -2744,7 +2744,7 @@ def _sanitize_group_name(name: str) -> str:
     return m.group(0).replace(',', '.') if m else s[:5]
 
 
-LOW_RECOVERY_THRESHOLD = 90  # ВРЕМЕННО для проверки покраски, вернуть 40
+LOW_RECOVERY_THRESHOLD = 40  # единая шкала recovery_score (0-100): ниже — восстановление низкое
 
 
 def recovery_is_low(recovery: dict | None) -> bool:
