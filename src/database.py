@@ -55,6 +55,41 @@ def get_users_profile_only() -> list:
         """).fetchall()
 
 
+# Кому шлём массовые сообщения: условие отбора для каждого вида получателей.
+# Общая часть (только активные, три поля, сортировка) живёт в get_users_by_audience.
+_HAS_PROFILE = "(up.vo2max IS NOT NULL OR up.lactate_threshold_pace IS NOT NULL)"
+_NO_PROFILE = "(up.user_id IS NULL OR (up.vo2max IS NULL AND up.lactate_threshold_pace IS NULL))"
+_HAS_TOKEN = "u.id IN (SELECT user_id FROM user_tokens)"
+_NO_TOKEN = "u.id NOT IN (SELECT user_id FROM user_tokens)"
+
+AUDIENCES = {
+    "active": "",                                            # все активные
+    "tracker": f"AND {_HAS_TOKEN}",                           # у кого есть любой трекер
+    "profileonly": f"AND {_HAS_PROFILE} AND {_NO_TOKEN}",     # профиль без трекера
+    "emptyusers": f"AND {_NO_PROFILE} AND {_NO_TOKEN}",       # ни профиля, ни трекера
+}
+
+
+def get_users_by_audience(kind: str = "active") -> list:
+    """Получатели массовой рассылки: [(telegram_id, name, username)].
+
+    kind — ключ из AUDIENCES. Везде только активные; различается только условие отбора.
+    Неизвестный kind — ошибка, а не тихая рассылка всем подряд.
+    """
+    if kind not in AUDIENCES:
+        raise ValueError(f"get_users_by_audience: неизвестный вид получателей {kind!r}")
+    with get_connection() as conn:
+        return conn.execute(f"""
+            SELECT u.telegram_id, u.name, u.username
+            FROM users u
+            LEFT JOIN user_profile up ON u.id = up.user_id
+            LEFT JOIN user_preferences p ON p.user_id = u.id
+            WHERE COALESCE(p.is_active, 1) = 1
+              {AUDIENCES[kind]}
+            ORDER BY u.id
+        """).fetchall()
+
+
 def get_pace_feedback_last(target_date: str | None = None) -> tuple:
     """(workout_date, {answer: count}, {group: {answer: count}}) по кнопкам темпа.
     target_date — взять конкретную тренировку (напр. дату последней рассылки);

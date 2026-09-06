@@ -3388,12 +3388,9 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if text.strip().lower() in ("отмена", "cancel", "/cancel"):
             await update.message.reply_text("Отменено, ничего не отправлено.")
             return
-        if svc == "profileonly":
-            from database import get_users_profile_only
-            targets = get_users_profile_only()
-        elif svc == "emptyusers":
-            from database import get_users_empty
-            targets = get_users_empty()
+        if _audience_name(svc):
+            from database import get_users_by_audience
+            targets = get_users_by_audience(svc)
         else:
             targets = get_users_with_service_full(svc)
         sent, failed = 0, []
@@ -3407,8 +3404,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 failed.append(f"{name or tg_id}: {type(e).__name__}")
             await asyncio.sleep(0.05)
-        _lbl = {"profileonly": "только профиль",
-                "emptyusers": "без профиля и трекера"}.get(svc) or _svc_name(svc)
+        _lbl = _audience_name(svc) or _svc_name(svc)
         report = f"✅ {_lbl}: отправлено {sent} из {len(targets)}"
         if failed:
             report += "\n❌ Не дошло:\n" + "\n".join(failed[:20])
@@ -6186,6 +6182,20 @@ async def profile_user_callback(update: Update, context: ContextTypes.DEFAULT_TY
     await query.edit_message_text(text)
 
 
+# Кому шлём массовые сообщения кроме сервисов: ключ database.AUDIENCES — эмодзи — название.
+_MSG_AUDIENCES = [
+    ("active", "📣", "Все активные"),
+    ("tracker", "⌚", "С трекером"),
+    ("profileonly", "📝", "Только профиль (без трекера)"),
+    ("emptyusers", "👻", "Без профиля и трекера"),
+]
+
+
+def _audience_name(kind: str) -> str | None:
+    """Название вида получателей для подписей; None — если это сервис, а не вид."""
+    return next((n.lower() for k, _, n in _MSG_AUDIENCES if k == kind), None)
+
+
 async def cmd_msg_service(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/msg_service (admin) — рассылка текста всем, у кого подключён выбранный сервис.
     Показывает кнопки по _SERVICES с числом получателей; текст ждём следующим сообщением."""
@@ -6196,13 +6206,11 @@ async def cmd_msg_service(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         n = len(get_users_with_service_full(svc))
         rows.append([InlineKeyboardButton(f"{emoji} {name} — {n}",
                                           callback_data=f"msgsvc_{svc}")])
-    from database import get_users_profile_only, get_users_empty
-    rows.append([InlineKeyboardButton(
-        f"📝 Только профиль (без трекера) — {len(get_users_profile_only())}",
-        callback_data="msgsvc_profileonly")])
-    rows.append([InlineKeyboardButton(
-        f"👻 Без профиля и трекера — {len(get_users_empty())}",
-        callback_data="msgsvc_emptyusers")])
+    from database import get_users_by_audience
+    for kind, emoji, name in _MSG_AUDIENCES:
+        rows.append([InlineKeyboardButton(
+            f"{emoji} {name} — {len(get_users_by_audience(kind))}",
+            callback_data=f"msgsvc_{kind}")])
     await update.message.reply_text(
         "✉️ Кому отправить? Выбери сервис — получат все, у кого он подключён.",
         reply_markup=InlineKeyboardMarkup(rows))
@@ -6216,14 +6224,11 @@ async def msg_service_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         return
     await query.answer()
     svc = query.data.rsplit("_", 1)[-1]
-    if svc == "profileonly":
-        from database import get_users_profile_only
-        n = len(get_users_profile_only())
-        lbl = "«только профиль»"
-    elif svc == "emptyusers":
-        from database import get_users_empty
-        n = len(get_users_empty())
-        lbl = "«без профиля и трекера»"
+    aud = _audience_name(svc)
+    if aud:
+        from database import get_users_by_audience
+        n = len(get_users_by_audience(svc))
+        lbl = f"«{aud}»"
     else:
         n = len(get_users_with_service_full(svc))
         lbl = _svc_name(svc)
