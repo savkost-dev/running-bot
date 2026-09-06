@@ -537,7 +537,9 @@ async def build_package(db_user_id: int, selector=None) -> dict:
     cand = _choose_candidate(g, c, s)
     if not cand:
         sel = f" по «{selector}»" if selector else ""
-        return {"ok": False, "msg": f"DD-активность{sel} не найдена (Garmin/COROS/Strava)."}
+        return {"ok": False, "msg": f"DD-активность{sel} не найдена (Garmin/COROS/Strava).\n"
+                                     f"Назови тренировку по маске DD_ГГГГММДД-группа_lvl — например "
+                                     f"DD_20260904-3.5_lvl — и отмечай отрезки кнопкой круга на часах."}
 
     name = cand["name"]
     act_id = cand["act_id"]
