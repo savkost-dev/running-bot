@@ -1166,7 +1166,8 @@ def _build_mailing_report(date: str, sent: list | None = None) -> str:
                 rs = r["evening_recovery_score"]
                 mark = "↓" if r["lowered_by_recovery"] else ""
                 nick = f" (@{r['username']})" if r.get("username") else ""
-                lines.append(f"   {r['name']}{nick} (rec={rs if rs is not None else '—'}{mark})")
+                pace = {"faster": " 🚀", "ok": " 🎯", "slower": " 🐢"}.get(r.get("pace_answer"), "")
+                lines.append(f"   {r['name']}{nick} (rec={rs if rs is not None else '—'}{mark}){pace}")
     return "\n".join(lines)
 
 

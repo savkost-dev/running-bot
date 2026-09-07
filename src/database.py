@@ -1361,9 +1361,11 @@ def get_recommendations_for_date(workout_date: str) -> list[dict]:
         rows = conn.execute("""
             SELECT COALESCE(u.name, u.username, 'user_' || lr.user_id),
                    lr.recommended_group, lr.evening_recovery_score, lr.lowered_by_recovery,
-                   u.username, u.telegram_id
+                   u.username, u.telegram_id, pf.answer
             FROM last_recommendation lr
             JOIN users u ON u.id = lr.user_id
+            LEFT JOIN pace_feedback pf
+                   ON pf.user_id = lr.user_id AND pf.workout_date = lr.workout_date
             WHERE lr.workout_date = ?
             ORDER BY lr.recommended_group, COALESCE(u.name, u.username)
         """, (workout_date,)).fetchall()
@@ -1375,6 +1377,7 @@ def get_recommendations_for_date(workout_date: str) -> list[dict]:
             "lowered_by_recovery": bool(r[3]) if r[3] is not None else False,
             "username": r[4],
             "telegram_id": r[5],
+            "pace_answer": r[6],
         }
         for r in rows
     ]
