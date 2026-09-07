@@ -6718,8 +6718,8 @@ def main():
     app.add_handler(TypeHandler(Update, _activity_logger), group=-1)
 
     job_queue = app.job_queue
-    job_queue.run_daily(scheduled_recovery_prefetch, time=time(hour=17, minute=0))                       # 20:00 МСК — прогрев к рассылке
-    job_queue.run_daily(scheduled_evening,       time=time(hour=18, minute=0))                          # 21:00 МСК (постоянно с 05.09)
+    job_queue.run_daily(scheduled_recovery_prefetch, time=time(hour=16, minute=5))                       # 19:05 МСК — прогрев к рассылке
+    job_queue.run_daily(scheduled_evening,       time=time(hour=17, minute=0))                          # 20:00 МСК (вернули 06.09)
     # PTB days: 0=вс, 1=пн … 6=сб → вт/пт = (2, 5), вс = (0,)
     job_queue.run_daily(scheduled_cache_refresh, time=time(hour=2,  minute=0),  days=(2, 5))            # 05:00 МСК вт/пт
     job_queue.run_daily(scheduled_morning,       time=time(hour=4,  minute=0),  days=(2, 5))            # 07:00 МСК вт/пт
@@ -6728,7 +6728,7 @@ def main():
     job_queue.run_repeating(scheduled_new_workout_check, interval=1800, first=60)                       # каждые 30 мин
     job_queue.run_repeating(scheduled_wakeup_poll, interval=900, first=120)                              # каждые 15 мин (окно 06:00–09:00 МСК внутри)
     job_queue.run_repeating(check_new_users, interval=300, first=90)                                     # каждые 5 мин — новые записи в users
-    job_queue.run_daily(scheduled_brief_comment, time=time(hour=16, minute=5))                           # 19:05 МСК — бриф до рассылки
+    job_queue.run_daily(scheduled_brief_comment, time=time(hour=16, minute=0))                           # 19:00 МСК — бриф до рассылки
 
     import oauth_server as _oauth
     _oauth.set_telegram_app(app)
