@@ -828,14 +828,13 @@ async def cmd_connect_garmin(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 async def cmd_connect_coros(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/connect_coros — старое подключение по паролю; с 06.09.2026 только подсказка."""
     _mark_user_active_if_needed(update.effective_user.id, update.effective_user.full_name, update.effective_user.username)
     await update.message.reply_text(
-        "Подключение COROS\n\n"
-        "Email и пароль хранятся на сервере в зашифрованном виде (AES-256) — "
-        "в открытом виде они нигде не сохраняются.\n\n"
-        "Введи email от аккаунта COROS:"
+        "Подключение COROS по паролю больше не используется.\n\n"
+        "Зайди в настройки подключений и нажми «⌚ COROS без пароля» — "
+        "вход происходит на сайте COROS, бот пароль не видит."
     )
-    context.user_data["awaiting_coros"] = "email"
 
 
 async def cmd_connect_polar(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2330,11 +2329,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     elif query.data == "connect_coros_btn":
-        context.user_data["awaiting_coros"] = "email"
+        # 06.09.2026: подключение COROS по паролю больше не предлагаем — только без пароля.
+        # Кнопка остаётся на экране (отключение работает), но ничего не спрашивает.
         await query.edit_message_text(
-            "Подключение COROS\n\n"
-            "Email и пароль хранятся в зашифрованном виде (AES-256).\n\n"
-            "Введи email от аккаунта COROS:"
+            "Подключение COROS по паролю больше не используется.\n\n"
+            "Нажми «⌚ COROS без пароля» — вход происходит на сайте COROS, бот пароль не видит."
         )
 
     elif query.data == "connect_coros_oauth_btn":
