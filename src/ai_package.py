@@ -1019,23 +1019,29 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
                     row += ["—", "—", "—"]
                 col += 3
             sec_rows.append(row)
-            # Раскладка по 200 м: один повтор, один рабочий отрезок, >1 км, есть GPS-сплиты.
+            # Раскладка по 200 м (один повтор, есть GPS-сплиты): один рабочий отрезок ≥1 км
+            # или несколько рабочих, все по ~1 км. Строка k = k-й кусок каждого отрезка.
             work_st = [st for st in blk["steps"] if metas[st]["role"] == "work"]
-            if n_series == 1 and len(work_st) == 1:
-                st = work_st[0]
-                lap = ser.get(st)
-                sp = (lap or {}).get("sp200")
-                if lap and sp and (lap.get("dist") or 0) > 1000:
-                    m = metas[st]
-                    et = ar._seg_etalon(m, i)
-                    col = 1 + 3 * blk["steps"].index(st)
-                    for k, p in enumerate(sp, 1):
-                        dev, color = _dev(p, et)
-                        sub = [f"{i}·{k}"] + [""] * (len(sec_headers) - 1)
+            dists = [(ser.get(st) or {}).get("dist") or 0 for st in work_st]
+            ok = n_series == 1 and work_st and (
+                (len(work_st) == 1 and dists[0] >= 1000)
+                or (len(work_st) > 1 and all(950 <= d <= 1050 for d in dists)))
+            if ok:
+                sps = {st: (ser.get(st) or {}).get("sp200") for st in work_st}
+                n_sub = max((len(s) for s in sps.values() if s), default=0)
+                for k in range(1, n_sub + 1):
+                    sub = [f"{i}·{k}"] + [""] * (len(sec_headers) - 1)
+                    for st in work_st:
+                        sp = sps.get(st)
+                        if not sp or k > len(sp):
+                            continue
+                        p = sp[k - 1]
+                        dev, color = _dev(p, ar._seg_etalon(metas[st], i))
+                        col = 1 + 3 * blk["steps"].index(st)
                         sub[col:col + 3] = [_fmt_time(p * 0.2), _fmt_pace(p), dev]
-                        sec_rows.append(sub)
                         if color:
-                            sec_fill[(len(sec_rows), col + 2)] = _FILL[color]
+                            sec_fill[(len(sec_rows) + 1, col + 2)] = _FILL[color]
+                    sec_rows.append(sub)
         avg_row = ["ср."]
         for st in blk["steps"]:
             durs = [s[st]["dur"] for s in blk["series"] if st in s]
