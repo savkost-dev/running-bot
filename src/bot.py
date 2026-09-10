@@ -6505,7 +6505,8 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
         if card:
             stacked = await build_charts_stacked(
                 res.get("splits"), res.get("plan_steps"), res["name"],
-                "/tmp", str(db_user_id), dark=False, source=res.get("source") or "")
+                "/tmp", str(db_user_id), dark=False, source=res.get("source") or "",
+                splits200=res.get("splits200"))
             chart_items = [(p, c) for p, c in (
                 (card, "@DD_adviser_bot · dodick.run"),
                 (stacked, "Графики · @DD_adviser_bot · dodick.run")) if p]

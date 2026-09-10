@@ -742,7 +742,7 @@ def _series_model(ordered, plan_steps):
 
 async def build_charts_stacked(splits, plan_steps, name: str, out_dir: str,
                                tag: str, dark: bool = False,
-                               source: str = "") -> str | None:
+                               source: str = "", splits200=None) -> str | None:
     """Оба графика (работа + отдых) на ОДНОЙ вертикальной картинке под телефон:
     сверху интервалы (сегменты/эталон/тренд/дельты), снизу отдых (коридоры).
     Логика отрисовки повторяет activity_review._plot_work_segmented/_plot_rest,
@@ -754,6 +754,9 @@ async def build_charts_stacked(splits, plan_steps, name: str, out_dir: str,
 
     ar.DARK_MODE = dark
     ordered = ar._ordered_laps(splits)
+    if splits200 and len(splits200) == len(ordered):
+        for lap, sp in zip(ordered, splits200):
+            lap["sp200"] = sp
     work_roles, x_ticks, rest_paces, S = ar._segment_model(ordered, plan_steps)
     work_roles = [r for r in work_roles if r["ys"]]
     if not work_roles:
@@ -828,6 +831,24 @@ async def build_charts_stacked(splits, plan_steps, name: str, out_dir: str,
                 tr = a * fit_xs + b
                 ax.plot(fit_xs, tr, color=c, ls=tls, lw=2.0, zorder=4,
                         label=f"{r['label']} — тренд ({ar._pace_formatter(tr[0])}→{ar._pace_formatter(tr[-1])})")
+        # Куски по 200 м внутри длинных (≥ 1 км по плану) отрезков: цепочка мелких точек
+        # слева направо вокруг x отрезка (хронология), крупная точка — средний темп.
+        work_ord = [l for l in ordered
+                    if ar._role_of(l["step"], l["intensity"], plan_steps) == "work"]
+        if len(work_ord) == len(x_ticks):
+            col_of = {float(x): r["color"] for r in work_roles for x in r["xs"]}
+            shown = False
+            for (x, _), lap in zip(x_ticks, work_ord):
+                sp = lap.get("sp200")
+                pdist = next((p["dist"] for p in plan_steps if p["idx"] == lap["step"]), 0) or 0
+                if not sp or len(sp) < 2 or pdist < 1000:
+                    continue
+                xs_ = x + np.linspace(-0.32, 0.32, len(sp))
+                c = col_of.get(float(x), th["fact"])
+                ax.plot(xs_, sp, color=c, lw=0.9, alpha=0.6, zorder=2)
+                ax.scatter(xs_, sp, color=c, s=14, alpha=0.85, zorder=2,
+                           label=None if shown else "куски по 200 м")
+                shown = True
         ax.invert_yaxis()
         ax.set_ylabel("Темп (мин:сек/км)", fontsize=10)
         ax.set_title("Рабочие интервалы", fontsize=11, fontweight="bold")
