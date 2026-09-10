@@ -963,6 +963,15 @@ def _plan_diagram(ax, blocks, plan_steps):
     ax.add_patch(Rectangle((0, 0.10), 1.0, 0.07, facecolor="#e0e0e0", edgecolor="none"))
 
 
+def _km_label(label: str) -> str:
+    """'1000 м' → '1 км', '1600 м' → '1,6 км'; короче 1 км — как есть."""
+    m = re.fullmatch(r"(\d+) м", str(label or ""))
+    if not m or int(m.group(1)) < 1000:
+        return label
+    km = int(m.group(1)) / 1000
+    return (f"{km:.1f}".rstrip("0").rstrip(".")).replace(".", ",") + " км"
+
+
 async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source: str,
                             s4: dict | None, out_dir: str, tag: str,
                             dark: bool = False, splits200=None) -> str | None:
@@ -1014,7 +1023,7 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
             lap0 = next((s[st] for s in blk["series"] if st in s), None)
             role = ar._role_of(st, lap0["intensity"] if lap0 else "", plan_steps)
             label = ("Отдых" if role == "rest"
-                     else ar._step_label(plan_steps, st, lap0["dist"] if lap0 else None))
+                     else _km_label(ar._step_label(plan_steps, st, lap0["dist"] if lap0 else None)))
             metas[st] = {"role": role, "label": label,
                          "bounds": plan["bounds"] if plan else None, "n": n_series}
         sec_headers = ["№"]
@@ -1075,7 +1084,8 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
         sec_title = f"{n_series} × (" + " + ".join(work_lbls) + ")"
         sections.append({"headers": sec_headers, "rows": sec_rows, "fill": sec_fill,
                          "avg_r": len(sec_rows), "title": sec_title,
-                         "n_rows": len(sec_rows) + 1})
+                         "wide": len(sec_headers) > 10,
+                         "n_rows": len(sec_rows) + (2.6 if len(sec_headers) > 10 else 1)})
 
     # ── Шапка (зона 1) ──
     meta_bits = [b for b in (wdate, f"группа {wgroup}" if wgroup else None, source) if b]
@@ -1203,6 +1213,11 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
                 if r == 0:
                     cell.set_facecolor(hdr_bg)
                     cell.set_text_props(fontweight="bold", color="white")
+                    if sec["wide"]:
+                        # Широкая таблица: шапка вертикально и выше, чтобы не слипалась.
+                        cell.set_height(cell.get_height() * 2.6)
+                        cell.get_text().set_rotation(90)
+                        cell.get_text().set_fontsize(9)
                 elif r == sec["avg_r"]:
                     cell.set_facecolor(th["box_face"])
                     cell.set_text_props(fontweight="bold", color=th["text"])
