@@ -424,9 +424,12 @@ _MAX_EFFORT_WORDS = ("максимум", "максимальн", "очень б�
 
 
 def _is_max_effort(struct: dict) -> bool:
-    """Блок описан как работа на максимум (по purpose/description)."""
+    """Блок/сегмент описан как работа на максимум (по purpose/description/role):
+    слова-синонимы или процент от 100% и выше (100%, 101%, 110%)."""
     txt = " ".join(str(struct.get(k) or "") for k in ("purpose", "description", "role")).lower()
-    return any(w in txt for w in _MAX_EFFORT_WORDS)
+    if any(w in txt for w in _MAX_EFFORT_WORDS):
+        return True
+    return re.search(r"\b1\d\d\s?%", txt) is not None
 
 
 def build_garmin_from_analysis(analysis: dict, group_num: str) -> dict:
@@ -520,6 +523,11 @@ def build_garmin_from_analysis(analysis: dict, group_num: str) -> dict:
                     sv_slow = sv_fast
                 elif sv_slow > 0 and sv_fast == 0.0:
                     sv_fast = sv_slow
+                # Сегмент «на максимум» без темпа — темп по таблице групп, как и для целого блока.
+                if sv_fast == 0.0 and sv_slow == 0.0 and _is_max_effort(s):
+                    _mp = _pace_to_ms(_max_pace_for_group(group_num))
+                    if _mp > 0:
+                        sv_fast = sv_slow = _mp
                 inner.append(_step(idx, dist_m=float(s['distance_m']),
                                    v_fast=sv_fast or None, v_slow=sv_slow or None,
                                    child_id=1))
