@@ -254,6 +254,24 @@ def _avg(vals):
     return sum(vals) / len(vals) if vals else None
 
 
+def _expand_selector(selector):
+    """Короткий селектор даты → маска имени: '0901' → 'DD_20260901' (текущий год),
+    '20260901' → 'DD_20260901'. Остальное — как есть."""
+    from datetime import date
+    s = str(selector or "")
+    if re.fullmatch(r"\d{4}", s):
+        return f"DD_{date.today().year}{s}"
+    if re.fullmatch(r"\d{8}", s):
+        return f"DD_{s}"
+    return selector
+
+
+def _name_matches(selector, name) -> bool:
+    """Селектор в имени активности; разделители '-' и '_' равнозначны."""
+    pat = re.escape(str(selector)).replace("_", "[-_]").replace("\\-", "[-_]")
+    return re.search(pat, str(name or "")) is not None
+
+
 def _pick_activity(acts, selector):
     runs = [a for a in (acts or [])
             if "running" in str((a.get("activityType") or {}).get("typeKey", ""))
@@ -263,9 +281,10 @@ def _pick_activity(acts, selector):
               reverse=True)
     if selector is None:
         return runs[0] if runs else None
+    selector = _expand_selector(selector)
     if str(selector).isdigit():
         return next((a for a in (acts or []) if str(a.get("activityId")) == str(selector)), None)
-    return next((a for a in runs if str(selector) in str(a.get("activityName") or "")), None)
+    return next((a for a in runs if _name_matches(selector, a.get("activityName"))), None)
 
 
 def _date_from_name(name):
@@ -454,7 +473,7 @@ async def _strava_candidate(db_user_id, selector):
     elif str(selector).isdigit():
         act = next((a for a in (acts or []) if str(a.get("id")) == str(selector)), None)
     else:
-        act = next((a for a in runs if str(selector) in str(a.get("name") or "")), None)
+        act = next((a for a in runs if _name_matches(selector, a.get("name"))), None)
     if not act:
         return None
     name = act.get("name")
@@ -494,7 +513,7 @@ async def _coros_candidate(db_user_id, selector):
     elif str(selector).isdigit():
         rec = next((r for r in records if str(r.get("label_id")) == str(selector)), None)
     else:
-        rec = next((r for r in runs if str(selector) in str(r.get("name") or "")), None)
+        rec = next((r for r in runs if _name_matches(selector, r.get("name"))), None)
     if not rec:
         return None
     name = rec.get("name")
@@ -531,6 +550,7 @@ async def build_package(db_user_id: int, selector=None) -> dict:
     """Собирает пакет данных для ИИ по DD-активности.
     selector: None → последняя DD; маска 'DD_YYYYMMDD'; либо activityId.
     Возвращает {ok, msg, name, text}. text — пакет без промпта (PROMPT добавляет вызывающий)."""
+    selector = _expand_selector(selector)
     g = await _garmin_candidate(db_user_id, selector)
     c = await _coros_candidate(db_user_id, selector)
     s = await _strava_candidate(db_user_id, selector)
