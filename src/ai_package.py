@@ -632,6 +632,7 @@ async def build_package(db_user_id: int, selector=None) -> dict:
 
     return {"ok": True, "name": name, "text": "\n".join(L), "msg": "",
             "splits": splits, "plan_steps": plan_steps,
+            "splits200": [r.get("splits200") for r in rows],
             "wdate": wdate, "wgroup": cand["wgroup"], "source": cand["source"],
             "act_id": act_id, "s4": s4}
 
@@ -944,7 +945,7 @@ def _plan_diagram(ax, blocks, plan_steps):
 
 async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source: str,
                             s4: dict | None, out_dir: str, tag: str,
-                            dark: bool = False) -> str | None:
+                            dark: bool = False, splits200=None) -> str | None:
     """Вертикальная карточка разбора под телефон (портрет, три зоны сверху вниз):
     1) шапка — заголовок, название/дата/группа, суть, структура плана;
     2) факт — таблица повторов (зебра, заливка отклонений, строка «ср.»);
@@ -957,6 +958,10 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
 
     ar.DARK_MODE = dark
     ordered = ar._ordered_laps(splits)
+    # Сплиты по 200 м из _enrich_laps идут в том же порядке, что ordered (одинаковые пропуски).
+    if splits200 and len(splits200) == len(ordered):
+        for lap, sp in zip(ordered, splits200):
+            lap["sp200"] = sp
     ws, rmeta, rw, rr, maxi = ar._table_model(ordered, plan_steps)
     if not ws or not maxi:
         return None
@@ -1014,6 +1019,23 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
                     row += ["—", "—", "—"]
                 col += 3
             sec_rows.append(row)
+            # Раскладка по 200 м: один повтор, один рабочий отрезок, >1 км, есть GPS-сплиты.
+            work_st = [st for st in blk["steps"] if metas[st]["role"] == "work"]
+            if n_series == 1 and len(work_st) == 1:
+                st = work_st[0]
+                lap = ser.get(st)
+                sp = (lap or {}).get("sp200")
+                if lap and sp and (lap.get("dist") or 0) > 1000:
+                    m = metas[st]
+                    et = ar._seg_etalon(m, i)
+                    col = 1 + 3 * blk["steps"].index(st)
+                    for k, p in enumerate(sp, 1):
+                        dev, color = _dev(p, et)
+                        sub = [f"{i}·{k}"] + [""] * (len(sec_headers) - 1)
+                        sub[col:col + 3] = [_fmt_time(p * 0.2), _fmt_pace(p), dev]
+                        sec_rows.append(sub)
+                        if color:
+                            sec_fill[(len(sec_rows), col + 2)] = _FILL[color]
         avg_row = ["ср."]
         for st in blk["steps"]:
             durs = [s[st]["dur"] for s in blk["series"] if st in s]
@@ -1026,8 +1048,8 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
         work_lbls = [metas[st]["label"] for st in blk["steps"] if metas[st]["role"] == "work"]
         sec_title = f"{n_series} × (" + " + ".join(work_lbls) + ")"
         sections.append({"headers": sec_headers, "rows": sec_rows, "fill": sec_fill,
-                         "avg_r": n_series + 1, "title": sec_title,
-                         "n_rows": n_series + 2})
+                         "avg_r": len(sec_rows), "title": sec_title,
+                         "n_rows": len(sec_rows) + 1})
 
     # ── Шапка (зона 1) ──
     meta_bits = [b for b in (wdate, f"группа {wgroup}" if wgroup else None, source) if b]
