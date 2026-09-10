@@ -1020,12 +1020,12 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
                 col += 3
             sec_rows.append(row)
             # Раскладка по 200 м (один повтор, есть GPS-сплиты): один рабочий отрезок ≥1 км
-            # или несколько рабочих, все по ~1 км. Строка k = k-й кусок каждого отрезка.
+            # или несколько рабочих, все по 1 км (дистанции из плана). Строка k = k-й кусок каждого отрезка.
             work_st = [st for st in blk["steps"] if metas[st]["role"] == "work"]
-            dists = [(ser.get(st) or {}).get("dist") or 0 for st in work_st]
+            dists = [next((p["dist"] for p in plan_steps if p["idx"] == st), 0) or 0 for st in work_st]
             ok = n_series == 1 and work_st and (
                 (len(work_st) == 1 and dists[0] >= 1000)
-                or (len(work_st) > 1 and all(950 <= d <= 1050 for d in dists)))
+                or (len(work_st) > 1 and all(d == 1000 for d in dists)))
             if ok:
                 sps = {st: (ser.get(st) or {}).get("sp200") for st in work_st}
                 n_sub = max((len(s) for s in sps.values() if s), default=0)
