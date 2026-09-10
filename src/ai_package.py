@@ -161,8 +161,7 @@ def _splits_200(pts, start_ms, end_ms, lap_dist):
     last_t, last_d = seg[-1][0], seg[-1][1]
     rem_d = last_d - (target - chunk)
     rem_t = (last_t - t_start) / 1000.0
-    # Остаток короче 50 м — не кусок, а зазор между секундными точками на границе круга.
-    if rem_d >= 50 and rem_t > 0:
+    if rem_d > 0 and rem_t > 0:
         out.append(round(rem_t / (rem_d / 1000.0), 1))
     return out or None
 
