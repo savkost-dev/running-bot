@@ -10,6 +10,7 @@ COROS MCP — слой 1: сырое чтение данных по новой �
 import asyncio
 import json
 import logging
+import re
 from contextlib import asynccontextmanager
 
 import aiohttp
