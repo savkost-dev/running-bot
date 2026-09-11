@@ -1112,7 +1112,7 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
                     dev, color = _dev(lap["pace"], et)
                     row += [_fmt_time(lap["dur"]), _fmt_pace(lap["pace"]), dev]
                     if color:
-                        sec_fill[(i, col + 2)] = _FILL[color]
+                        sec_fill[(len(sec_rows) + 1, col + 2)] = _FILL[color]
                 else:
                     row += ["—", "—", "—"]
                 col += 3
@@ -1128,9 +1128,9 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
                     sps[st] = sp
             n_sub = max((len(s) for s in sps.values()), default=0)
             for k in range(1, n_sub + 1):
-                # Пометка длины у хвоста (кусок короче 400): «1·3 (200)».
+                # Пометка длины у хвоста (кусок короче 90% от 400): «1·3 (200)»; 398 м считаем полным.
                 tails = {int(round(dist)) for sp in sps.values() if k <= len(sp)
-                         for (_, dist) in [sp[k - 1]] if dist < 400}
+                         for (_, dist) in [sp[k - 1]] if dist < 360}
                 mark = f" ({min(tails)})" if tails else ""
                 sub = [f"{i}·{k}{mark}"] + [""] * (len(sec_headers) - 1)
                 for st, sp in sps.items():
