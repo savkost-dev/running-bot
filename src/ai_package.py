@@ -1100,8 +1100,10 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
             lbl = metas[st]["label"]
             sec_headers += [f"{lbl}\nвремя", f"{lbl}\nтемп", f"{lbl}\nоткл"]
         sec_rows, sec_fill = [], {}
+        main_rows = []   # номера строк-повторов (1-based) — для выделения при отрисовке
         for i, ser in enumerate(blk["series"], 1):
             row = [str(i)]
+            main_rows.append(len(sec_rows) + 1)
             col = 1
             for st in blk["steps"]:
                 lap = ser.get(st)
@@ -1156,6 +1158,7 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
         sec_title = f"{n_series} × (" + " + ".join(work_lbls) + ")"
         sections.append({"headers": sec_headers, "rows": sec_rows, "fill": sec_fill,
                          "avg_r": len(sec_rows), "title": sec_title,
+                         "main_rows": set(main_rows),
                          "wide": len(sec_headers) > 10,
                          "n_rows": len(sec_rows) + (2.6 if len(sec_headers) > 10 else 1)})
 
@@ -1293,9 +1296,14 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
                 elif r == sec["avg_r"]:
                     cell.set_facecolor(th["box_face"])
                     cell.set_text_props(fontweight="bold", color=th["text"])
+                elif r in sec["main_rows"]:
+                    # Строка повтора: жирный шрифт на серой подложке.
+                    cell.set_facecolor(zebra)
+                    cell.set_text_props(fontweight="bold", color=th["text"])
                 else:
-                    cell.set_facecolor(zebra if r % 2 == 0 else "none")
-                    cell.set_text_props(color=th["text"])
+                    # Строка-кусок (400 м): мельче, на белом, номер серым.
+                    cell.set_facecolor("none")
+                    cell.set_text_props(color="#777777" if c == 0 else th["text"], fontsize=9)
             for (r, c), fill in sec["fill"].items():
                 tbl[r, c].set_facecolor(fill)
                 tbl[r, c].set_text_props(color="white", fontweight="bold")
