@@ -136,10 +136,11 @@ def _hr_before(pts, ts):
     return pts[i][3]
 
 
-def _splits_200(pts, start_ms, end_ms, lap_dist, chunk=200.0):
+def _splits_200(pts, start_ms, end_ms, lap_dist, chunk=200.0, keep_tail=False):
     """Сплиты по chunk м (по умолчанию 200) внутри отрезка. [темп_сек] или None.
     Последний неполный кусок — по фактической дистанции, но короче половины куска отбрасывается
     (остаток в несколько метров из-за сглаживания дистанции у Strava даёт мусорный темп).
+    keep_tail=True (таблица разбора): хвост от 50 м сохраняется, а результат — [(темп_сек, длина_м)].
     Валидация: дистанция по точкам ≈ lap_dist (±10%)."""
     seg = [p for p in pts if p[0] is not None and start_ms <= p[0] < end_ms and p[1] is not None]
     if len(seg) < 4 or not lap_dist or lap_dist < 2 * float(chunk):
@@ -161,15 +162,18 @@ def _splits_200(pts, start_ms, end_ms, lap_dist, chunk=200.0):
             t_cross = prev_t + frac * (t - prev_t)
             dt = (t_cross - t_start) / 1000.0
             if dt > 0:
-                out.append(round(dt / (chunk / 1000.0), 1))
+                pace = round(dt / (chunk / 1000.0), 1)
+                out.append((pace, chunk) if keep_tail else pace)
             t_start = t_cross
             target += chunk
         prev_t, prev_d = t, dist
     last_t, last_d = seg[-1][0], seg[-1][1]
     rem_d = last_d - (target - chunk)
     rem_t = (last_t - t_start) / 1000.0
-    if rem_d >= chunk / 2 and rem_t > 0:
-        out.append(round(rem_t / (rem_d / 1000.0), 1))
+    min_tail = 50.0 if keep_tail else chunk / 2
+    if rem_d >= min_tail and rem_t > 0:
+        pace = round(rem_t / (rem_d / 1000.0), 1)
+        out.append((pace, round(rem_d)) if keep_tail else pace)
     return out or None
 
 
@@ -243,6 +247,7 @@ def _enrich_laps(splits, plan_steps, pts):
         hr_before = _hr_before(pts, start_ms) if (rl == "work" and pts) else None
         sp200 = _splits_200(pts, start_ms, end_ms, d) if (rl == "work" and pts and end_ms) else None
         sp100 = _splits_200(pts, start_ms, end_ms, d, chunk=100.0) if (rl == "work" and pts and end_ms) else None
+        sp400 = _splits_200(pts, start_ms, end_ms, d, chunk=400.0, keep_tail=True) if (rl == "work" and pts and end_ms) else None
         rows.append({
             "label": label, "role": rl, "dist": d, "dur": t,
             "step": st, "intensity": str(lp.get("intensityType") or "").upper(),
@@ -254,7 +259,7 @@ def _enrich_laps(splits, plan_steps, pts):
             "gct": lp.get("groundContactTime"), "vo": lp.get("verticalOscillation"),
             "bal": lp.get("groundContactBalanceLeft"), "resp": lp.get("avgRespirationRate"),
             "compl": lp.get("directWorkoutComplianceScore"),
-            "hr_before": hr_before, "splits200": sp200, "splits100": sp100,
+            "hr_before": hr_before, "splits200": sp200, "splits100": sp100, "splits400": sp400,
         })
     return rows, S
 
@@ -682,6 +687,7 @@ async def build_package(db_user_id: int, selector=None) -> dict:
             "splits": splits, "plan_steps": plan_steps,
             "splits200": [r.get("splits200") for r in rows],
             "splits100": [r.get("splits100") for r in rows],
+            "splits400": [r.get("splits400") for r in rows],
             "wdate": wdate, "wgroup": cand["wgroup"], "source": cand["source"],
             "act_id": act_id, "s4": s4}
 
@@ -1037,7 +1043,7 @@ def _km_label(label: str) -> str:
 
 async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source: str,
                             s4: dict | None, out_dir: str, tag: str,
-                            dark: bool = False, splits200=None) -> str | None:
+                            dark: bool = False, splits400=None) -> str | None:
     """Вертикальная карточка разбора под телефон (портрет, три зоны сверху вниз):
     1) шапка — заголовок, название/дата/группа, суть, структура плана;
     2) факт — таблица повторов (зебра, заливка отклонений, строка «ср.»);
@@ -1050,10 +1056,10 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
 
     ar.DARK_MODE = dark
     ordered = ar._ordered_laps(splits)
-    # Сплиты по 200 м из _enrich_laps идут в том же порядке, что ordered (одинаковые пропуски).
-    if splits200 and len(splits200) == len(ordered):
-        for lap, sp in zip(ordered, splits200):
-            lap["sp200"] = sp
+    # Сплиты по 400 м из _enrich_laps идут в том же порядке, что ordered (одинаковые пропуски).
+    if splits400 and len(splits400) == len(ordered):
+        for lap, sp in zip(ordered, splits400):
+            lap["sp400"] = sp
     ws, rmeta, rw, rr, maxi = ar._table_model(ordered, plan_steps)
     if not ws or not maxi:
         return None
@@ -1111,29 +1117,32 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
                     row += ["—", "—", "—"]
                 col += 3
             sec_rows.append(row)
-            # Раскладка по 200 м (один повтор, есть GPS-сплиты): один рабочий отрезок ≥1 км
-            # или несколько рабочих, все по 1 км (дистанции из плана). Строка k = k-й кусок каждого отрезка.
+            # Раскладка по 400 м (решение 11.09): любой рабочий отрезок ≥800 м по плану,
+            # независимо от числа повторов и шагов. Строка k = k-й кусок каждого такого отрезка.
             work_st = [st for st in blk["steps"] if metas[st]["role"] == "work"]
-            dists = [next((p["dist"] for p in plan_steps if p["idx"] == st), 0) or 0 for st in work_st]
-            ok = n_series == 1 and work_st and (
-                (len(work_st) == 1 and dists[0] >= 1000)
-                or (len(work_st) > 1 and all(d == 1000 for d in dists)))
-            if ok:
-                sps = {st: (ser.get(st) or {}).get("sp200") for st in work_st}
-                n_sub = max((len(s) for s in sps.values() if s), default=0)
-                for k in range(1, n_sub + 1):
-                    sub = [f"{i}·{k}"] + [""] * (len(sec_headers) - 1)
-                    for st in work_st:
-                        sp = sps.get(st)
-                        if not sp or k > len(sp):
-                            continue
-                        p = sp[k - 1]
-                        dev, color = _dev(p, ar._seg_etalon(metas[st], i))
-                        col = 1 + 3 * blk["steps"].index(st)
-                        sub[col:col + 3] = [_fmt_time(p * 0.2), _fmt_pace(p), dev]
-                        if color:
-                            sec_fill[(len(sec_rows) + 1, col + 2)] = _FILL[color]
-                    sec_rows.append(sub)
+            sps = {}
+            for st in work_st:
+                pdist = next((p["dist"] for p in plan_steps if p["idx"] == st), 0) or 0
+                sp = (ser.get(st) or {}).get("sp400")
+                if pdist >= 800 and sp:
+                    sps[st] = sp
+            n_sub = max((len(s) for s in sps.values()), default=0)
+            for k in range(1, n_sub + 1):
+                # Пометка длины у хвоста (кусок короче 400): «1·3 (200)».
+                tails = {int(round(dist)) for sp in sps.values() if k <= len(sp)
+                         for (_, dist) in [sp[k - 1]] if dist < 400}
+                mark = f" ({min(tails)})" if tails else ""
+                sub = [f"{i}·{k}{mark}"] + [""] * (len(sec_headers) - 1)
+                for st, sp in sps.items():
+                    if k > len(sp):
+                        continue
+                    p, dist = sp[k - 1]
+                    dev, color = _dev(p, ar._seg_etalon(metas[st], i))
+                    col = 1 + 3 * blk["steps"].index(st)
+                    sub[col:col + 3] = [_fmt_time(p * dist / 1000.0), _fmt_pace(p), dev]
+                    if color:
+                        sec_fill[(len(sec_rows) + 1, col + 2)] = _FILL[color]
+                sec_rows.append(sub)
         avg_row = ["ср."]
         for st in blk["steps"]:
             durs = [s[st]["dur"] for s in blk["series"] if st in s]
