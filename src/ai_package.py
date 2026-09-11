@@ -136,9 +136,10 @@ def _hr_before(pts, ts):
     return pts[i][3]
 
 
-def _splits_200(pts, start_ms, end_ms, lap_dist):
-    """Сплиты по 200 м внутри отрезка (для длинных). [темп_сек] или None.
-    Последний неполный кусок — по фактической дистанции (без подстановок).
+def _splits_200(pts, start_ms, end_ms, lap_dist, chunk=200.0):
+    """Сплиты по chunk м (по умолчанию 200) внутри отрезка. [темп_сек] или None.
+    Последний неполный кусок — по фактической дистанции, но короче половины куска отбрасывается
+    (остаток в несколько метров из-за сглаживания дистанции у Strava даёт мусорный темп).
     Валидация: дистанция по точкам ≈ lap_dist (±10%)."""
     seg = [p for p in pts if p[0] is not None and start_ms <= p[0] < end_ms and p[1] is not None]
     if len(seg) < 4 or not lap_dist or lap_dist < 400:
@@ -148,7 +149,7 @@ def _splits_200(pts, start_ms, end_ms, lap_dist):
     if abs(covered - lap_dist) > max(20, 0.10 * lap_dist):
         return None
     out = []
-    chunk = 200.0
+    chunk = float(chunk)
     target = d0 + chunk
     t_start = seg[0][0]
     for t, dist, _, _ in seg:
@@ -161,7 +162,7 @@ def _splits_200(pts, start_ms, end_ms, lap_dist):
     last_t, last_d = seg[-1][0], seg[-1][1]
     rem_d = last_d - (target - chunk)
     rem_t = (last_t - t_start) / 1000.0
-    if rem_d > 0 and rem_t > 0:
+    if rem_d >= chunk / 2 and rem_t > 0:
         out.append(round(rem_t / (rem_d / 1000.0), 1))
     return out or None
 
@@ -235,6 +236,7 @@ def _enrich_laps(splits, plan_steps, pts):
         end_ms = starts[n + 1] if n + 1 < len(starts) else (start_ms + int(t * 1000) if start_ms else None)
         hr_before = _hr_before(pts, start_ms) if (rl == "work" and pts) else None
         sp200 = _splits_200(pts, start_ms, end_ms, d) if (rl == "work" and pts and end_ms) else None
+        sp100 = _splits_200(pts, start_ms, end_ms, d, chunk=100.0) if (rl == "work" and pts and end_ms) else None
         rows.append({
             "label": label, "role": rl, "dist": d, "dur": t,
             "step": st, "intensity": str(lp.get("intensityType") or "").upper(),
@@ -246,7 +248,7 @@ def _enrich_laps(splits, plan_steps, pts):
             "gct": lp.get("groundContactTime"), "vo": lp.get("verticalOscillation"),
             "bal": lp.get("groundContactBalanceLeft"), "resp": lp.get("avgRespirationRate"),
             "compl": lp.get("directWorkoutComplianceScore"),
-            "hr_before": hr_before, "splits200": sp200,
+            "hr_before": hr_before, "splits200": sp200, "splits100": sp100,
         })
     return rows, S
 
@@ -662,6 +664,7 @@ async def build_package(db_user_id: int, selector=None) -> dict:
     return {"ok": True, "name": name, "text": "\n".join(L), "msg": "",
             "splits": splits, "plan_steps": plan_steps,
             "splits200": [r.get("splits200") for r in rows],
+            "splits100": [r.get("splits100") for r in rows],
             "wdate": wdate, "wgroup": cand["wgroup"], "source": cand["source"],
             "act_id": act_id, "s4": s4}
 
@@ -751,7 +754,7 @@ def _series_model(ordered, plan_steps):
 
 async def build_charts_stacked(splits, plan_steps, name: str, out_dir: str,
                                tag: str, dark: bool = False,
-                               source: str = "", splits200=None) -> str | None:
+                               source: str = "", splits_fine=None) -> str | None:
     """Оба графика (работа + отдых) на ОДНОЙ вертикальной картинке под телефон:
     сверху интервалы (сегменты/эталон/тренд/дельты), снизу отдых (коридоры).
     Логика отрисовки повторяет activity_review._plot_work_segmented/_plot_rest,
@@ -763,9 +766,9 @@ async def build_charts_stacked(splits, plan_steps, name: str, out_dir: str,
 
     ar.DARK_MODE = dark
     ordered = ar._ordered_laps(splits)
-    if splits200 and len(splits200) == len(ordered):
-        for lap, sp in zip(ordered, splits200):
-            lap["sp200"] = sp
+    if splits_fine and len(splits_fine) == len(ordered):
+        for lap, sp in zip(ordered, splits_fine):
+            lap["sp_fine"] = sp
     work_roles, x_ticks, rest_paces, S = ar._segment_model(ordered, plan_steps)
     work_roles = [r for r in work_roles if r["ys"]]
     if not work_roles:
@@ -855,13 +858,13 @@ async def build_charts_stacked(splits, plan_steps, name: str, out_dir: str,
                 tr = a * fit_xs + b
                 ax.plot(fit_xs, tr, color=c, ls=tls, lw=2.0, zorder=4,
                         label=f"{r['label']} — тренд ({ar._pace_formatter(tr[0])}→{ar._pace_formatter(tr[-1])})")
-        # Куски по 200 м внутри длинных (≥ 1 км по плану) отрезков: мелкие точки
+        # Куски по 100 м внутри длинных (≥ 1 км по плану) отрезков: мелкие точки
         # равномерно по ширине отрезка (хронология), крупная точка — средний темп.
         if span_of:
             col_of = {float(x): r["color"] for r in work_roles for x in r["xs"]}
             shown = False
             for a, b, lap in span_of.values():
-                sp = lap.get("sp200")
+                sp = lap.get("sp_fine")
                 pdist = next((p["dist"] for p in plan_steps if p["idx"] == lap["step"]), 0) or 0
                 if not sp or len(sp) < 2 or pdist < 1000:
                     continue
@@ -870,7 +873,7 @@ async def build_charts_stacked(splits, plan_steps, name: str, out_dir: str,
                 c = col_of.get((a + b) / 2.0, th["fact"])
                 ax.plot(xs_, sp, color=c, lw=0.9, alpha=0.6, zorder=2)
                 ax.scatter(xs_, sp, color=c, s=14, alpha=0.85, zorder=2,
-                           label=None if shown else "куски по 200 м")
+                           label=None if shown else "куски по 100 м")
                 shown = True
         ax.invert_yaxis()
         ax.set_ylabel("Темп (мин:сек/км)", fontsize=10)
