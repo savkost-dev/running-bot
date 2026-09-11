@@ -142,7 +142,7 @@ def _splits_200(pts, start_ms, end_ms, lap_dist, chunk=200.0):
     (остаток в несколько метров из-за сглаживания дистанции у Strava даёт мусорный темп).
     Валидация: дистанция по точкам ≈ lap_dist (±10%)."""
     seg = [p for p in pts if p[0] is not None and start_ms <= p[0] < end_ms and p[1] is not None]
-    if len(seg) < 4 or not lap_dist or lap_dist < 400:
+    if len(seg) < 4 or not lap_dist or lap_dist < 2 * float(chunk):
         return None
     d0 = seg[0][1]
     covered = seg[-1][1] - d0
@@ -242,7 +242,7 @@ def _enrich_laps(splits, plan_steps, pts):
         end_ms = starts[n + 1] if n + 1 < len(starts) else (start_ms + int(t * 1000) if start_ms else None)
         hr_before = _hr_before(pts, start_ms) if (rl == "work" and pts) else None
         sp200 = _splits_200(pts, start_ms, end_ms, d) if (rl == "work" and pts and end_ms) else None
-        sp100 = _splits_200(pts, start_ms, end_ms, d, chunk=50.0) if (rl == "work" and pts and end_ms) else None
+        sp100 = _splits_200(pts, start_ms, end_ms, d, chunk=100.0) if (rl == "work" and pts and end_ms) else None
         rows.append({
             "label": label, "role": rl, "dist": d, "dur": t,
             "step": st, "intensity": str(lp.get("intensityType") or "").upper(),
@@ -864,22 +864,21 @@ async def build_charts_stacked(splits, plan_steps, name: str, out_dir: str,
                 tr = a * fit_xs + b
                 ax.plot(fit_xs, tr, color=c, ls=tls, lw=2.0, zorder=4,
                         label=f"{r['label']} — тренд ({ar._pace_formatter(tr[0])}→{ar._pace_formatter(tr[-1])})")
-        # Куски по 50 м внутри длинных (≥ 1 км по плану) отрезков: мелкие точки
+        # Куски по 100 м внутри каждого рабочего отрезка: мелкие точки
         # равномерно по ширине отрезка (хронология), крупная точка — средний темп.
         if span_of:
             col_of = {float(x): r["color"] for r in work_roles for x in r["xs"]}
             shown = False
             for a, b, lap in span_of.values():
                 sp = lap.get("sp_fine")
-                pdist = next((p["dist"] for p in plan_steps if p["idx"] == lap["step"]), 0) or 0
-                if not sp or len(sp) < 2 or pdist < 1000:
+                if not sp or len(sp) < 2:
                     continue
                 w = (b - a) / len(sp)
                 xs_ = a + w / 2.0 + w * np.arange(len(sp))
                 c = col_of.get((a + b) / 2.0, th["fact"])
                 ax.plot(xs_, sp, color=c, lw=0.9, alpha=0.6, zorder=2)
                 ax.scatter(xs_, sp, color=c, s=14, alpha=0.85, zorder=2,
-                           label=None if shown else "куски по 50 м")
+                           label=None if shown else "куски по 100 м")
                 shown = True
         ax.invert_yaxis()
         ax.set_ylabel("Темп (мин:сек/км)", fontsize=10)

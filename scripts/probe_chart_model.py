@@ -33,6 +33,7 @@ async def main():
     print("work_roles xs:", [(r["label"], r["xs"]) for r in work_roles])
     rows, _ = ap._enrich_laps(splits, plan_steps, pts)
     print("rows splits200:", [(r["label"], r["role"], r.get("splits200")) for r in rows])
+    print("rows splits100:", [(r["label"], r.get("splits100")) for r in rows])
     if pts:
         print("pts t0=%s t_end=%s d_end=%s" % (pts[0][0], pts[-1][0], pts[-1][1]))
         starts = [ap._gmt_ms(l.get("startTimeGMT")) for l in laps]
