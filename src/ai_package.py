@@ -496,6 +496,7 @@ async def _strava_candidate(db_user_id, selector):
     else:
         try:
             pts = await strava.get_activity_streams(token, act.get("id"), act.get("start_date"))
+            print(f"/report: Strava streams act={act.get('id')}: {len(pts) if pts else 0} точек")
         except Exception as e:  # noqa: BLE001
             print(f"/report: Strava streams недоступны: {type(e).__name__}: {e}")
     return {"source": "strava", "name": name, "act_id": act.get("id"),

@@ -247,10 +247,10 @@ async def get_activity_splits(access_token: str, activity_id: int,
 
 
 def _iso_to_gmt(s: str | None) -> str | None:
-    """'2026-09-11T05:00:00Z' → '2026-09-11 05:00:00' (формат startTimeGMT у Garmin)."""
+    """'2026-09-11T05:00:00Z' → '2026-09-11T05:00:00' (формат startTimeGMT у Garmin, с 'T')."""
     if not s:
         return None
-    return str(s).replace("T", " ").replace("Z", "").split(".")[0]
+    return str(s).replace("Z", "").split(".")[0]
 
 
 async def get_activity_streams(access_token: str, activity_id: int,
@@ -261,7 +261,7 @@ async def get_activity_streams(access_token: str, activity_id: int,
     if not start_date:
         return None
     try:
-        t0 = datetime.strptime(_iso_to_gmt(start_date), "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        t0 = datetime.strptime(_iso_to_gmt(start_date), "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
     except ValueError:
         return None
     t0_ms = int(t0.timestamp() * 1000)
