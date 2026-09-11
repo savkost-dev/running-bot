@@ -780,6 +780,21 @@ async def build_charts_stacked(splits, plan_steps, name: str, out_dir: str,
         multi = max(w for _, w in _lbls) > 1
         x_ticks = [(x, f"{s}.{w}" if multi else f"{s}")
                    for (x, _), (s, w) in zip(x_ticks, _lbls)]
+    # Ось X пропорциональна дистанции (км): рабочие отрезки встык, каждый шириной по своей
+    # длине (отдых — на отдельном графике); крупная точка и тик — в середине отрезка.
+    work_ord = [l for l in ordered
+                if ar._role_of(l["step"], l["intensity"], plan_steps) == "work"]
+    span_of = {}
+    if len(work_ord) == len(x_ticks):
+        pos = 0.0
+        for (x, _), lap in zip(x_ticks, work_ord):
+            d = float(lap.get("dist") or 0) / 1000.0
+            span_of[float(x)] = (pos, pos + d, lap)
+            pos += d
+        _mid = lambda x: (span_of[float(x)][0] + span_of[float(x)][1]) / 2.0  # noqa: E731
+        for r in work_roles:
+            r["xs"] = [_mid(x) for x in r["xs"]]
+        x_ticks = [(_mid(x), lbl) for x, lbl in x_ticks]
     rest_plan = next((s for s in plan_steps if s["stype"] == "recovery" and s["bounds"]), None)
     rest_target = sum(rest_plan["bounds"]) / 2.0 if rest_plan else None
     has_rest = bool(rest_paces)
@@ -831,20 +846,19 @@ async def build_charts_stacked(splits, plan_steps, name: str, out_dir: str,
                 tr = a * fit_xs + b
                 ax.plot(fit_xs, tr, color=c, ls=tls, lw=2.0, zorder=4,
                         label=f"{r['label']} — тренд ({ar._pace_formatter(tr[0])}→{ar._pace_formatter(tr[-1])})")
-        # Куски по 200 м внутри длинных (≥ 1 км по плану) отрезков: цепочка мелких точек
-        # слева направо вокруг x отрезка (хронология), крупная точка — средний темп.
-        work_ord = [l for l in ordered
-                    if ar._role_of(l["step"], l["intensity"], plan_steps) == "work"]
-        if len(work_ord) == len(x_ticks):
+        # Куски по 200 м внутри длинных (≥ 1 км по плану) отрезков: мелкие точки
+        # равномерно по ширине отрезка (хронология), крупная точка — средний темп.
+        if span_of:
             col_of = {float(x): r["color"] for r in work_roles for x in r["xs"]}
             shown = False
-            for (x, _), lap in zip(x_ticks, work_ord):
+            for a, b, lap in span_of.values():
                 sp = lap.get("sp200")
                 pdist = next((p["dist"] for p in plan_steps if p["idx"] == lap["step"]), 0) or 0
                 if not sp or len(sp) < 2 or pdist < 1000:
                     continue
-                xs_ = x + np.linspace(-0.32, 0.32, len(sp))
-                c = col_of.get(float(x), th["fact"])
+                w = (b - a) / len(sp)
+                xs_ = a + w / 2.0 + w * np.arange(len(sp))
+                c = col_of.get((a + b) / 2.0, th["fact"])
                 ax.plot(xs_, sp, color=c, lw=0.9, alpha=0.6, zorder=2)
                 ax.scatter(xs_, sp, color=c, s=14, alpha=0.85, zorder=2,
                            label=None if shown else "куски по 200 м")
