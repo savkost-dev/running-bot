@@ -518,7 +518,8 @@ async def _coros_candidate(db_user_id, selector):
     Круги — РУЧНЫЕ отрезки с часов (автоматические километры отбрасываются).
     План всегда из workout_templates — эталон из часов у COROS не поддерживается;
     без плана размечать круги нечем → None.
-    pts нет (COROS не отдаёт 1 Гц через этот путь) — ЧСС-перед/сплиты-200 будут пусты."""
+    pts — секундный ряд из FIT-файла (одна ссылка + скачивание; дневной лимит FIT у COROS);
+    старты кругов берутся из lap-сообщений FIT (у кругов COROS времени старта нет)."""
     import coros_mcp
     records = coros_mcp.parse_sport_records(
         await coros_mcp.fetch_sport_records(db_user_id, days=30))
@@ -542,12 +543,22 @@ async def _coros_candidate(db_user_id, selector):
         await coros_mcp.fetch_lap_data(db_user_id, rec["label_id"], rec["sport_type"]))
     if not splits:
         return None
+    pts = None
+    try:
+        fit_bytes = await coros_mcp.fetch_fit_bytes(db_user_id, rec["label_id"], rec["sport_type"])
+        if fit_bytes:
+            fit_pts, lap_starts = coros_mcp.parse_fit_points(fit_bytes)
+            coros_mcp.attach_lap_starts(splits, fit_pts, lap_starts)
+            pts = fit_pts or None
+        print(f"/report: COROS FIT label={rec['label_id']}: {len(pts) if pts else 0} точек")
+    except Exception as e:  # noqa: BLE001
+        print(f"/report: COROS FIT недоступен: {type(e).__name__}: {e}")
     plan_steps = ar._flatten_plan_steps(plan_wkt)
     _drop_extra_first_lap(splits, plan_steps)
     _assign_button_laps(splits, plan_wkt, plan_steps)
     return {"source": "coros", "name": name, "act_id": rec["label_id"],
             "display_date": wdate, "wdate": wdate, "wgroup": wgroup,
-            "wtype_key": "running", "splits": splits, "plan_steps": plan_steps, "pts": None}
+            "wtype_key": "running", "splits": splits, "plan_steps": plan_steps, "pts": pts}
 
 
 def _choose_candidate(*cands):

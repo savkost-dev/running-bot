@@ -135,6 +135,84 @@ async def fetch_lap_data(db_user_id: int, label_id: str, sport_type: int) -> str
         return None
 
 
+async def fetch_fit_bytes(db_user_id: int, label_id: str, sport_type: int) -> bytes | None:
+    """FIT-файл одной тренировки: ссылка через queryActivityFitFileDownloadUrls, затем скачивание.
+    Считается в дневной лимит FIT у COROS. None — нет доступа/ссылки/файла."""
+    try:
+        async with _connect(db_user_id) as (session, token):
+            if not session:
+                return None
+            text = await _call_tool(session, token, "queryActivityFitFileDownloadUrls",
+                                    {"labelId": str(label_id), "sportType": int(sport_type),
+                                     "limit": 1}, 3)
+            text = _decode(text) or ""
+            m = re.search(r"https?://\S+", text)
+            if not m:
+                logger.info(f"COROS MCP: ссылки на FIT нет для label={label_id}: {text[:200]!r}")
+                return None
+            url = m.group(0).rstrip("\"'),.]")
+            async with session.get(url) as resp:
+                if resp.status != 200:
+                    logger.error(f"COROS MCP: FIT не скачался, status={resp.status}")
+                    return None
+                return await resp.read()
+    except Exception as e:
+        logger.error(f"COROS MCP fetch_fit_bytes error user_id={db_user_id}: {e}")
+        return None
+
+
+def parse_fit_points(data: bytes) -> tuple[list, list]:
+    """FIT → (pts, lap_starts). pts — секундный ряд в формате Garmin details [(t_ms, dist_m, hr, cad)],
+    lap_starts — старты кругов из lap-сообщений FIT (epoch ms). Пустые списки — если не разобралось."""
+    try:
+        from fit_tool.fit_file import FitFile
+        from fit_tool.profile.messages.record_message import RecordMessage
+        from fit_tool.profile.messages.lap_message import LapMessage
+    except ImportError as e:
+        logger.error(f"COROS FIT: fit_tool недоступен: {e}")
+        return [], []
+    try:
+        fit = FitFile.from_bytes(data)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"COROS FIT: файл не разобрался: {e}")
+        return [], []
+    pts, lap_starts = [], []
+    for rec in fit.records:
+        msg = rec.message
+        if isinstance(msg, RecordMessage):
+            if msg.timestamp is None or msg.distance is None:
+                continue
+            pts.append((float(msg.timestamp), float(msg.distance), msg.heart_rate, msg.cadence))
+        elif isinstance(msg, LapMessage) and msg.start_time is not None:
+            lap_starts.append(float(msg.start_time))
+    return pts, lap_starts
+
+
+def _gmt_str(ms: float) -> str:
+    """epoch ms → 'YYYY-MM-DDTHH:MM:SS' (UTC) — формат startTimeGMT у Garmin."""
+    from datetime import datetime, timezone
+    return datetime.fromtimestamp(ms / 1000.0, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def attach_lap_starts(splits: dict, pts: list, lap_starts: list) -> None:
+    """Проставляет startTimeGMT ручным кругам COROS (у них времени старта нет).
+    Если число кругов FIT совпадает — берём их старты; иначе накопленные длительности от первой точки.
+    Мутирует splits."""
+    laps = (splits.get("lapDTOs") or []) if isinstance(splits, dict) else []
+    if not laps:
+        return
+    if lap_starts and len(lap_starts) == len(laps):
+        for lp, ms in zip(laps, lap_starts):
+            lp["startTimeGMT"] = _gmt_str(ms)
+        return
+    if not pts:
+        return
+    t = pts[0][0]
+    for lp in laps:
+        lp["startTimeGMT"] = _gmt_str(t)
+        t += float(lp.get("duration") or 0) * 1000.0
+
+
 async def fetch_raw(db_user_id: int) -> dict | None:
     """Слой 1: сырые ответы COROS MCP as is, БЕЗ парсинга.
 
