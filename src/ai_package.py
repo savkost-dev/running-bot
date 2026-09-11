@@ -152,13 +152,19 @@ def _splits_200(pts, start_ms, end_ms, lap_dist, chunk=200.0):
     chunk = float(chunk)
     target = d0 + chunk
     t_start = seg[0][0]
-    for t, dist, _, _ in seg:
-        if dist >= target:
-            dt = (t - t_start) / 1000.0
+    # Граница куска — интерполяцией между соседними секундными точками (дробные секунды),
+    # иначе длительность куска целая и темп идёт ступенями (при 100 м — по 10 с/км).
+    prev_t, prev_d = seg[0][0], seg[0][1]
+    for t, dist, _, _ in seg[1:]:
+        while dist >= target and dist > prev_d:
+            frac = (target - prev_d) / (dist - prev_d)
+            t_cross = prev_t + frac * (t - prev_t)
+            dt = (t_cross - t_start) / 1000.0
             if dt > 0:
                 out.append(round(dt / (chunk / 1000.0), 1))
-            t_start = t
+            t_start = t_cross
             target += chunk
+        prev_t, prev_d = t, dist
     last_t, last_d = seg[-1][0], seg[-1][1]
     rem_d = last_d - (target - chunk)
     rem_t = (last_t - t_start) / 1000.0
