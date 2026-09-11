@@ -566,6 +566,16 @@ async def _coros_candidate(db_user_id, selector):
             "wtype_key": "running", "splits": splits, "plan_steps": plan_steps, "pts": pts}
 
 
+async def _safe_candidate(source: str, coro):
+    """Кандидат источника или None при любой ошибке (503 у Strava, таймаут и т.п.):
+    отказ одного источника не должен ронять разбор по остальным."""
+    try:
+        return await coro
+    except Exception as e:  # noqa: BLE001
+        print(f"/report: источник {source} недоступен: {type(e).__name__}: {e}")
+        return None
+
+
 def _choose_candidate(*cands):
     """Более новый по дате-из-имени; при равенстве — по порядку аргументов
     (Garmin, COROS, Strava). Пустые кандидаты пропускаются."""
@@ -584,9 +594,9 @@ async def build_package(db_user_id: int, selector=None) -> dict:
     selector: None → последняя DD; маска 'DD_YYYYMMDD'; либо activityId.
     Возвращает {ok, msg, name, text}. text — пакет без промпта (PROMPT добавляет вызывающий)."""
     selector = _expand_selector(selector)
-    g = await _garmin_candidate(db_user_id, selector)
-    c = await _coros_candidate(db_user_id, selector)
-    s = await _strava_candidate(db_user_id, selector)
+    g = await _safe_candidate("garmin", _garmin_candidate(db_user_id, selector))
+    c = await _safe_candidate("coros", _coros_candidate(db_user_id, selector))
+    s = await _safe_candidate("strava", _strava_candidate(db_user_id, selector))
     cand = _choose_candidate(g, c, s)
     if not cand:
         sel = f" по «{selector}»" if selector else ""
