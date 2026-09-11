@@ -242,7 +242,7 @@ def _enrich_laps(splits, plan_steps, pts):
         end_ms = starts[n + 1] if n + 1 < len(starts) else (start_ms + int(t * 1000) if start_ms else None)
         hr_before = _hr_before(pts, start_ms) if (rl == "work" and pts) else None
         sp200 = _splits_200(pts, start_ms, end_ms, d) if (rl == "work" and pts and end_ms) else None
-        sp100 = _splits_200(pts, start_ms, end_ms, d, chunk=100.0) if (rl == "work" and pts and end_ms) else None
+        sp100 = _splits_200(pts, start_ms, end_ms, d, chunk=50.0) if (rl == "work" and pts and end_ms) else None
         rows.append({
             "label": label, "role": rl, "dist": d, "dur": t,
             "step": st, "intensity": str(lp.get("intensityType") or "").upper(),
@@ -864,7 +864,7 @@ async def build_charts_stacked(splits, plan_steps, name: str, out_dir: str,
                 tr = a * fit_xs + b
                 ax.plot(fit_xs, tr, color=c, ls=tls, lw=2.0, zorder=4,
                         label=f"{r['label']} — тренд ({ar._pace_formatter(tr[0])}→{ar._pace_formatter(tr[-1])})")
-        # Куски по 100 м внутри длинных (≥ 1 км по плану) отрезков: мелкие точки
+        # Куски по 50 м внутри длинных (≥ 1 км по плану) отрезков: мелкие точки
         # равномерно по ширине отрезка (хронология), крупная точка — средний темп.
         if span_of:
             col_of = {float(x): r["color"] for r in work_roles for x in r["xs"]}
@@ -879,7 +879,7 @@ async def build_charts_stacked(splits, plan_steps, name: str, out_dir: str,
                 c = col_of.get((a + b) / 2.0, th["fact"])
                 ax.plot(xs_, sp, color=c, lw=0.9, alpha=0.6, zorder=2)
                 ax.scatter(xs_, sp, color=c, s=14, alpha=0.85, zorder=2,
-                           label=None if shown else "куски по 100 м")
+                           label=None if shown else "куски по 50 м")
                 shown = True
         ax.invert_yaxis()
         ax.set_ylabel("Темп (мин:сек/км)", fontsize=10)
