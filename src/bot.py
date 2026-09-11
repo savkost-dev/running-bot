@@ -6385,39 +6385,6 @@ async def msg_user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         f"✉️ Напиши текст для {user['name']} следующим сообщением (или напиши «отмена»).")
 
 
-async def cmd_last(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/last (admin) — разбор последней выполненной DD-тренировки: графики факт vs план.
-    Не затрагивает рабочие ветки. Источник плана — Garmin workout по workoutId."""
-    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
-        return
-    db_user_id = get_or_create_user(update.effective_user.id, update.effective_user.full_name)
-    # Аргумент: /last dark (или d/тёмная) → тёмная тема; без аргумента — светлая
-    arg = (context.args[0].lower() if context.args else "")
-    dark = arg in ("dark", "d", "тёмная", "темная", "black", "night", "ночь")
-    msg = await update.message.reply_text("⏳ Собираю разбор последней тренировки…")
-    try:
-        from activity_review import build_review
-        res = await build_review(db_user_id, dark=dark)
-    except Exception as e:
-        logger.error(f"/last error for {update.effective_user.id}: {e}", exc_info=True)
-        await msg.edit_text(f"❌ Ошибка разбора: {type(e).__name__}: {e}")
-        return
-    if not res.get("ok"):
-        await msg.edit_text(f"⚠️ {res.get('msg')}")
-        return
-    await msg.edit_text(
-        f"📊 Разбор: {res['name']}\n"
-        f"рабочих отрезков: {res['n_work']}, отдыха: {res['n_rest']}")
-    items = [(res.get("work_png"), "Рабочие интервалы"),
-             (res.get("rest_png"), "Отдых"),
-             (res.get("table_png"), "Таблица повторов")]
-    items = [(p, c) for p, c in items if p]
-    for i, (png, cap) in enumerate(items):
-        # к последней картинке прикрепляем кнопку «Главное меню»
-        markup = _add_main_menu_btn(None) if i == len(items) - 1 else None
-        with open(png, "rb") as f:
-            await context.bot.send_photo(update.effective_user.id, photo=f,
-                                         caption=cap, reply_markup=markup)
 
 
 async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
@@ -6697,7 +6664,6 @@ def main():
     app.add_handler(CommandHandler("msg_service", cmd_msg_service))
     app.add_handler(CommandHandler("profile_user", cmd_profile_user))
     app.add_handler(CommandHandler("howto",     cmd_howto))
-    app.add_handler(CommandHandler("last",      cmd_last))
     app.add_handler(CommandHandler("report",    cmd_report))
     app.add_handler(CommandHandler("report_user", report_user_command))
     app.add_handler(CallbackQueryHandler(msg_user_callback,  pattern=r"^msgu_\d+$"))

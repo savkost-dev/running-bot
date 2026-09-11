@@ -234,6 +234,8 @@ async def get_activity_splits(access_token: str, activity_id: int,
             "distance": lp.get("distance"),
             "duration": lp.get("moving_time") or lp.get("elapsed_time"),
             "intensityType": intensity,
+            # Старт круга в Garmin-виде ('YYYY-MM-DD HH:MM:SS', UTC) — для привязки секундных точек.
+            "startTimeGMT": _iso_to_gmt(lp.get("start_date")),
             # Прокидываем в Garmin-имена полей, что Strava отдаёт по лэпу.
             "averageHR": lp.get("average_heartrate"),
             "maxHR": lp.get("max_heartrate"),
@@ -242,6 +244,47 @@ async def get_activity_splits(access_token: str, activity_id: int,
             "averagePower": lp.get("average_watts"),
         })
     return {"lapDTOs": out}
+
+
+def _iso_to_gmt(s: str | None) -> str | None:
+    """'2026-09-11T05:00:00Z' → '2026-09-11 05:00:00' (формат startTimeGMT у Garmin)."""
+    if not s:
+        return None
+    return str(s).replace("T", " ").replace("Z", "").split(".")[0]
+
+
+async def get_activity_streams(access_token: str, activity_id: int,
+                               start_date: str | None) -> list | None:
+    """Секундный ряд активности в формате pts Garmin: [(t_ms, dist_m, hr, cad)].
+    Один запрос /streams (тратит квоту). start_date — старт активности (ISO, UTC) из списка."""
+    from datetime import datetime, timezone
+    if not start_date:
+        return None
+    try:
+        t0 = datetime.strptime(_iso_to_gmt(start_date), "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    t0_ms = int(t0.timestamp() * 1000)
+    headers = {"Authorization": f"Bearer {access_token}"}
+    params = {"keys": "time,distance,heartrate,cadence", "key_by_type": "true"}
+    async with aiohttp.ClientSession() as session:
+        async with session.get(f"{STRAVA_API_BASE}/activities/{activity_id}/streams",
+                               headers=headers, params=params) as resp:
+            if resp.status != 200:
+                return None
+            data = await resp.json()
+    times = (data.get("time") or {}).get("data") or []
+    dists = (data.get("distance") or {}).get("data") or []
+    hrs = (data.get("heartrate") or {}).get("data") or []
+    cads = (data.get("cadence") or {}).get("data") or []
+    if not times or len(times) != len(dists):
+        return None
+    pts = []
+    for i, (t, d) in enumerate(zip(times, dists)):
+        hr = hrs[i] if i < len(hrs) else None
+        cad = (cads[i] * 2) if (i < len(cads) and cads[i] is not None) else None
+        pts.append((t0_ms + int(t) * 1000, float(d), hr, cad))
+    return pts
 
 
 async def get_recent_48h_load(access_token: str) -> dict:

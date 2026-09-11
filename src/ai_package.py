@@ -237,6 +237,8 @@ def _enrich_laps(splits, plan_steps, pts):
         sp200 = _splits_200(pts, start_ms, end_ms, d) if (rl == "work" and pts and end_ms) else None
         rows.append({
             "label": label, "role": rl, "dist": d, "dur": t,
+            "step": st, "intensity": str(lp.get("intensityType") or "").upper(),
+            "start_ms": start_ms,
             "pace": t / (d / 1000),
             "avg_hr": lp.get("averageHR"), "max_hr": lp.get("maxHR"),
             "cad": lp.get("averageRunCadence"),
@@ -456,7 +458,7 @@ async def _garmin_candidate(db_user_id, selector):
 async def _strava_candidate(db_user_id, selector):
     """Кандидат из Strava (последняя DD-активность) или None.
     План берётся из workout_templates (без него размечать лэпы нечем → None).
-    pts нет (Strava не отдаёт 1 Гц через этот путь) — ЧСС-перед/сплиты-200 будут пусты."""
+    pts — секундный ряд из /streams (один запрос, если есть GPS)."""
     import strava
     token = await strava.ensure_valid_token(db_user_id)
     if not token:
@@ -487,12 +489,18 @@ async def _strava_candidate(db_user_id, selector):
     splits = await strava.get_activity_splits(token, act.get("id"), None)
     _drop_extra_first_lap(splits, plan_steps)
     _assign_button_laps(splits, plan_wkt, plan_steps)
+    pts = None
     if _no_gps(act, "strava"):
         n = _apply_plan_distances(splits, plan_steps)
         print(f"/report: Strava-активность без спутников — плановые дистанции у {n} лэпов")
+    else:
+        try:
+            pts = await strava.get_activity_streams(token, act.get("id"), act.get("start_date"))
+        except Exception as e:  # noqa: BLE001
+            print(f"/report: Strava streams недоступны: {type(e).__name__}: {e}")
     return {"source": "strava", "name": name, "act_id": act.get("id"),
             "display_date": act.get("start_date_local"), "wdate": wdate, "wgroup": wgroup,
-            "wtype_key": "running", "splits": splits, "plan_steps": plan_steps, "pts": None}
+            "wtype_key": "running", "splits": splits, "plan_steps": plan_steps, "pts": pts}
 
 
 async def _coros_candidate(db_user_id, selector):
