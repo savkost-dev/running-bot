@@ -21,6 +21,7 @@ from database import (
     save_user_profile, get_user_profile,
     get_preferences, set_preference,
     save_last_recommendation, get_last_recommendation, get_recommendations_for_date,
+    save_recommendation_history,
     get_workout_notification, save_workout_notification, get_last_workout_notification,
     get_users_for_notification,
     get_garmin_recovery_cache, save_garmin_recovery_cache,
@@ -6389,6 +6390,85 @@ async def msg_user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 
 
+async def cmd_shadow_run(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/shadow_run <дата YYYYMMDD|YYYY-MM-DD> [режим smart|deep|fast] [тип shadow|shadow_1…] [limit]
+    — теневой прогон Шага 2 (12.09.2026): по всем с зонами, боевой промт без подмен,
+    результат ТОЛЬКО в recommendation_history (run_kind=тип). Ничего не шлёт, last_recommendation не трогает."""
+    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+        return
+    import time as _time
+    args = list(context.args or [])
+    if not args:
+        await update.message.reply_text("Формат: /shadow_run 20260911 [smart|deep|fast] [shadow|shadow_1] [limit]")
+        return
+    raw = args[0].replace("-", "")
+    if len(raw) != 8 or not raw.isdigit():
+        await update.message.reply_text("Дата в виде 20260911 или 2026-09-11")
+        return
+    target_date = f"{raw[:4]}-{raw[4:6]}-{raw[6:]}"
+    mode = args[1] if len(args) > 1 else "smart"
+    kind = args[2] if len(args) > 2 else "shadow"
+    limit = int(args[3]) if len(args) > 3 and args[3].isdigit() else 0
+    if mode not in ("smart", "deep", "fast"):
+        await update.message.reply_text("Режим: smart | deep | fast")
+        return
+
+    users = [(tid, name) for tid, name, _un, has in get_all_users_with_status() if has]
+    if limit:
+        users = users[:limit]
+    msg = await update.message.reply_text(
+        f"🧪 Теневой прогон {target_date}, режим {mode}, тип «{kind}»: {len(users)} человек. Рассылки не будет.")
+
+    _sem = asyncio.Semaphore(5)
+    groups: dict[str, int] = {}
+    errors: list[str] = []
+    t_sum = 0.0
+    done = 0
+
+    async def _one(tid: int, name: str):
+        nonlocal t_sum, done
+        async with _sem:
+            try:
+                db_user_id = get_or_create_user(tid, name)
+                analysis, user_data, workout_dict, _ = await _build_analysis_and_user_data(
+                    db_user_id, target_date=target_date)
+                if analysis is None:
+                    errors.append(f"{name[:20]}: нет анализа")
+                    return
+                prompt, _ctx = await _build_variant_b_prompt(db_user_id, analysis, user_data, workout_dict)
+                _t0 = _time.time()
+                res = await asyncio.to_thread(claude_advisor.ask_groq, prompt, mode)
+                _dt = _time.time() - _t0
+                advice = (res or {}).get("advice") or {}
+                if not advice:
+                    errors.append(f"{name[:20]}: пустой ответ")
+                    return
+                advice = dict(advice)
+                advice["_stats"] = (res or {}).get("stats")
+                advice["_seconds"] = round(_dt, 1)
+                save_recommendation_history(db_user_id, advice, workout_dict or {}, kind, ai_mode=mode)
+                grp = str(advice.get("recommended_group") or "—")
+                groups[grp] = groups.get(grp, 0) + 1
+                t_sum += _dt
+                done += 1
+            except Exception as e:  # noqa: BLE001
+                errors.append(f"{name[:20]}: {type(e).__name__}: {str(e)[:60]}")
+
+    await asyncio.gather(*[_one(t, n) for t, n in users])
+
+    def _gkey(g):
+        try:
+            return float(g.replace(",", "."))
+        except ValueError:
+            return 99.0
+    hist = "\n".join(f"гр{g:<5} {'█' * n} {n}" for g, n in sorted(groups.items(), key=lambda kv: _gkey(kv[0])))
+    text = (f"Теневой прогон {target_date} · {mode} · «{kind}»\n"
+            f"готово {done} из {len(users)}, среднее {t_sum / max(done, 1):.0f} с\n\n<pre>{hist}</pre>")
+    if errors:
+        text += "\n\nОшибки ({}):\n".format(len(errors)) + "\n".join(errors[:15])
+    await msg.edit_text(text[:4000], parse_mode="HTML")
+
+
 async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
                      target_db_user_id: int | None = None,
                      selector_override: str | None = None) -> None:
@@ -6644,6 +6724,7 @@ def main():
     app.add_handler(CommandHandler("brief_p", cmd_brief_p))
     app.add_handler(CommandHandler("rebrief", cmd_rebrief))
     app.add_handler(CommandHandler("shadow_caps", cmd_shadow_caps))
+    app.add_handler(CommandHandler("shadow_run", cmd_shadow_run))
     app.add_handler(CommandHandler("resend_evening", cmd_resend_evening))
     app.add_handler(CommandHandler("preprocess_mode", cmd_preprocess_mode))
     app.add_handler(CommandHandler("test_workout", cmd_test_workout))
