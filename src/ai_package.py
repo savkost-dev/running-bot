@@ -136,7 +136,7 @@ def _hr_before(pts, ts):
     return pts[i][3]
 
 
-def _splits_200(pts, start_ms, end_ms, lap_dist, chunk=200.0, keep_tail=False):
+def _splits_200(pts, start_ms, end_ms, lap_dist, chunk=200.0, keep_tail=False, min_tail=50.0):
     """Сплиты по chunk м (по умолчанию 200) внутри отрезка. [темп_сек] или None.
     Последний неполный кусок — по фактической дистанции, но короче половины куска отбрасывается
     (остаток в несколько метров из-за сглаживания дистанции у Strava даёт мусорный темп).
@@ -170,7 +170,7 @@ def _splits_200(pts, start_ms, end_ms, lap_dist, chunk=200.0, keep_tail=False):
     last_t, last_d = seg[-1][0], seg[-1][1]
     rem_d = last_d - (target - chunk)
     rem_t = (last_t - t_start) / 1000.0
-    min_tail = 50.0 if keep_tail else chunk / 2
+    min_tail = min_tail if keep_tail else chunk / 2
     if rem_d >= min_tail and rem_t > 0:
         pace = round(rem_t / (rem_d / 1000.0), 1)
         out.append((pace, round(rem_d)) if keep_tail else pace)
@@ -246,7 +246,7 @@ def _enrich_laps(splits, plan_steps, pts):
         end_ms = starts[n + 1] if n + 1 < len(starts) else (start_ms + int(t * 1000) if start_ms else None)
         hr_before = _hr_before(pts, start_ms) if (rl == "work" and pts) else None
         sp200 = _splits_200(pts, start_ms, end_ms, d) if (rl == "work" and pts and end_ms) else None
-        sp100 = _splits_200(pts, start_ms, end_ms, d, chunk=100.0) if (rl == "work" and pts and end_ms) else None
+        sp100 = _splits_200(pts, start_ms, end_ms, d, chunk=100.0, keep_tail=True, min_tail=25.0) if (rl == "work" and pts and end_ms) else None
         sp400 = _splits_200(pts, start_ms, end_ms, d, chunk=400.0, keep_tail=True) if (rl == "work" and pts and end_ms) else None
         rows.append({
             "label": label, "role": rl, "dist": d, "dur": t,
@@ -897,14 +897,23 @@ async def build_charts_stacked(splits, plan_steps, name: str, out_dir: str,
             col_of = {float(x): r["color"] for r in work_roles for x in r["xs"]}
             shown = False
             for a, b, lap in span_of.values():
-                sp = lap.get("sp_fine")
-                if not sp or len(sp) < 2:
+                sp = lap.get("sp_fine")   # [(темп, длина_м)], хвост включён
+                if not sp:
                     continue
-                w = (b - a) / len(sp)
-                xs_ = a + w / 2.0 + w * np.arange(len(sp))
+                # Рисуем только при ≥2 полных сотнях (150 м → нет, 250 м → 3 точки с хвостом).
+                if sum(1 for _, dd in sp if dd >= 90) < 2:
+                    continue
+                ys_ = [p for p, _ in sp]
+                # Точка — в середине своего куска по реальной длине (хвост короче), масштаб — ширина отрезка.
+                total = sum(dd for _, dd in sp) or 1.0
+                acc, xs_ = 0.0, []
+                for _, dd in sp:
+                    xs_.append(a + (b - a) * (acc + dd / 2.0) / total)
+                    acc += dd
+                xs_ = np.array(xs_)
                 c = col_of.get((a + b) / 2.0, th["fact"])
-                ax.plot(xs_, sp, color=c, lw=0.9, alpha=0.6, zorder=2)
-                ax.scatter(xs_, sp, color=c, s=14, alpha=0.85, zorder=2,
+                ax.plot(xs_, ys_, color=c, lw=0.9, alpha=0.6, zorder=2)
+                ax.scatter(xs_, ys_, color=c, s=14, alpha=0.85, zorder=2,
                            label=None if shown else "куски по 100 м")
                 shown = True
         ax.invert_yaxis()
