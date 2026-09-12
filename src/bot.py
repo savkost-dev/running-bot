@@ -500,7 +500,7 @@ def _parse_cmd_date(arg: str) -> str | None:
     8 цифр — ГГГГММДД, 4 цифры — ММДД с текущим годом.
     Возвращает None, если разобрать не удалось.
     """
-    arg = (arg or "").strip()
+    arg = (arg or "").strip().replace("-", "")   # 12.09.2026: принимаем и 2026-09-11
     if not arg:
         return None
     if len(arg) == 4:
@@ -6399,17 +6399,17 @@ async def cmd_shadow_run(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     import time as _time
     args = list(context.args or [])
     if not args:
-        await update.message.reply_text("Формат: /shadow_run 20260911 [smart|deep|fast] [shadow|shadow_1] [limit]")
+        await update.message.reply_text("Формат: /shadow_run 0911 [user|smart|deep|fast] [shadow|shadow_1] [limit]")
         return
     target_date = _parse_cmd_date(args[0])
     if not target_date:
-        await update.message.reply_text("Дата в виде 0911, 20260911 или 2026-09-11")
+        await update.message.reply_text("Дата в виде 0911 или 20260911")
         return
-    mode = args[1] if len(args) > 1 else "smart"
+    mode = args[1] if len(args) > 1 else "user"
     kind = args[2] if len(args) > 2 else "shadow"
     limit = int(args[3]) if len(args) > 3 and args[3].isdigit() else 0
-    if mode not in ("smart", "deep", "fast"):
-        await update.message.reply_text("Режим: smart | deep | fast")
+    if mode not in ("user", "smart", "deep", "fast"):
+        await update.message.reply_text("Режим: user (из настроек каждого, по умолчанию) | smart | deep | fast")
         return
 
     users = [(tid, name) for tid, name, _un, has in get_all_users_with_status() if has]
@@ -6435,8 +6435,13 @@ async def cmd_shadow_run(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     errors.append(f"{name[:20]}: нет анализа")
                     return
                 prompt, _ctx = await _build_variant_b_prompt(db_user_id, analysis, user_data, workout_dict)
+                # Режим: заданный явно или из настроек пользователя (как есть, без карты рассылки).
+                u_mode = mode if mode != "user" else ((get_preferences(db_user_id) or {}).get("ai_mode") or "smart")
+                if u_mode not in ("smart", "deep", "fast"):
+                    errors.append(f"{name[:20]}: режим {u_mode} без ИИ, пропуск")
+                    return
                 _t0 = _time.time()
-                res = await asyncio.to_thread(claude_advisor.ask_groq, prompt, mode)
+                res = await asyncio.to_thread(claude_advisor.ask_groq, prompt, u_mode)
                 _dt = _time.time() - _t0
                 advice = (res or {}).get("advice") or {}
                 if not advice:
@@ -6445,7 +6450,7 @@ async def cmd_shadow_run(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 advice = dict(advice)
                 advice["_stats"] = (res or {}).get("stats")
                 advice["_seconds"] = round(_dt, 1)
-                save_recommendation_history(db_user_id, advice, workout_dict or {}, kind, ai_mode=mode)
+                save_recommendation_history(db_user_id, advice, workout_dict or {}, kind, ai_mode=u_mode)
                 grp = str(advice.get("recommended_group") or "—")
                 groups[grp] = groups.get(grp, 0) + 1
                 t_sum += _dt
