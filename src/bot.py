@@ -6402,8 +6402,10 @@ async def cmd_shadow_run(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text("Формат: /shadow_run 20260911 [smart|deep|fast] [shadow|shadow_1] [limit]")
         return
     raw = args[0].replace("-", "")
+    if len(raw) == 4 and raw.isdigit():   # 0911 → текущий год, как в /report
+        raw = f"{datetime.now().year}{raw}"
     if len(raw) != 8 or not raw.isdigit():
-        await update.message.reply_text("Дата в виде 20260911 или 2026-09-11")
+        await update.message.reply_text("Дата в виде 0911, 20260911 или 2026-09-11")
         return
     target_date = f"{raw[:4]}-{raw[4:6]}-{raw[6:]}"
     mode = args[1] if len(args) > 1 else "smart"
