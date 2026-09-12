@@ -3680,6 +3680,7 @@ async def _send_ai_variant_b(
                     db_user_id, advice, workout_for_render, ai_mode=rec_mode,
                     evening_recovery_score=_eve_rs,
                     lowered_by_recovery=_lowered,
+                    run_kind="mailing" if is_broadcast else "manual",
                 )
             except Exception as _e:
                 logger.error(f"save_last_recommendation (B): {_e}")
@@ -3995,6 +3996,7 @@ async def _send_recommendation(
                 db_user_id, advice, workout_dict, ai_mode=rec_mode,
                 evening_recovery_score=_eve_rs,
                 lowered_by_recovery=False,
+                run_kind="mailing" if is_broadcast else "manual",
             )
         except Exception as _e:
             logger.error(f"save_last_recommendation (A): {_e}")

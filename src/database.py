@@ -226,6 +226,30 @@ def init_db():
                 FOREIGN KEY (user_id) REFERENCES users(id)
             );
 
+            -- 12.09.2026: история рекомендаций (last_recommendation хранит только последнюю).
+            -- Ключ: пользователь + дата + тип прогона (mailing / manual / shadow / shadow_1 …).
+            CREATE TABLE IF NOT EXISTS recommendation_history (
+                user_id INTEGER NOT NULL,
+                workout_date TEXT NOT NULL,
+                run_kind TEXT NOT NULL,
+                workout_type TEXT,
+                recommended_group TEXT,
+                recommended_pace TEXT,
+                reason TEXT,
+                if_feeling_good TEXT,
+                if_tired TEXT,
+                workout_title TEXT,
+                groups_raw TEXT,
+                extra_groups_raw TEXT,
+                ai_mode TEXT,
+                evening_recovery_score INTEGER,
+                lowered_by_recovery INTEGER DEFAULT 0,
+                advice_json TEXT,
+                saved_at TEXT DEFAULT (datetime('now')),
+                PRIMARY KEY (user_id, workout_date, run_kind),
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            );
+
             CREATE TABLE IF NOT EXISTS feedback (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
@@ -1262,8 +1286,10 @@ def save_last_recommendation(
     user_id: int, advice: dict, workout: dict, ai_mode: str = "",
     evening_recovery_score: int | None = None,
     lowered_by_recovery: bool = False,
+    run_kind: str = "manual",
 ):
-    """Сохраняет вечернюю рекомендацию для использования утром."""
+    """Сохраняет вечернюю рекомендацию для использования утром.
+    12.09.2026: дополнительно пишет строку в recommendation_history (run_kind: mailing / manual / shadow…)."""
     with get_connection() as conn:
         conn.execute("""
             INSERT INTO last_recommendation
@@ -1301,6 +1327,60 @@ def save_last_recommendation(
             int(evening_recovery_score) if evening_recovery_score is not None else None,
             1 if lowered_by_recovery else 0,
         ))
+    save_recommendation_history(user_id, advice, workout, run_kind, ai_mode,
+                                evening_recovery_score, lowered_by_recovery)
+
+
+def save_recommendation_history(
+    user_id: int, advice: dict, workout: dict, run_kind: str, ai_mode: str = "",
+    evening_recovery_score: int | None = None, lowered_by_recovery: bool = False,
+):
+    """История рекомендаций: одна строка на (пользователь, дата, run_kind), повтор — замена.
+    advice_json — полный ответ ИИ (все группы и проценты) — для последующих сравнений и теневых прогонов.
+    Ошибка записи не должна ломать рассылку — логируется."""
+    try:
+        with get_connection() as conn:
+            conn.execute("""
+                INSERT INTO recommendation_history
+                    (user_id, workout_date, run_kind, workout_type, recommended_group, recommended_pace, reason,
+                     if_feeling_good, if_tired, workout_title, groups_raw, extra_groups_raw, ai_mode,
+                     evening_recovery_score, lowered_by_recovery, advice_json, saved_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                ON CONFLICT(user_id, workout_date, run_kind) DO UPDATE SET
+                    workout_type = excluded.workout_type,
+                    recommended_group = excluded.recommended_group,
+                    recommended_pace = excluded.recommended_pace,
+                    reason = excluded.reason,
+                    if_feeling_good = excluded.if_feeling_good,
+                    if_tired = excluded.if_tired,
+                    workout_title = excluded.workout_title,
+                    groups_raw = excluded.groups_raw,
+                    extra_groups_raw = excluded.extra_groups_raw,
+                    ai_mode = excluded.ai_mode,
+                    evening_recovery_score = excluded.evening_recovery_score,
+                    lowered_by_recovery = excluded.lowered_by_recovery,
+                    advice_json = excluded.advice_json,
+                    saved_at = excluded.saved_at
+            """, (
+                user_id,
+                workout.get("workout_date", ""),
+                str(run_kind or "manual"),
+                str(workout.get("workout_type") or ""),
+                str(advice.get("recommended_group", "")),
+                str(advice.get("recommended_pace", "")),
+                str(advice.get("reason", "")),
+                str(advice.get("if_feeling_good", "")),
+                str(advice.get("if_tired", "")),
+                workout.get("location", ""),
+                workout.get("groups_raw", ""),
+                _json.dumps(workout.get("extra_groups_raw", []), ensure_ascii=False),
+                ai_mode,
+                int(evening_recovery_score) if evening_recovery_score is not None else None,
+                1 if lowered_by_recovery else 0,
+                _json.dumps(advice, ensure_ascii=False, default=str),
+            ))
+    except Exception as e:  # noqa: BLE001
+        _db_logger.error(f"recommendation_history не записана: user={user_id} kind={run_kind}: {e}")
 
 
 def get_last_recommendation(user_id: int, workout_date: str | None = None) -> dict | None:
