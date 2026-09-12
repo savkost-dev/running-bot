@@ -140,7 +140,8 @@ def _splits_200(pts, start_ms, end_ms, lap_dist, chunk=200.0, keep_tail=False, m
     """Сплиты по chunk м (по умолчанию 200) внутри отрезка. [темп_сек] или None.
     Последний неполный кусок — по фактической дистанции, но короче половины куска отбрасывается
     (остаток в несколько метров из-за сглаживания дистанции у Strava даёт мусорный темп).
-    keep_tail=True (таблица разбора): хвост от 50 м сохраняется, а результат — [(темп_сек, длина_м)].
+    keep_tail=True: хвост от min_tail м (единый порог 25 м — отсекаем только GPS-мусор) сохраняется,
+    а результат — [(темп_сек, длина_м)].
     Валидация: дистанция по точкам ≈ lap_dist (±10%)."""
     seg = [p for p in pts if p[0] is not None and start_ms <= p[0] < end_ms and p[1] is not None]
     if len(seg) < 4 or not lap_dist or lap_dist < 2 * float(chunk):
@@ -245,9 +246,9 @@ def _enrich_laps(splits, plan_steps, pts):
         start_ms = starts[n]
         end_ms = starts[n + 1] if n + 1 < len(starts) else (start_ms + int(t * 1000) if start_ms else None)
         hr_before = _hr_before(pts, start_ms) if (rl == "work" and pts) else None
-        sp200 = _splits_200(pts, start_ms, end_ms, d) if (rl == "work" and pts and end_ms) else None
+        sp200 = _splits_200(pts, start_ms, end_ms, d, keep_tail=True, min_tail=25.0) if (rl == "work" and pts and end_ms) else None
         sp100 = _splits_200(pts, start_ms, end_ms, d, chunk=100.0, keep_tail=True, min_tail=25.0) if (rl == "work" and pts and end_ms) else None
-        sp400 = _splits_200(pts, start_ms, end_ms, d, chunk=400.0, keep_tail=True) if (rl == "work" and pts and end_ms) else None
+        sp400 = _splits_200(pts, start_ms, end_ms, d, chunk=400.0, keep_tail=True, min_tail=25.0) if (rl == "work" and pts and end_ms) else None
         rows.append({
             "label": label, "role": rl, "dist": d, "dur": t,
             "step": st, "intensity": str(lp.get("intensityType") or "").upper(),
@@ -679,7 +680,9 @@ async def build_package(db_user_id: int, selector=None) -> dict:
     if sp_rows:
         A("\n[СПЛИТЫ ПО 200 м ВНУТРИ ДЛИННЫХ ОТРЕЗКОВ] (темп каждого 200 м)")
         for r in sp_rows:
-            A(f"  отр {r['label']}: " + ", ".join(_fmt_pace(p) for p in r["splits200"]))
+            A(f"  отр {r['label']}: " + ", ".join(
+                _fmt_pace(p) + (f" ({int(round(dd))} м)" if dd < 180 else "")
+                for p, dd in r["splits200"]))
 
     A("\n[САМОЧУВСТВИЕ УТРОМ] (текущий снимок)")
     if snap and snap.get("caught"):
