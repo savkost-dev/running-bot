@@ -1267,6 +1267,7 @@ def _build_help_text(is_admin: bool) -> str:
             "\n/rebrief — ПРИНУДИТЕЛЬНО пересобрать режимы заново (/rebrief 20260804), без переанализа анонса"
             "\n/resend_evening — дослать вечернюю тем, кому не ушла (/resend_evening 20260814 [fast|smart|deep])"
             "\n/msg_user <id> <текст> — написать юзеру от имени бота"
+            "\n/msg_list @user 128 … — написать по списку (текст — следующим сообщением)"
             "\n/msg_service — написать всем, у кого подключён выбранный сервис"
             "\n/profile_user — посмотреть профиль выбранного пользователя"
             "\n/last — разбор последней выполненной тренировки (графики факт vs план; /last dark — тёмная тема)"
@@ -3465,6 +3466,28 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await asyncio.sleep(0.05)
         _lbl = _audience_name(svc) or _svc_name(svc)
         report = f"✅ {_lbl}: отправлено {sent} из {len(targets)}"
+        if failed:
+            report += "\n❌ Не дошло:\n" + "\n".join(failed[:20])
+        await update.message.reply_text(report)
+        return
+    # ── /msg_list: текст по списку адресатов (admin, 12.09.2026) ──
+    elif context.user_data.get("awaiting_msg_list"):
+        targets = context.user_data.pop("awaiting_msg_list")
+        if text.strip().lower() in ("отмена", "cancel", "/cancel"):
+            await update.message.reply_text("Отменено, ничего не отправлено.")
+            return
+        sent, failed = 0, []
+        for tg_id, name in targets:
+            try:
+                await context.bot.send_message(tg_id, text)
+                sent += 1
+            except Forbidden:
+                await _report_block(context.bot, tg_id, "msg_list")
+                failed.append(f"{name or tg_id}: заблокировал бота")
+            except Exception as e:
+                failed.append(f"{name or tg_id}: {type(e).__name__}")
+            await asyncio.sleep(0.05)
+        report = f"✅ По списку: отправлено {sent} из {len(targets)}"
         if failed:
             report += "\n❌ Не дошло:\n" + "\n".join(failed[:20])
         await update.message.reply_text(report)
@@ -6308,6 +6331,44 @@ async def msg_service_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         f"следующим сообщением (или напиши «отмена»).")
 
 
+async def cmd_msg_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/msg_list @user1 @user2 128 … (admin, 12.09.2026) — адресаты по @username или номеру в базе (uid),
+    через пробел в любом порядке. Бот показывает, кого нашёл/не нашёл, и ждёт текст следующим
+    сообщением («отмена» — отбой). Отправка как у /msg_service: без parse_mode, отчёт кто не получил."""
+    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+        return
+    args = context.args or []
+    if not args:
+        await update.message.reply_text("Формат: /msg_list @username 128 … — потом текст отдельным сообщением.")
+        return
+    from database import get_connection
+    found, missing, seen = [], [], set()
+    with get_connection() as conn:
+        for raw in args:
+            if raw.startswith("@"):
+                row = conn.execute(
+                    "SELECT telegram_id, name, id FROM users WHERE username=? COLLATE NOCASE",
+                    (raw[1:],)).fetchone()
+            elif raw.isdigit():
+                row = conn.execute("SELECT telegram_id, name, id FROM users WHERE id=?", (int(raw),)).fetchone()
+            else:
+                row = None
+            if not row:
+                missing.append(raw)
+            elif row[0] not in seen:
+                seen.add(row[0])
+                found.append((row[0], row[1]))
+    if not found:
+        await update.message.reply_text("Никого не нашёл: " + ", ".join(missing))
+        return
+    context.user_data["awaiting_msg_list"] = found
+    lines = [f"✉️ Адресаты ({len(found)}): " + ", ".join(n or str(t) for t, n in found)]
+    if missing:
+        lines.append("❌ Не найдены: " + ", ".join(missing))
+    lines.append("Напиши текст следующим сообщением (или «отмена»).")
+    await update.message.reply_text("\n".join(lines))
+
+
 async def cmd_msg_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/msg_user <id> <текст> (admin) — отправить сообщение юзеру от имени бота.
     id — внутренний db_user_id (как в отчётах/слепках). Текст — всё после id,
@@ -6748,6 +6809,7 @@ def main():
     app.add_handler(CommandHandler("p_analyze", p_analyze_command))
     app.add_handler(CommandHandler("activity",  cmd_activity))
     app.add_handler(CommandHandler("msg_user",  cmd_msg_user))
+    app.add_handler(CommandHandler("msg_list",  cmd_msg_list))
     app.add_handler(CommandHandler("msg_service", cmd_msg_service))
     app.add_handler(CommandHandler("profile_user", cmd_profile_user))
     app.add_handler(CommandHandler("howto",     cmd_howto))

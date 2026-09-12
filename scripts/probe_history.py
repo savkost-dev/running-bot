@@ -12,7 +12,7 @@ import database as db  # noqa: E402
 date = sys.argv[1] if len(sys.argv) > 1 else None
 kind = sys.argv[2] if len(sys.argv) > 2 else None
 sql = ("SELECT h.user_id, u.name, h.workout_date, h.run_kind, h.workout_type, h.ai_mode, "
-       "h.recommended_group, length(h.advice_json), h.saved_at "
+       "h.recommended_group, length(h.advice_json), h.saved_at, h.groups_pct "
        "FROM recommendation_history h LEFT JOIN users u ON u.id = h.user_id WHERE 1=1")
 params = []
 if date:
@@ -26,4 +26,4 @@ with db.get_connection() as conn:
     rows = conn.execute(sql, params).fetchall()
 print(f"строк: {len(rows)}")
 for r in rows:
-    print(f"uid={r[0]:<4} {str(r[1])[:20]:<20} {r[2]} {r[3]:<10} {str(r[4]):<8} {str(r[5]):<6} гр={r[6]:<4} json={r[7]:<5} {r[8]}")
+    print(f"uid={r[0]:<4} {str(r[1])[:20]:<20} {r[2]} {r[3]:<10} {str(r[4]):<8} {str(r[5]):<6} гр={r[6]:<4} json={r[7]:<5} {r[8]}  {r[9]}")
