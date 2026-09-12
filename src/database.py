@@ -245,6 +245,7 @@ def init_db():
                 evening_recovery_score INTEGER,
                 lowered_by_recovery INTEGER DEFAULT 0,
                 advice_json TEXT,
+                groups_pct TEXT,
                 saved_at TEXT DEFAULT (datetime('now')),
                 PRIMARY KEY (user_id, workout_date, run_kind),
                 FOREIGN KEY (user_id) REFERENCES users(id)
@@ -418,6 +419,11 @@ def init_db():
     with get_connection() as conn:
         try:
             conn.execute("ALTER TABLE last_recommendation ADD COLUMN ai_mode TEXT")
+        except Exception:
+            pass
+    with get_connection() as conn:
+        try:  # 12.09.2026: проценты по всем группам отдельным полем в истории
+            conn.execute("ALTER TABLE recommendation_history ADD COLUMN groups_pct TEXT")
         except Exception:
             pass
     with get_connection() as conn:
@@ -1344,8 +1350,8 @@ def save_recommendation_history(
                 INSERT INTO recommendation_history
                     (user_id, workout_date, run_kind, workout_type, recommended_group, recommended_pace, reason,
                      if_feeling_good, if_tired, workout_title, groups_raw, extra_groups_raw, ai_mode,
-                     evening_recovery_score, lowered_by_recovery, advice_json, saved_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                     evening_recovery_score, lowered_by_recovery, advice_json, groups_pct, saved_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
                 ON CONFLICT(user_id, workout_date, run_kind) DO UPDATE SET
                     workout_type = excluded.workout_type,
                     recommended_group = excluded.recommended_group,
@@ -1360,6 +1366,7 @@ def save_recommendation_history(
                     evening_recovery_score = excluded.evening_recovery_score,
                     lowered_by_recovery = excluded.lowered_by_recovery,
                     advice_json = excluded.advice_json,
+                    groups_pct = excluded.groups_pct,
                     saved_at = excluded.saved_at
             """, (
                 user_id,
@@ -1378,6 +1385,10 @@ def save_recommendation_history(
                 int(evening_recovery_score) if evening_recovery_score is not None else None,
                 1 if lowered_by_recovery else 0,
                 _json.dumps(advice, ensure_ascii=False, default=str),
+                _json.dumps({str(g.get("group")): g.get("percentage")
+                             for g in (advice.get("suitability_percentages") or [])
+                             if isinstance(g, dict) and g.get("group") is not None},
+                            ensure_ascii=False),
             ))
     except Exception as e:  # noqa: BLE001
         _db_logger.error(f"recommendation_history не записана: user={user_id} kind={run_kind}: {e}")
