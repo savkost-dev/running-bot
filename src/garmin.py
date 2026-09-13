@@ -370,12 +370,14 @@ async def get_lactate_threshold(db_user_id: int) -> dict | None:
         return None
 
 
-async def upload_workout(db_user_id: int, workout_json: dict) -> bool:
+async def upload_workout(db_user_id: int, workout_json: dict, schedule_date: str | None = None) -> bool:
     """Uploads a workout plan to Garmin Connect. Returns True on success.
     18.08.2026: после загрузки АВТО-ПУШ в библиотеку часов (формат снят с живого
     запроса кнопки GC «отправить в устройство»): юзеру больше не нужно жать
     значок вручную — тренировка приедет при следующем синке часов. Пуш
-    best-effort: его ошибка не валит успешную загрузку."""
+    best-effort: его ошибка не валит успешную загрузку.
+    13.09.2026: schedule_date ('YYYY-MM-DD') — поставить тренировку в календарь Garmin на дату
+    (часы сами предложат её в день тренировки); тоже best-effort."""
     client = await _client(db_user_id)
     if not client:
         return False
@@ -423,6 +425,12 @@ async def upload_workout(db_user_id: int, workout_json: dict) -> bool:
                 print(f"Garmin: workout {wid} pushed to {len(msgs)} device(s)")
         except Exception as e:
             print(f"Garmin device push (некритично): {type(e).__name__}: {str(e)[:200]}")
+        if schedule_date:
+            try:
+                _post(f"/workout-service/schedule/{wid}", {"date": schedule_date})
+                print(f"Garmin: workout {wid} scheduled on {schedule_date}")
+            except Exception as e:
+                print(f"Garmin schedule (некритично): {type(e).__name__}: {str(e)[:200]}")
         return True
 
     try:

@@ -2856,7 +2856,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     reply_markup=_add_main_menu_btn(None))
                 return
             from garmin import upload_workout as garmin_upload_workout
-            ok = await garmin_upload_workout(db_user_id, wkt)
+            # 13.09.2026: в календарь Garmin — только тренировки с разминкой/заминкой и только на сегодня или будущее.
+            _sched = None
+            if data.get("warmup") and wdate:
+                try:
+                    if datetime.strptime(wdate, "%Y-%m-%d").date() >= datetime.now(MSK).date():
+                        _sched = wdate
+                except ValueError:
+                    _sched = None
+            ok = await garmin_upload_workout(db_user_id, wkt, schedule_date=_sched)
             if ok:
                 await context.bot.send_message(
                     user.id,
