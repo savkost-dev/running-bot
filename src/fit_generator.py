@@ -395,7 +395,7 @@ def _build_long_run_json(workout: dict, group: str, strategy: str,
 # ── Лонг: постоянная библиотека эталонов (13.09.2026) ───────────────────────────
 # Лонг клуба одинаков круглый год: 1 ч 40 мин, группы с шагом 30 с/км, в каждой —
 # ровно или с ускорением на 30 с/км на второй половине. Эталоны хранятся в workout_templates
-# без даты (workout_date = LONG_TEMPLATE_DATE, wtype = 'long', group_number = '3' / '3+').
+# без даты (workout_date = LONG_TEMPLATE_DATE, wtype = 'long', group_number = '3' / '3p').
 
 LONG_TEMPLATE_DATE = '2999-12-31'
 LONG_TOTAL_MIN = 100
@@ -406,8 +406,8 @@ LONG_GROUP_PACES = {              # темп группы, мин/км (подт
 
 
 def long_template_name(group: str, progressive: bool) -> str:
-    """'3', True → 'DDLong-3+'; '3', False → 'DDLong-3'."""
-    return f"DDLong-{group}{'+' if progressive else ''}"
+    """'3', True → 'DDLong-3p'; '3', False → 'DDLong-3'. («+» Garmin в имени теряет — поэтому p.)"""
+    return f"DDLong-{group}{'p' if progressive else ''}"
 
 
 def _pace_minus(pace: str, seconds: int) -> str:

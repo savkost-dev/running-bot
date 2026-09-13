@@ -1,6 +1,6 @@
 """Собрать постоянную библиотеку эталонов лонга и положить в workout_templates.
 
-12 строк: группы 1-6 × (ровно / с ускорением «+»), workout_date = 2999-12-31, wtype = long.
+12 строк: группы 1-6 × (ровно / с ускорением «p»), workout_date = 2999-12-31, wtype = long.
 Повторный запуск перезаписывает. Раз/зам в эталон не кладём — добавляются галочкой при загрузке.
 
 Запуск на сервере:  venv/bin/python scripts/build_long_templates.py [--dry]
@@ -24,7 +24,7 @@ def main() -> None:
     for grp in LONG_GROUP_PACES:
         for progressive in (False, True):
             wj = build_long_template(grp, progressive)
-            key = f"{grp}+" if progressive else grp
+            key = f"{grp}p" if progressive else grp
             rows.append((LONG_TEMPLATE_DATE, key, "long", json.dumps(wj, ensure_ascii=False)))
             steps = wj["workoutSegments"][0]["workoutSteps"]
             print(f"{long_template_name(grp, progressive):<10} шагов {len(steps)}  "

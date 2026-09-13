@@ -2825,6 +2825,18 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"❌ Ошибка загрузки в Garmin: {type(e).__name__}",
                 reply_markup=_add_main_menu_btn(None))
 
+    elif query.data == "garmin_prog_toggle":
+        # 13.09.2026: лонг — переключение ускорения на второй половине (только в этом сообщении, в базу не пишется)
+        data = _fit_data.get(user.id)
+        if not data or data.get("type") != "long":
+            return
+        data["progressive"] = not data.get("progressive")
+        try:
+            await query.edit_message_reply_markup(reply_markup=_garmin_upload_markup(data))
+        except Exception:
+            pass
+        return
+
     elif query.data == "garmin_wu_toggle":
         # 13.09.2026: галочка «разминка и заминка» — только в этом сообщении (_fit_data), в базу не пишется.
         data = _fit_data.get(user.id)
@@ -6429,7 +6441,14 @@ def _garmin_upload_markup(data: dict) -> InlineKeyboardMarkup:
     """Клавиатура сообщения «Загрузить в Garmin»: галочка разминка/заминка + топ-3 группы (13.09.2026)."""
     mark = "☑" if data.get("warmup") else "☐"
     rows = [[InlineKeyboardButton(f"{mark} Разминка и заминка", callback_data="garmin_wu_toggle")]]
-    rows.append([InlineKeyboardButton(f"⌚ Гр.{g}" + (f" ({p}%)" if p is not None else ""),
+    suffix = ""
+    if data.get("type") == "long":
+        # 13.09.2026: лонг — галочка ускорения (предвыбрана по рекомендации), на кнопках «+» при включённой
+        pmark = "☑" if data.get("progressive") else "☐"
+        rows.append([InlineKeyboardButton(f"{pmark} Ускорение на второй половине",
+                                          callback_data="garmin_prog_toggle")])
+        suffix = "+" if data.get("progressive") else ""
+    rows.append([InlineKeyboardButton(f"⌚ Гр.{g}{suffix}" + (f" ({p}%)" if p is not None else ""),
                                       callback_data=f"garmin_grp_{g}")
                  for g, p in (data.get("top3") or [])])
     return InlineKeyboardMarkup(rows)
