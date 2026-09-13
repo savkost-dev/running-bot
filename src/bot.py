@@ -2799,6 +2799,28 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"❌ Ошибка загрузки в Garmin: {type(e).__name__}",
                 reply_markup=_add_main_menu_btn(None))
 
+    elif query.data == "garmin_wu_toggle":
+        # 13.09.2026: галочка «разминка и заминка» — только в этом сообщении (_fit_data), в базу не пишется.
+        data = _fit_data.get(user.id)
+        if not data:
+            await context.bot.send_message(
+                user.id, "⏱ Данные устарели. Запроси рекомендацию заново (/workout).",
+                reply_markup=_add_main_menu_btn(None))
+            return
+        data["warmup"] = not data.get("warmup")
+        try:
+            await query.edit_message_reply_markup(reply_markup=_garmin_upload_markup(data))
+        except Exception:
+            pass
+        if data["warmup"]:
+            await context.bot.send_message(
+                user.id,
+                "Разминка и заминка будут добавлены в тренировку как шаги без темпа и длины.\n\n"
+                "Во время разминки можно ставить часы на паузу. Перед работой сними с паузы и нажми Lap — "
+                "часы перейдут к рабочим отрезкам. Заминка тоже завершается кнопкой Lap.\n\n"
+                "Теперь выбери группу для загрузки.")
+        return
+
     elif query.data.startswith("garmin_grp_"):
         group_num = query.data[len("garmin_grp_"):]
         data = _fit_data.get(user.id)
@@ -2813,7 +2835,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             from fit_generator import build_garmin_from_analysis, workout_filename
             analysis_d = data.get("analysis") or {}
             wdate = analysis_d.get("workout_date", "")
-            wkt = build_garmin_from_analysis(analysis_d, group_num)
+            wkt = build_garmin_from_analysis(analysis_d, group_num, with_warmup=bool(data.get("warmup")))
             fname = workout_filename(wdate, group_num)
             _fit_data[user.id] = {
                 **data,
@@ -3734,18 +3756,13 @@ async def _send_ai_variant_b(
                 "analysis": analysis,
                 "workout": workout_for_render,
                 "recommended_group": str(advice.get("recommended_group", "")),
+                "top3": [(str(s["group"]), s["percentage"]) for s in _top3],
+                "warmup": False,
             }
-            _garmin_btns = [
-                InlineKeyboardButton(
-                    f"⌚ Гр.{s['group']} ({s['percentage']}%)",
-                    callback_data=f"garmin_grp_{s['group']}",
-                )
-                for s in _top3
-            ]
             await context.bot.send_message(
                 telegram_id,
                 "🏃 Загрузить тренировку в Garmin — выбери группу:",
-                reply_markup=InlineKeyboardMarkup([_garmin_btns]),
+                reply_markup=_garmin_upload_markup(_fit_data[telegram_id]),
             )
 
         # Второе сообщение — свободный текст от ИИ (нюансы, физиология)
@@ -6329,6 +6346,15 @@ async def msg_service_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.edit_message_text(
         f"✉️ Напиши текст для пользователей {lbl} ({n} чел.) "
         f"следующим сообщением (или напиши «отмена»).")
+
+
+def _garmin_upload_markup(data: dict) -> InlineKeyboardMarkup:
+    """Клавиатура сообщения «Загрузить в Garmin»: галочка разминка/заминка + топ-3 группы (13.09.2026)."""
+    mark = "☑" if data.get("warmup") else "☐"
+    rows = [[InlineKeyboardButton(f"{mark} Разминка и заминка", callback_data="garmin_wu_toggle")]]
+    rows.append([InlineKeyboardButton(f"⌚ Гр.{g} ({p}%)", callback_data=f"garmin_grp_{g}")
+                 for g, p in (data.get("top3") or [])])
+    return InlineKeyboardMarkup(rows)
 
 
 async def cmd_msg_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

@@ -235,6 +235,18 @@ def _step(order: int, dist_m: float | None = None, time_s: float | None = None,
     }
 
 
+def _lap_button_step(order: int, stype: str) -> dict:
+    """Шаг без цели и без длины, завершается кнопкой Lap (разминка/заминка, 13.09.2026).
+    Формат — как у ручной тренировки Антона DD_Long: endCondition=lap.button, target=no.target."""
+    st = _step(order, time_s=0.0, stype=stype)
+    st['stepType'] = {'stepTypeId': 1 if stype == 'warmup' else 2, 'stepTypeKey': stype,
+                      'displayOrder': 1 if stype == 'warmup' else 2}
+    st['endCondition'] = {'conditionTypeId': 1, 'conditionTypeKey': 'lap.button',
+                          'displayOrder': 1, 'displayable': True}
+    st['endConditionValue'] = None
+    return st
+
+
 def _repeat_group(order: int, iterations: int, inner_steps: list,
                   skip_last_rest: bool = False) -> dict:
     """Build a RepeatGroupDTO."""
@@ -432,7 +444,7 @@ def _is_max_effort(struct: dict) -> bool:
     return re.search(r"\b1\d\d\s?%", txt) is not None
 
 
-def build_garmin_from_analysis(analysis: dict, group_num: str) -> dict:
+def build_garmin_from_analysis(analysis: dict, group_num: str, with_warmup: bool = False) -> dict:
     """Build Garmin workout JSON from structured analysis (structure[] + groups[]).
 
     Reads structure[].{reps, work_distance_m, recovery_distance_m} and
@@ -557,6 +569,11 @@ def build_garmin_from_analysis(analysis: dict, group_num: str) -> dict:
         top_order += 1
 
     d = date.replace('-', '')
+    if with_warmup:
+        # 13.09.2026: разминка первым шагом, заминка последним; верхние шаги сдвигаются на +1.
+        for s in steps:
+            s['stepOrder'] = int(s.get('stepOrder') or 0) + 1
+        steps = [_lap_button_step(1, 'warmup')] + steps + [_lap_button_step(len(steps) + 2, 'cooldown')]
     return _workout_json(f'DD_{d}-{group_num}_lvl', steps)
 
 
