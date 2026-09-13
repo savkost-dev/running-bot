@@ -392,6 +392,56 @@ def _build_long_run_json(workout: dict, group: str, strategy: str,
 
 # ── Public API ────────────────────────────────────────────────
 
+# ── Лонг: постоянная библиотека эталонов (13.09.2026) ───────────────────────────
+# Лонг клуба одинаков круглый год: 1 ч 40 мин, группы с шагом 30 с/км, в каждой —
+# ровно или с ускорением на 30 с/км на второй половине. Эталоны хранятся в workout_templates
+# без даты (workout_date = LONG_TEMPLATE_DATE, wtype = 'long', group_number = '3' / '3+').
+
+LONG_TEMPLATE_DATE = '2999-12-31'
+LONG_TOTAL_MIN = 100
+LONG_PROGRESSION_S = 30           # ускорение на второй половине, с/км
+LONG_GROUP_PACES = {              # темп группы, мин/км (подтверждено Антоном 13.09, «кажется так»)
+    '1': '4:30', '2': '5:00', '3': '5:30', '4': '6:00', '5': '6:30', '6': '7:00',
+}
+
+
+def long_template_name(group: str, progressive: bool) -> str:
+    """'3', True → 'DDLong-3+'; '3', False → 'DDLong-3'."""
+    return f"DDLong-{group}{'+' if progressive else ''}"
+
+
+def _pace_minus(pace: str, seconds: int) -> str:
+    """'5:30', 30 → '5:00'."""
+    m, s = pace.split(':')
+    total = int(m) * 60 + int(s) - seconds
+    return f'{total // 60}:{total % 60:02d}'
+
+
+def build_long_template(group: str, progressive: bool, with_warmup: bool = False) -> dict:
+    """Garmin JSON эталона лонга для группы: ровно (100 мин @темп) или с ускорением
+    (50 мин @темп + 50 мин @темп−30 с). С галочкой — разминка/заминка по кнопке Lap.
+    Неизвестная группа — KeyError, без фолбэка."""
+    pace = LONG_GROUP_PACES[str(group)]
+    v1 = _pace_to_ms(pace)
+    steps = []
+    order = 1
+    if with_warmup:
+        steps.append(_lap_button_step(order, 'warmup'))
+        order += 1
+    if progressive:
+        v2 = _pace_to_ms(_pace_minus(pace, LONG_PROGRESSION_S))
+        half = LONG_TOTAL_MIN * 30
+        steps.append(_step(order, time_s=half, v_fast=v1, v_slow=v1))
+        steps.append(_step(order + 1, time_s=half, v_fast=v2, v_slow=v2))
+        order += 2
+    else:
+        steps.append(_step(order, time_s=LONG_TOTAL_MIN * 60, v_fast=v1, v_slow=v1))
+        order += 1
+    if with_warmup:
+        steps.append(_lap_button_step(order, 'cooldown'))
+    return _workout_json(long_template_name(group, progressive), steps)
+
+
 def create_garmin_workout(workout: dict, recommended_group: str,
                           recommended_pace: str = '') -> dict:
     """Return Garmin Connect workout JSON ready for upload.

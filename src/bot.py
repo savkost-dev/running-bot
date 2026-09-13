@@ -2839,7 +2839,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
         if data["warmup"]:
-            _wd = (data.get("analysis") or {}).get("workout_date", "")
+            _wd = ((data.get("analysis") or {}).get("workout_date")
+                   or (data.get("workout") or {}).get("workout_date", ""))   # лонг: дата из workout
             try:
                 _wd_dt = datetime.strptime(_wd, "%Y-%m-%d").date()
                 _wd_txt = _wd_dt.strftime("%d.%m")
@@ -2872,10 +2873,18 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         try:
             from fit_generator import build_garmin_from_analysis, workout_filename
-            analysis_d = data.get("analysis") or {}
-            wdate = analysis_d.get("workout_date", "")
-            wkt = build_garmin_from_analysis(analysis_d, group_num, with_warmup=bool(data.get("warmup")))
-            fname = workout_filename(wdate, group_num)
+            if data.get("type") == "long":
+                # 13.09.2026: лонг — эталон из постоянной библиотеки, вариант «+» из рекомендации
+                from fit_generator import build_long_template, long_template_name
+                _prog = bool(data.get("progressive"))
+                wdate = (data.get("workout") or {}).get("workout_date", "")
+                wkt = build_long_template(group_num, _prog, with_warmup=bool(data.get("warmup")))
+                fname = long_template_name(group_num, _prog) + ".json"
+            else:
+                analysis_d = data.get("analysis") or {}
+                wdate = analysis_d.get("workout_date", "")
+                wkt = build_garmin_from_analysis(analysis_d, group_num, with_warmup=bool(data.get("warmup")))
+                fname = workout_filename(wdate, group_num)
             _fit_data[user.id] = {
                 **data,
                 "recommended_group": group_num,
@@ -4552,25 +4561,28 @@ async def _send_long_run_recommendation(
     rating_markup = None
     if msg and advice:
         rec_group     = str(advice.get('recommended_group', ''))
-        first_half    = str(advice.get('first_half_pace', ''))
-        second_half   = advice.get('second_half_pace')
+        # 13.09.2026: лонг грузится из постоянной библиотеки эталонов (DDLong-N / DDLong-N+):
+        # кнопки — рекомендованная группа и соседние ±1, вариант «+» — из стратегии рекомендации.
+        from fit_generator import LONG_GROUP_PACES
+        try:
+            _g = int(rec_group)
+            _neighbors = [str(g) for g in (_g - 1, _g, _g + 1) if str(g) in LONG_GROUP_PACES]
+        except ValueError:
+            _neighbors = [rec_group] if rec_group in LONG_GROUP_PACES else []
         _fit_data[telegram_id] = {
             'type': 'long',
             'workout': workout,
             'recommended_group': rec_group,
-            'strategy': advice.get('run_strategy', 'even'),
-            'first_half_pace': first_half,
-            'second_half_pace': second_half,
-            'garmin_json': garmin_json,
+            'progressive': advice.get('run_strategy') == 'progressive',
+            'top3': [(g, None) for g in _neighbors],
+            'warmup': False,
         }
         _rating_data[telegram_id] = {
             'workout_date': workout.get('workout_date', ''),
             'ai_mode': ai_mode,
             'rec_group': 'лонг',
         }
-        fit_markup = InlineKeyboardMarkup([[
-            InlineKeyboardButton("⌚ Загрузить в Garmin", callback_data="fit_up"),
-        ]])
+        fit_markup = _garmin_upload_markup(_fit_data[telegram_id])
         rating_markup = InlineKeyboardMarkup([
             _pace_feedback_row(),
             [InlineKeyboardButton("⭐ Оценить рекомендацию", callback_data="rate_show")],
@@ -6399,7 +6411,8 @@ def _garmin_upload_markup(data: dict) -> InlineKeyboardMarkup:
     """Клавиатура сообщения «Загрузить в Garmin»: галочка разминка/заминка + топ-3 группы (13.09.2026)."""
     mark = "☑" if data.get("warmup") else "☐"
     rows = [[InlineKeyboardButton(f"{mark} Разминка и заминка", callback_data="garmin_wu_toggle")]]
-    rows.append([InlineKeyboardButton(f"⌚ Гр.{g} ({p}%)", callback_data=f"garmin_grp_{g}")
+    rows.append([InlineKeyboardButton(f"⌚ Гр.{g}" + (f" ({p}%)" if p is not None else ""),
+                                      callback_data=f"garmin_grp_{g}")
                  for g, p in (data.get("top3") or [])])
     return InlineKeyboardMarkup(rows)
 
