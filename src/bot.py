@@ -4101,6 +4101,16 @@ async def _send_recommendation(
     await _send_admin_data_block(telegram_id, db_user_id, user_data.get("recovery"), context)
     scenario_header = scenario_ctx["user_text"] + "\n\n" if scenario_ctx.get("user_text") else ""
     await _out(scenario_header + banner + body, final_markup, parse_mode="HTML")
+    # 13.09.2026: лонг — отдельное окно «Загрузить в Garmin» (эталоны DDLong-N / N+), только с подключённым Garmin
+    if long and get_token(db_user_id, "garmin"):
+        _lfd = _long_fit_data(workout_dict, advice)
+        if _lfd:
+            _fit_data[telegram_id] = _lfd
+            await context.bot.send_message(
+                telegram_id,
+                "🏃 Загрузить лонг в Garmin — выбери группу:",
+                reply_markup=_garmin_upload_markup(_lfd),
+            )
 
 
 
@@ -4561,28 +4571,14 @@ async def _send_long_run_recommendation(
     rating_markup = None
     if msg and advice:
         rec_group     = str(advice.get('recommended_group', ''))
-        # 13.09.2026: лонг грузится из постоянной библиотеки эталонов (DDLong-N / DDLong-N+):
-        # кнопки — рекомендованная группа и соседние ±1, вариант «+» — из стратегии рекомендации.
-        from fit_generator import LONG_GROUP_PACES
-        try:
-            _g = int(rec_group)
-            _neighbors = [str(g) for g in (_g - 1, _g, _g + 1) if str(g) in LONG_GROUP_PACES]
-        except ValueError:
-            _neighbors = [rec_group] if rec_group in LONG_GROUP_PACES else []
-        _fit_data[telegram_id] = {
-            'type': 'long',
-            'workout': workout,
-            'recommended_group': rec_group,
-            'progressive': advice.get('run_strategy') == 'progressive',
-            'top3': [(g, None) for g in _neighbors],
-            'warmup': False,
-        }
+        # 13.09.2026: лонг грузится из постоянной библиотеки эталонов (DDLong-N / DDLong-N+)
+        _fit_data[telegram_id] = _long_fit_data(workout, advice) or {}
         _rating_data[telegram_id] = {
             'workout_date': workout.get('workout_date', ''),
             'ai_mode': ai_mode,
             'rec_group': 'лонг',
         }
-        fit_markup = _garmin_upload_markup(_fit_data[telegram_id])
+        fit_markup = _garmin_upload_markup(_fit_data[telegram_id]) if _fit_data.get(telegram_id) else None
         rating_markup = InlineKeyboardMarkup([
             _pace_feedback_row(),
             [InlineKeyboardButton("⭐ Оценить рекомендацию", callback_data="rate_show")],
@@ -6405,6 +6401,28 @@ async def msg_service_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.edit_message_text(
         f"✉️ Напиши текст для пользователей {lbl} ({n} чел.) "
         f"следующим сообщением (или напиши «отмена»).")
+
+
+def _long_fit_data(workout: dict, advice: dict) -> dict | None:
+    """13.09.2026: данные для окна «Загрузить лонг в Garmin»: рекомендованная группа и соседние ±1,
+    вариант «+» — из стратегии рекомендации. None, если группа не из библиотеки лонга."""
+    from fit_generator import LONG_GROUP_PACES
+    rec_group = str(advice.get("recommended_group", ""))
+    try:
+        g = int(rec_group)
+        neighbors = [str(x) for x in (g - 1, g, g + 1) if str(x) in LONG_GROUP_PACES]
+    except ValueError:
+        neighbors = [rec_group] if rec_group in LONG_GROUP_PACES else []
+    if not neighbors:
+        return None
+    return {
+        "type": "long",
+        "workout": workout,
+        "recommended_group": rec_group,
+        "progressive": advice.get("run_strategy") == "progressive",
+        "top3": [(x, None) for x in neighbors],
+        "warmup": False,
+    }
 
 
 def _garmin_upload_markup(data: dict) -> InlineKeyboardMarkup:
