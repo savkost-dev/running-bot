@@ -293,7 +293,7 @@ def _name_matches(selector, name) -> bool:
 def _pick_activity(acts, selector):
     runs = [a for a in (acts or [])
             if "running" in str((a.get("activityType") or {}).get("typeKey", ""))
-            and re.search(r"DD[-_]", str(a.get("activityName") or ""))]
+            and _is_dd_name(a.get("activityName"))]
     # Самая свежая — первой: на порядок выдачи API не полагаемся.
     runs.sort(key=lambda a: str(a.get("startTimeLocal") or a.get("startTimeGMT") or ""),
               reverse=True)
@@ -305,13 +305,48 @@ def _pick_activity(acts, selector):
     return next((a for a in runs if _name_matches(selector, a.get("activityName"))), None)
 
 
+_DD_INTERVAL_RE = re.compile(r"(?<![A-Za-z])DD[-_](\d{8}|\d{4})(?:[-_]([\d.]+))?(?:[-_]lvl)?(?![\d.])", re.I)
+_DD_LONG_RE = re.compile(r"(?<![A-Za-z])DD[-_]?Long[-_]?(\d+)(p|\+)?(?![\d.])", re.I)
+
+
+def parse_dd_name(name) -> dict | None:
+    """13.09.2026: ЕДИНСТВЕННЫЙ разбор имени активности клуба — все поиски по маске идут через него.
+    Интервалы: DD_20260913-3.5_lvl, DD_0913-3.5, DD-0913 (год при 4 цифрах — текущий;
+    группа и суффикс _lvl необязательны; '-' и '_' равнозначны).
+    Лонг: DDLong-3, DDLong-3p, DDLong-3+, DD_Long-3+ (p и + равнозначны = с ускорением).
+    Возвращает {'kind': 'interval'|'long', 'date': 'YYYY-MM-DD'|None, 'group': str|None,
+    'progressive': bool} или None, если имя не по маске."""
+    from datetime import datetime as _dt
+    s = str(name or "")
+    m = _DD_LONG_RE.search(s)
+    if m:
+        return {"kind": "long", "date": None, "group": m.group(1),
+                "progressive": bool(m.group(2))}
+    m = _DD_INTERVAL_RE.search(s)
+    if not m:
+        return None
+    d = m.group(1)
+    if len(d) == 4:
+        d = f"{_dt.now().year}{d}"
+    try:
+        wdate = _dt.strptime(d, "%Y%m%d").strftime("%Y-%m-%d")
+    except ValueError:
+        return None
+    return {"kind": "interval", "date": wdate, "group": m.group(2), "progressive": False}
+
+
+def _is_dd_name(name) -> bool:
+    """Фильтр активностей клуба (интервалы и лонги) — вместо разрозненных re.search('DD[-_]')."""
+    return parse_dd_name(name) is not None
+
+
 def _date_from_name(name):
     """(wdate 'YYYY-MM-DD', wgroup) из имени по маске DD<разд>YYYYMMDD<разд><группа><разд>lvl.
     Разделители '-' и '_' считаются эквивалентными."""
-    m = re.search(r"DD[-_](\d{8})", name or "")
-    wdate = f"{m.group(1)[:4]}-{m.group(1)[4:6]}-{m.group(1)[6:]}" if m else None
-    mg = re.search(r"DD[-_]\d{8}[-_]([\d.]+)[-_]lvl", name or "")
-    return wdate, (mg.group(1) if mg else None)
+    p = parse_dd_name(name)
+    if not p:
+        return None, None
+    return p["date"], p["group"]
 
 
 def _template_json(wdate, wgroup):
@@ -481,7 +516,7 @@ async def _strava_candidate(db_user_id, selector):
         return None
     acts = await strava.get_recent_activities(token, days=30)
     runs = [a for a in (acts or [])
-            if a.get("type") == "Run" and re.search(r"DD[-_]", str(a.get("name") or ""))]
+            if a.get("type") == "Run" and _is_dd_name(a.get("name"))]
     # ВАЖНО: Strava с параметром `after` отдаёт активности по ВОЗРАСТАНИЮ даты,
     # то есть первой в списке идёт САМАЯ СТАРАЯ тренировка. Сортируем явно.
     runs.sort(key=lambda a: str(a.get("start_date_local") or a.get("start_date") or ""),
@@ -531,7 +566,7 @@ async def _coros_candidate(db_user_id, selector):
     import coros_mcp
     records = coros_mcp.parse_sport_records(
         await coros_mcp.fetch_sport_records(db_user_id, days=30))
-    runs = [r for r in records if re.search(r"DD[-_]", str(r.get("name") or ""))]
+    runs = [r for r in records if _is_dd_name(r.get("name"))]
     # На порядок выдачи не полагаемся: самая свежая по дате-из-имени — первой.
     runs.sort(key=lambda r: _date_from_name(r.get("name"))[0] or "", reverse=True)
     if selector is None:
