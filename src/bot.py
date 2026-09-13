@@ -431,6 +431,33 @@ async def check_new_users(context: ContextTypes.DEFAULT_TYPE) -> None:
             f"👤 Новый пользователь: {name}{tag}\n"
             f"Всего пользователей: {len(get_all_users())}")
     await _check_new_ratings(context)
+    await _check_status_transitions(context)
+
+
+STATUS_LABELS = {"new": "пусто", "profile": "профиль", "tracker": "трекер",
+                 "blocked": "заблокировал"}
+
+
+async def _notify_status_changes(bot, changes: list) -> None:
+    """13.09.2026: одно сообщение админу на каждый переход статуса
+    (формат кортежа — database.refresh_user_status)."""
+    for _uid, _tid, name, uname, old, new in changes:
+        tag = f" (@{uname})" if uname else ""
+        await _notify_admin(
+            bot,
+            f"🔄 {name}{tag}: {STATUS_LABELS.get(old, old)} → {STATUS_LABELS.get(new, new)}")
+
+
+async def _check_status_transitions(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """13.09.2026: сверка статусов всех пользователей раз в 5 минут (страховка на случай,
+    если событие не поймали). Первый запуск только заполняет поле — без уведомлений."""
+    from database import sync_statuses
+    try:
+        changes = sync_statuses()
+    except Exception as e:
+        logger.error(f"_check_status_transitions: {e}")
+        return
+    await _notify_status_changes(context.bot, changes)
 
 
 async def _check_new_ratings(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1455,12 +1482,11 @@ async def cmd_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
         service_users[svc] = rows
         any_service_tids |= {r[0] for r in rows}
 
-    profile_tids = {r[0] for r in get_users_with_profile_full()}
-
-    only_profile = [(tid, n, u) for tid, n, u in all_tids_ordered
-                    if tid in profile_tids and tid not in any_service_tids]
-    nothing      = [(tid, n, u) for tid, n, u in all_tids_ordered
-                    if tid not in profile_tids and tid not in any_service_tids]
+    # 13.09.2026: аудитории «только профиль» / «ничего» — из поля users.status
+    # (та же формула, что воронка /stats; якорь зон считается по всем полям, не только legacy).
+    from database import get_users_by_status
+    only_profile = get_users_by_status("profile")
+    nothing      = get_users_by_status("new")
 
     # Неактивных (заблокировавших бота) исключаем из всех категорий выше.
     inactive = get_inactive_users()

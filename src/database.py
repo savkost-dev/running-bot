@@ -926,6 +926,21 @@ def get_stats_overview() -> dict:
         profile_only = anchor_ids - tracker_ids
         empty_n = len(active_ids) - len(tracker_ids | anchor_ids)
 
+        # 13.09.2026: воронка из поля users.status (статусная модель);
+        # расчёт выше оставлен для services/anchor. Пока поле не заполнено
+        # (до первой сверки) — берём расчётные цифры.
+        _ensure_status_schema(conn)
+        by_status = {s: n for s, n in conn.execute(
+            "SELECT status, COUNT(*) FROM users GROUP BY status")}
+        if None not in by_status and by_status:
+            tracker_n = by_status.get("tracker", 0)
+            profile_n = by_status.get("profile", 0)
+            empty_n = by_status.get("new", 0)
+            blocked_n = by_status.get("blocked", 0)
+        else:
+            tracker_n, profile_n = len(tracker_ids), len(profile_only)
+            blocked_n = total - len(active_ids)
+
         # Готовность: у скольких реально ловится утро (таблица mornings)
         morning_7d = len({r[0] for r in conn.execute(
             "SELECT DISTINCT user_id FROM mornings "
@@ -967,12 +982,116 @@ def get_stats_overview() -> dict:
                          "rec_total": len(rec_uids), "subscribed": subscribed}
 
     return {
-        "total": total, "active": len(active_ids), "blocked": total - len(active_ids),
-        "tracker_users": len(tracker_ids), "profile_only": len(profile_only),
+        "total": total, "active": len(active_ids), "blocked": blocked_n,
+        "tracker_users": tracker_n, "profile_only": profile_n,
         "empty": empty_n, "anchor_users": len(anchor_ids), "zones_users": len(zones_ids),
         "morning_7d": morning_7d, "morning_today": morning_today,
         "services": services, "last_reco": last_reco,
     }
+
+
+# ---------------------------------------------------------------------------
+# Статусная модель пользователя (13.09.2026): одно поле users.status
+# new -> profile -> tracker, побочное blocked. Журнал переходов user_status_log.
+# Формула та же, что воронка /stats (get_stats_overview): tracker = есть токен
+# трекера; profile = есть якорь зон; иначе new; is_active=0 -> blocked.
+# ---------------------------------------------------------------------------
+
+USER_STATUSES = ("new", "profile", "tracker", "blocked")
+
+
+def _ensure_status_schema(conn) -> None:
+    """Колонка users.status и таблица user_status_log — создаются при первом обращении."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS user_status_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            from_status TEXT,
+            to_status TEXT NOT NULL,
+            created_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+    """)
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(users)")]
+    if "status" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN status TEXT")
+
+
+def compute_status(conn, user_id: int) -> str:
+    """Статус одного пользователя по фактам в базе (без записи)."""
+    row = conn.execute(
+        "SELECT is_active FROM user_preferences WHERE user_id = ?", (user_id,)).fetchone()
+    if row is not None and row[0] == 0:
+        return "blocked"
+    has_tracker = conn.execute(
+        "SELECT 1 FROM user_tokens WHERE user_id = ? LIMIT 1", (user_id,)).fetchone()
+    if has_tracker:
+        return "tracker"
+    has_anchor = conn.execute("""
+        SELECT 1 FROM user_profile
+        WHERE user_id = ? AND (
+            vo2max_device IS NOT NULL OR vo2max_manual IS NOT NULL
+            OR lt_pace_device IS NOT NULL OR lt_pace_manual IS NOT NULL
+            OR vo2max IS NOT NULL OR lactate_threshold_pace IS NOT NULL)
+    """, (user_id,)).fetchone()
+    return "profile" if has_anchor else "new"
+
+
+def set_user_status(conn, user_id: int, new_status: str) -> str | None:
+    """Записать статус, если изменился: поле + строка журнала.
+    Возвращает прежний статус при переходе, None — если без изменений.
+    Первичное заполнение (status был NULL) в журнал не пишется."""
+    row = conn.execute("SELECT status FROM users WHERE id = ?", (user_id,)).fetchone()
+    if row is None:
+        return None
+    old = row[0]
+    if old == new_status:
+        return None
+    conn.execute("UPDATE users SET status = ? WHERE id = ?", (new_status, user_id))
+    if old is not None:
+        conn.execute(
+            "INSERT INTO user_status_log (user_id, from_status, to_status) VALUES (?, ?, ?)",
+            (user_id, old, new_status))
+    return old
+
+
+def refresh_user_status(user_id: int) -> tuple | None:
+    """Пересчитать и записать статус одного пользователя (по событию).
+    Возвращает (user_id, telegram_id, name, username, old, new) при переходе, иначе None."""
+    with get_connection() as conn:
+        _ensure_status_schema(conn)
+        new = compute_status(conn, user_id)
+        old = set_user_status(conn, user_id, new)
+        if old is None:
+            return None
+        tid, name, uname = conn.execute(
+            "SELECT telegram_id, name, username FROM users WHERE id = ?", (user_id,)).fetchone()
+        return (user_id, tid, name, uname, old, new)
+
+
+def sync_statuses() -> list:
+    """Сверка всех пользователей (раз в 5 минут из джоба).
+    Возвращает список переходов в формате refresh_user_status; первичное
+    заполнение поля переходами не считается."""
+    changes = []
+    with get_connection() as conn:
+        _ensure_status_schema(conn)
+        for uid, tid, name, uname in conn.execute(
+                "SELECT id, telegram_id, name, username FROM users ORDER BY id").fetchall():
+            new = compute_status(conn, uid)
+            old = set_user_status(conn, uid, new)
+            if old is not None:
+                changes.append((uid, tid, name, uname, old, new))
+    return changes
+
+
+def get_users_by_status(status: str) -> list:
+    """13.09.2026: пользователи с заданным users.status: (telegram_id, name, username), по id."""
+    with get_connection() as conn:
+        _ensure_status_schema(conn)
+        return conn.execute(
+            "SELECT telegram_id, name, username FROM users WHERE status = ? ORDER BY id",
+            (status,)).fetchall()
 
 
 def get_all_users_with_details() -> list:
