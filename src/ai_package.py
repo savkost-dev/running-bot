@@ -234,6 +234,8 @@ def _enrich_laps(splits, plan_steps, pts):
         st = lp.get("wktStepIndex")
         if st is None:          # хвост-добегание (нет шага плана)
             continue
+        if str(lp.get("intensityType") or "").upper() in ar.WARMUP_COOLDOWN:   # 13.09: раз/зам мимо
+            continue
         d = lp.get("distance")
         t = lp.get("duration") or lp.get("movingDuration")
         if not d or not t:

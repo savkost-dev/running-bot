@@ -407,13 +407,22 @@ def _flatten_plan_steps(wkt):
             if g is None:  # топ-уровневый шаг — своя «группа» из одного шага
                 g = next_grp[0]
                 next_grp[0] += 1
+            # 13.09.2026: дистанция — только если шаг задан по расстоянию; шаг по времени → dist=None, time_s=секунды
+            # (иначе 5700 с превращались в «5700 м» и подставлялись каждому кругу на дорожке).
+            cond = (st.get("endCondition") or {}).get("conditionTypeKey")
+            val = st.get("endConditionValue")
+            dist = val if cond in (None, "distance") else None
+            time_s = val if cond == "time" else None
             out.append({"idx": next_idx[0], "grp": g, "stype": stype, "ttype": ttype,
-                        "dist": st.get("endConditionValue"), "bounds": bounds})
+                        "dist": dist, "time_s": time_s, "bounds": bounds})
             next_idx[0] += 1
 
     for seg in (wkt.get("workoutSegments") or []):
         walk(seg.get("workoutSteps"))
     return out
+
+
+WARMUP_COOLDOWN = ("WARMUP", "COOLDOWN")   # 13.09.2026: интенсивности Garmin, которые в разбор не берём
 
 
 def _ordered_laps(splits):
@@ -429,8 +438,11 @@ def _ordered_laps(splits):
         p = (t / (d / 1000)) if (d and t) else None
         if idx is None or p is None:
             continue
+        intensity = str(lp.get("intensityType") or "").upper()
+        if intensity in WARMUP_COOLDOWN:   # 13.09.2026: разминка/заминка в разбор не входят
+            continue
         out.append({"step": idx, "dist": d, "dur": t, "pace": p,
-                    "intensity": str(lp.get("intensityType") or "").upper()})
+                    "intensity": intensity})
     return out
 
 
