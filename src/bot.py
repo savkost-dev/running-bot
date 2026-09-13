@@ -2815,13 +2815,18 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if data["warmup"]:
             _wd = (data.get("analysis") or {}).get("workout_date", "")
             try:
-                _wd_txt = datetime.strptime(_wd, "%Y-%m-%d").strftime("%d.%m")
+                _wd_dt = datetime.strptime(_wd, "%Y-%m-%d").date()
+                _wd_txt = _wd_dt.strftime("%d.%m")
+                _future = _wd_dt >= datetime.now(MSK).date()
             except ValueError:
-                _wd_txt = _wd
+                _wd_txt, _future = _wd, False
+            _cal = (f"а сама тренировка — в календарь Garmin на {_wd_txt}: часы сами предложат её в этот день."
+                    if _future else
+                    f"в календарь Garmin она не попадёт — дата {_wd_txt} уже прошла (в календарь ставятся только будущие тренировки).")
             await context.bot.send_message(
                 user.id,
                 "Разминка и заминка будут добавлены в тренировку как шаги без темпа и длины, "
-                f"а сама тренировка — в календарь Garmin на {_wd_txt}: часы сами предложат её в этот день.\n\n"
+                f"{_cal}\n\n"
                 "• Во время разминки можно ставить часы на паузу.\n"
                 "• Перед работой сними с паузы и нажми Lap — часы перейдут к рабочим отрезкам.\n"
                 "• Дальше ничего не нажимай: когда работа закончится, часы сами перейдут в заминку.\n"
