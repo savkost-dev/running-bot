@@ -2850,6 +2850,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_reply_markup(reply_markup=_garmin_upload_markup(data))
         except Exception:
             pass
+        # 13.09.2026: пояснение про раз/зам — одно на сообщение: старое удаляем и при снятии галочки, и перед новым
+        if data.get("wu_msg_id"):
+            try:
+                await context.bot.delete_message(user.id, data["wu_msg_id"])
+            except Exception:
+                pass
+            data["wu_msg_id"] = None
         if data["warmup"]:
             _wd = ((data.get("analysis") or {}).get("workout_date")
                    or (data.get("workout") or {}).get("workout_date", ""))   # лонг: дата из workout
@@ -2862,7 +2869,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _cal = (f"а сама тренировка — в календарь Garmin на {_wd_txt}: часы сами предложат её в этот день."
                     if _future else
                     f"в календарь Garmin она не попадёт — дата {_wd_txt} уже прошла (в календарь ставятся только будущие тренировки).")
-            await context.bot.send_message(
+            _wu_msg = await context.bot.send_message(
                 user.id,
                 "Разминка и заминка будут добавлены в тренировку как шаги без темпа и длины, "
                 f"{_cal}\n\n"
@@ -2871,6 +2878,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "• Дальше ничего не нажимай: когда работа закончится, часы сами перейдут в заминку.\n"
                 "• По окончании заминки нажми Stop.\n\n"
                 "Теперь выбери группу для загрузки.")
+            data["wu_msg_id"] = _wu_msg.message_id
         return
 
     elif query.data.startswith("garmin_grp_"):
