@@ -306,14 +306,14 @@ def _pick_activity(acts, selector):
 
 
 _DD_INTERVAL_RE = re.compile(r"(?<![A-Za-z])DD[-_](\d{8}|\d{4})(?:[-_]([\d.]+))?(?:[-_]lvl)?(?![\d.])", re.I)
-_DD_LONG_RE = re.compile(r"(?<![A-Za-z])DD[-_]?Long[-_]?(\d+)(p|\+)?(?![\d.])", re.I)
+_DD_LONG_RE = re.compile(r"(?<![A-Za-z])DDLong[-_]?(\d+)(p|\+)?(?![\d.])", re.I)
 
 
 def parse_dd_name(name) -> dict | None:
     """13.09.2026: ЕДИНСТВЕННЫЙ разбор имени активности клуба — все поиски по маске идут через него.
     Интервалы: DD_20260913-3.5_lvl, DD_0913-3.5, DD-0913 (год при 4 цифрах — текущий;
     группа и суффикс _lvl необязательны; '-' и '_' равнозначны).
-    Лонг: DDLong-3, DDLong-3p, DDLong-3+, DD_Long-3+ (p и + равнозначны = с ускорением).
+    Лонг: DDLong-3, DDLong-3p, DDLong-3+ (p и + равнозначны = с ускорением); DD_Long — не маска.
     Возвращает {'kind': 'interval'|'long', 'date': 'YYYY-MM-DD'|None, 'group': str|None,
     'progressive': bool} или None, если имя не по маске."""
     from datetime import datetime as _dt
@@ -336,7 +336,8 @@ def parse_dd_name(name) -> dict | None:
 
 
 def _is_dd_name(name) -> bool:
-    """Фильтр активностей клуба (интервалы и лонги) — вместо разрозненных re.search('DD[-_]')."""
+    """Фильтр кандидатов /report: интервалы и лонги DDLong-… (лонг пока разбирается как интервалы —
+    прикидка до отдельного разбора); DD_Long не маска (Антон, 13.09)."""
     return parse_dd_name(name) is not None
 
 
@@ -620,9 +621,14 @@ def _choose_candidate(*cands):
     cands = [c for c in cands if c]
     if not cands:
         return None
+
+    def _key(c):
+        # 13.09.2026: у лонга даты в имени нет — берём дату старта активности (YYYY-MM-DD в начале display_date)
+        return c["wdate"] or str(c.get("display_date") or "")[:10]
+
     best = cands[0]
     for c in cands[1:]:
-        if (c["wdate"] or "") > (best["wdate"] or ""):
+        if _key(c) > _key(best):
             best = c
     return best
 
