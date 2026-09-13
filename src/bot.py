@@ -2817,7 +2817,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 _wd_dt = datetime.strptime(_wd, "%Y-%m-%d").date()
                 _wd_txt = _wd_dt.strftime("%d.%m")
-                _future = _wd_dt >= datetime.now(MSK).date()
+                _future = _wd_dt >= datetime.now(timezone(timedelta(hours=3))).date()
             except ValueError:
                 _wd_txt, _future = _wd, False
             _cal = (f"а сама тренировка — в календарь Garmin на {_wd_txt}: часы сами предложат её в этот день."
@@ -2871,7 +2871,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _sched = None
             if data.get("warmup") and wdate:
                 try:
-                    if datetime.strptime(wdate, "%Y-%m-%d").date() >= datetime.now(MSK).date():
+                    if datetime.strptime(wdate, "%Y-%m-%d").date() >= datetime.now(timezone(timedelta(hours=3))).date():
                         _sched = wdate
                 except ValueError:
                     _sched = None
