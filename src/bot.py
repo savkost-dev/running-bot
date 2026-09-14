@@ -1207,6 +1207,8 @@ async def cmd_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user.id not in ADMIN_TELEGRAM_IDS:
         return
     date = (context.args[0] if context.args else "").strip()
+    if date:
+        date = _parse_cmd_date(date) or date   # 14.09.2026: 0915 / 20260915 / 2026-09-15
     if not date:
         from database import get_stats_overview
         lr = (get_stats_overview() or {}).get("last_reco") or {}
@@ -1214,7 +1216,7 @@ async def cmd_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE):
     recs_report = _build_mailing_report(date)
     if not recs_report:
         await update.message.reply_text(
-            f"Нет рекомендаций за {date or '—'}. Формат: /mailing 2026-08-18")
+            f"Нет рекомендаций за {date or '—'}. Формат: /mailing 0915")
         return
     text = f"📨 <b>Рассылка {date}</b>\n{recs_report}"
     for i in range(0, len(text), 3900):
