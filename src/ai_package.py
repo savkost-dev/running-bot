@@ -826,6 +826,8 @@ def _series_model(ordered, plan_steps):
                 if st not in prev["steps"]:
                     prev["steps"].append(st)
                 prev["series"][-1][st] = b["series"][0][st]
+                # 15.09.2026: пометка «отдых между блоками» — только для схемы; таблица ключ не читает.
+                prev.setdefault("between", []).append(st)
         else:
             merged.append(b)
     return merged
@@ -1043,6 +1045,20 @@ def _plan_diagram(ax, blocks, plan_steps):
     def _role(st, blk):
         lap = next((s[st] for s in blk["series"] if st in s), None)
         return ar._role_of(st, lap["intensity"] if lap else "", plan_steps)
+
+    # 15.09.2026: отдых между блоками (приклеен к таблице предыдущего блока) на схеме —
+    # отдельной плашкой ×1, а не внутри скобки ×N. Только для отрисовки, модель не меняется.
+    _disp = []
+    for blk in blocks:
+        between = set(blk.get("between") or [])
+        if not between:
+            _disp.append(blk)
+            continue
+        _disp.append({"steps": [st for st in blk["steps"] if st not in between], "series": blk["series"]})
+        for st in blk["steps"]:
+            if st in between and st in blk["series"][-1]:
+                _disp.append({"steps": [st], "series": [{st: blk["series"][-1][st]}]})
+    blocks = _disp
 
     mids = [m for blk in blocks for st in blk["steps"]
             if _role(st, blk) == "work" and (m := _mid(st)) is not None]
