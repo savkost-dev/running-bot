@@ -3962,10 +3962,9 @@ async def _send_recommendation(
 
     rec_mode = force_mode or (get_preferences(db_user_id) or {}).get("ai_mode", "smart")
     if is_broadcast and not force_mode:
-        # Рассылка использует 2 режима из 4 (решение 14.08.2026): smart→deep
-        # (глубокий живее и экономнее умного: 144с/11.5k против 164с/19k),
-        # calc→fast (формульным — полноценная лёгкая ИИ-карточка за секунды).
-        rec_mode = {"smart": "deep", "calc": "fast"}.get(rec_mode, rec_mode)
+        # 15.09.2026 (Антон): рассылка — один боевой режим «умный» (V4.1 Flash + размышление) для всех;
+        # deep/fast/calc остаются только для ручных и админских прогонов (force_mode). До 15.09 было smart→deep, calc→fast.
+        rec_mode = "smart"
     if rec_mode != "calc" and not long:
         # Путь B — ИИ выбирает группу (deep/smart/fast)
         workout_dict_b = dict(live) if live else {"workout_date": analysis.get("workout_date", "")}
@@ -4062,8 +4061,8 @@ async def _send_recommendation(
     # Режим рекомендации (Шаг 2) из настроек пользователя; анализ (Шаг 1) всегда deep
     rec_mode = force_mode or (get_preferences(db_user_id) or {}).get("ai_mode", "smart")
     if is_broadcast and not force_mode:
-        # Тот же маппинг 2-из-4, что и выше — для calc/long-пути
-        rec_mode = {"smart": "deep", "calc": "fast"}.get(rec_mode, rec_mode)
+        # 15.09.2026: рассылка — только «умный» (см. выше) — для calc/long-пути
+        rec_mode = "smart"
     main = rec.get("main_group") or {}
     _profile = get_user_profile(db_user_id) or {}
     _rec_group_num = str(advice.get("recommended_group") or "")
