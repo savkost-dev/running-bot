@@ -128,6 +128,11 @@ def get_main_keyboard(from_recommendation: bool = False) -> InlineKeyboardMarkup
     from_recommendation=False → редактирует текущее сообщение (навигационные экраны).
     """
     home_data = "main_menu_new" if from_recommendation else "main_menu"
+    if from_recommendation:
+        # 15.09.2026 (Антон): под рекомендацией — только «Главное меню», без строки Тренировка/Long Run (меньше шума).
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("🏠 Главное меню", callback_data=home_data)],
+        ])
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📋 Тренировка", callback_data="get_workout"),
          InlineKeyboardButton("🕐 Long Run",   callback_data="get_long_run")],
@@ -3668,6 +3673,7 @@ async def _send_admin_data_block(
     """
     if telegram_id not in ADMIN_TELEGRAM_IDS:
         return
+    return  # 15.09.2026 (Антон): сообщение «Данные для рекомендации» отключено; код ниже оставлен на случай возврата
     try:
         _snap = get_morning_caught(db_user_id)
         _rec = recovery or {}
