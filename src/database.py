@@ -643,8 +643,13 @@ def _decrypt(value: str) -> str:
 
 def save_token(user_id: int, service: str, access_token: str,
                refresh_token: str = None, expires_at: str = None):
-    """Сохраняет или обновляет токен сервиса (зашифрованный)"""
+    """Сохраняет или обновляет токен сервиса (зашифрованный).
+    15.09.2026 (Антон): при ПЕРВОМ подключении трекера (токена сервиса раньше не было) приоритет якорей
+    ЛП/VO2max переключается на «из систем»; обновление токена (refresh) приоритет не трогает."""
     with get_connection() as conn:
+        is_new = conn.execute(
+            "SELECT 1 FROM user_tokens WHERE user_id = ? AND service = ?", (user_id, service)
+        ).fetchone() is None
         conn.execute("""
             INSERT INTO user_tokens (user_id, service, access_token, refresh_token, expires_at)
             VALUES (?, ?, ?, ?, ?)
@@ -658,6 +663,13 @@ def save_token(user_id: int, service: str, access_token: str,
             _encrypt(refresh_token),
             expires_at
         ))
+    if is_new:
+        try:
+            set_vo2max_priority(user_id, "device")
+            set_lt_priority(user_id, "device")
+            _db_logger.info(f"первое подключение {service} user={user_id}: якоря ЛП/VO2max → из систем")
+        except Exception as e:  # noqa: BLE001
+            _db_logger.error(f"переключение приоритета после подключения {service}: {e}")
 
 
 def get_token(user_id: int, service: str) -> dict | None:
