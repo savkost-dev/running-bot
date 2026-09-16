@@ -594,6 +594,16 @@ def _parse_long_run_post(text: str, post_date: datetime) -> dict | None:
     }
 
 
+_LONG_GROUP_LINE_RE = re.compile(r"^.*(?:группа|\d\ufe0f?\u20e3).*\b\d:\d\d\b", re.I | re.M)
+
+
+def _has_long_groups(text: str) -> bool:
+    """16.09.2026: настоящий анонс лонга — построчный список групп с темпами («1️⃣ Группа 4:30 …»).
+    Средний «прогрев» (одна фраза «6 групп от 4:30 до 7:00») таких строк не имеет — не анонс.
+    Порог: не меньше 3 строк."""
+    return len(_LONG_GROUP_LINE_RE.findall(text or "")) >= 3
+
+
 async def find_next_long_run() -> dict | None:
     """Ищет ближайший воскресный Long Run (100 минут) в канале."""
     today = date.today()
@@ -607,6 +617,8 @@ async def find_next_long_run() -> dict | None:
         if '100 минут' not in text_lower and 'ddlong' not in text_lower:
             continue
         if not any(d in text_lower for d in ('воскресенье', 'воскресен')):
+            continue
+        if not _has_long_groups(post["text"]):      # 16.09: прогрев без списка групп — не анонс
             continue
 
         parsed = _parse_long_run_post(post["text"], post["date"])
@@ -673,6 +685,8 @@ async def get_latest_long_run_post_id() -> int | None:
             continue
         if not any(d in text_lower for d in ('воскресенье', 'воскресен')):
             continue
+        if not _has_long_groups(post["text"]):      # 16.09: прогрев без списка групп — не анонс
+            continue
         parsed = _parse_long_run_post(post["text"], post["date"])
         if parsed:
             return post["id"]
@@ -692,6 +706,7 @@ async def get_latest_workout_post_full() -> dict | None:
 
         is_long = (
             ("100 минут" in text_lower or "ddlong" in text_lower)
+            and _has_long_groups(post["text"])
             and _parse_long_run_post(post["text"], post["date"]) is not None
         )
 
