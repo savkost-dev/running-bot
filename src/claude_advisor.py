@@ -1131,6 +1131,19 @@ def _work_rest_note(bl: dict, sb: dict | None) -> str:
             f"R:W {rest_t / work_t:.2f}")
 
 
+def _block_rest_note(bl: dict, sb: dict | None) -> str:
+    """17.09.2026: блок-отдых между сериями (в структуре тип easy, в группе «темп по заданию») —
+    строка с дистанцией, темпом и временем, чтобы ИИ оценил его по абсолютному времени. Пусто, если не тот случай."""
+    if not sb or sb.get("type") != "easy":
+        return ""
+    dist = sb.get("distance_m")
+    rp = bl.get("recovery_pace")
+    rps = _wr_pace_sec(rp)
+    if not (dist and rps):
+        return ""
+    return f"отдых {dist} м @{rp} ≈ {_wr_mmss(dist / 1000 * rps)}"
+
+
 RECO_PROMPT_VARIANT = "challenger"  # "champion" — мгновенный откат к боевой версии
 
 
@@ -1485,7 +1498,7 @@ def build_ai_b_prompt_reco_challenger(analysis: dict, user_data: dict, zones_map
     struct_text = "\n".join(struct_lines) if struct_lines else "  —"
 
     # Группы
-    _sb = {b.get("block"): b for b in structure if b.get("type") != "easy"}  # 17.09: дистанции блоков для R:W
+    _sb = {b.get("block"): b for b in structure if b.get("block") is not None}  # 17.09: блоки структуры для R:W и блоков-отдыха
     groups_lines = []
     for g in groups:
         if g.get("health_group"):
@@ -1513,7 +1526,9 @@ def build_ai_b_prompt_reco_challenger(analysis: dict, user_data: dict, zones_map
             ps = bl.get("work_pace_start")
             pe = bl.get("work_pace_end")
             if not ps:
-                block_strs.append(f"бл{bl.get('block')} темп по заданию{rec_str}")
+                _br = _block_rest_note(bl, _sb.get(bl.get('block')))
+                block_strs.append(f"бл{bl.get('block')} {_br}" if _br
+                                  else f"бл{bl.get('block')} темп по заданию{rec_str}")
                 continue
             pace_str = f"{ps}→{pe}" if pe and pe != ps else ps
             block_strs.append(f"бл{bl.get('block')} {pace_str}/км{rec_str}")
@@ -1677,6 +1692,8 @@ def build_ai_b_prompt_reco_challenger(analysis: dict, user_data: dict, zones_map
         "сдвиг на один шаг к более короткому. Стоя и шагом нет.\n"
         "Абсолютный порог полного отдыха — 3 мин (для 200–300 м не опускай ниже 2.5 мин); "
         "свыше 8 мин прироста качества нет.\n"
+        "Отдых отдельным блоком между сериями оценивай по абсолютному времени: ≥3 мин — полный, "
+        "следующий блок начинается почти свежим; накопленный объём при этом не обнуляется.\n"
         "Короткий/умеренный отдых → следующая работа в нижней части целевой зоны; значительный/полный — "
         "в верхней. Если темп не укладывается в зону — снизь целевую зону на шаг.\n"
         "- Длительный бег: зоны marathon/easy.\n"
