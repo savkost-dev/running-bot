@@ -584,6 +584,24 @@ def parse_sport_records(text) -> list:
     return out
 
 
+async def get_vo2max(db_user_id: int) -> float | None:
+    """VO2max с часов COROS (новая схема) — для якоря vo2max_device.
+
+    Берёт из сохранённого сырья; если его ещё нет — сходит за ним. Порог сюда не входит
+    намеренно: якорь зон у COROS — только VO2max, как решено 17.09.
+    """
+    import database as db
+
+    row = db.get_raw_service_data(db_user_id, SERVICE)
+    raw = json.loads(row["raw_json"]) if row else None
+    if not raw:
+        raw = await fetch_raw(db_user_id)
+    if not raw:
+        return None
+    value = parse_fitness(raw.get("queryFitnessAssessmentOverview")).get("vo2max")
+    return float(value) if value else None
+
+
 def parse_raw(raw: dict) -> dict:
     """Слой 2: сырьё из raw_service_data → плоский набор полей."""
     raw = raw or {}

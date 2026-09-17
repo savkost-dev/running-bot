@@ -1375,8 +1375,14 @@ def get_user_profile(user_id: int) -> dict | None:
     if lres:
         prof["lactate_threshold_pace"] = lres["pace"]
         prof["lactate_threshold_hr"] = lres["hr"]
-        prof["lactate_source"] = ("manual" if lres["kind"] == "manual"
-                                  else (lres["device"].get("source") or "auto"))
+        # Ручной порог, подставленный ЗАПАСНЫМ при галочке «из систем», не должен
+        # выглядеть как прямое указание — иначе лесенка зон берёт его пунктом 1
+        # и не доходит до VO2max с часов (решение 17.09).
+        if lres["kind"] == "manual" and lres.get("priority") == "device":
+            prof["lactate_source"] = "запасной"
+        else:
+            prof["lactate_source"] = ("manual" if lres["kind"] == "manual"
+                                      else (lres["device"].get("source") or "auto"))
         prof["lt_resolved"] = lres
     return prof
 

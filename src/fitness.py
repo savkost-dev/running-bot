@@ -186,6 +186,15 @@ async def _get_vo2max_from_tracker(db_user_id: int) -> tuple:
         except Exception as e:
             logger.warning(f"VO2max Garmin fetch error for uid={db_user_id}: {e}")
 
+    if get_token(db_user_id, "coros_mcp"):
+        try:
+            import coros_mcp as _cm
+            val = await _cm.get_vo2max(db_user_id)
+            if val is not None:
+                return float(val), "coros_mcp", "COROS"
+        except Exception as e:
+            logger.warning(f"VO2max COROS MCP fetch error for uid={db_user_id}: {e}")
+
     if get_token(db_user_id, "coros"):
         try:
             import coros as _coros
