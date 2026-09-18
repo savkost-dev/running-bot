@@ -164,7 +164,57 @@ async def fetch_fit_bytes(db_user_id: int, label_id: str, sport_type: int) -> by
 
 def parse_fit_points(data: bytes) -> tuple[list, list]:
     """FIT → (pts, lap_starts). pts — секундный ряд в формате Garmin details [(t_ms, dist_m, hr, cad)],
-    lap_starts — старты кругов из lap-сообщений FIT (epoch ms). Пустые списки — если не разобралось."""
+    lap_starts — старты кругов из lap-сообщений FIT (epoch ms). Пустые списки — если не разобралось.
+    18.09.2026: сначала fitdecode — файлы COROS с нестандартными полями читает только она
+    (fit_tool и fitparse падают на «invalid field size»); fit_tool остаётся запасным."""
+    pts, lap_starts = _parse_fit_fitdecode(data)
+    if pts:
+        return pts, lap_starts
+    return _parse_fit_fittool(data)
+
+
+def _parse_fit_fitdecode(data: bytes) -> tuple[list, list]:
+    """Разбор FIT через fitdecode (терпим к нестандартным полям COROS)."""
+    import io
+    import warnings
+    try:
+        import fitdecode
+    except ImportError as e:
+        logger.error(f"COROS FIT: fitdecode недоступен: {e}")
+        return [], []
+
+    def _val(frame, name):
+        try:
+            return frame.get_value(name)
+        except KeyError:
+            return None
+
+    pts, lap_starts = [], []
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with fitdecode.FitReader(io.BytesIO(data)) as fit:
+                for frame in fit:
+                    if not isinstance(frame, fitdecode.FitDataMessage):
+                        continue
+                    if frame.name == "record":
+                        ts, dist = _val(frame, "timestamp"), _val(frame, "distance")
+                        if ts is None or dist is None:
+                            continue
+                        pts.append((ts.timestamp() * 1000.0, float(dist),
+                                    _val(frame, "heart_rate"), _val(frame, "cadence")))
+                    elif frame.name == "lap":
+                        st = _val(frame, "start_time")
+                        if st is not None:
+                            lap_starts.append(st.timestamp() * 1000.0)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"COROS FIT (fitdecode): {type(e).__name__}: {str(e)[:160]}")
+        return [], []
+    return pts, lap_starts
+
+
+def _parse_fit_fittool(data: bytes) -> tuple[list, list]:
+    """Запасной разбор FIT через fit_tool (работает на файлах Garmin)."""
     try:
         from fit_tool.fit_file import FitFile
         from fit_tool.profile.messages.record_message import RecordMessage
