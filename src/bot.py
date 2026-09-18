@@ -2844,6 +2844,21 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         return
 
+    elif query.data == "garmin_cal_toggle":
+        # 18.09.2026: галочка «в календарь Garmin» — по умолчанию включена, живёт только в _fit_data.
+        data = _fit_data.get(user.id)
+        if not data:
+            await context.bot.send_message(
+                user.id, "⏱ Данные устарели. Запроси рекомендацию заново (/workout).",
+                reply_markup=_add_main_menu_btn(None))
+            return
+        data["calendar"] = not data.get("calendar", True)
+        try:
+            await query.edit_message_reply_markup(reply_markup=_garmin_upload_markup(data))
+        except Exception:
+            pass
+        return
+
     elif query.data == "garmin_wu_toggle":
         # 13.09.2026: галочка «разминка и заминка» — только в этом сообщении (_fit_data), в базу не пишется.
         data = _fit_data.get(user.id)
@@ -2865,21 +2880,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
             data["wu_msg_id"] = None
         if data["warmup"]:
-            _wd = ((data.get("analysis") or {}).get("workout_date")
-                   or (data.get("workout") or {}).get("workout_date", ""))   # лонг: дата из workout
-            try:
-                _wd_dt = datetime.strptime(_wd, "%Y-%m-%d").date()
-                _wd_txt = _wd_dt.strftime("%d.%m")
-                _future = _wd_dt >= (datetime.now() + timedelta(hours=3)).date()   # сервер UTC → МСК
-            except ValueError:
-                _wd_txt, _future = _wd, False
-            _cal = (f"а сама тренировка — в календарь Garmin на {_wd_txt}: часы сами предложат её в этот день."
-                    if _future else
-                    f"в календарь Garmin она не попадёт — дата {_wd_txt} уже прошла (в календарь ставятся только будущие тренировки).")
             _wu_msg = await context.bot.send_message(
                 user.id,
-                "Разминка и заминка будут добавлены в тренировку как шаги без темпа и длины, "
-                f"{_cal}\n\n"
+                "Разминка и заминка будут добавлены в тренировку как шаги без темпа и длины.\n\n"
                 "• Во время разминки можно ставить часы на паузу.\n"
                 "• Перед работой сними с паузы и нажми Lap — часы перейдут к рабочим отрезкам.\n"
                 "• Дальше ничего не нажимай: когда работа закончится, часы сами перейдут в заминку.\n"
@@ -2931,7 +2934,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             from garmin import upload_workout as garmin_upload_workout
             # 13.09.2026: в календарь Garmin — только тренировки с разминкой/заминкой и только на сегодня или будущее.
             _sched = None
-            if data.get("warmup") and wdate:
+            if data.get("calendar", True) and wdate:
                 try:
                     if datetime.strptime(wdate, "%Y-%m-%d").date() >= (datetime.now() + timedelta(hours=3)).date():
                         _sched = wdate
@@ -6452,17 +6455,34 @@ def _long_fit_data(workout: dict, advice: dict) -> dict | None:
     }
 
 
+def _fit_calendar_date(data: dict):
+    """Дата тренировки для календаря Garmin: сегодня или будущее, иначе None (18.09.2026)."""
+    s = ((data.get("analysis") or {}).get("workout_date")
+         or (data.get("workout") or {}).get("workout_date", ""))
+    try:
+        d = datetime.strptime(s, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+    return d if d >= (datetime.now() + timedelta(hours=3)).date() else None
+
+
 def _garmin_upload_markup(data: dict) -> InlineKeyboardMarkup:
-    """Клавиатура сообщения «Загрузить в Garmin»: галочка разминка/заминка + топ-3 группы (13.09.2026)."""
+    """Клавиатура сообщения «Загрузить в Garmin»: галочки одной строкой + топ-3 группы (18.09.2026)."""
     mark = "☑" if data.get("warmup") else "☐"
-    rows = [[InlineKeyboardButton(f"{mark} Разминка и заминка", callback_data="garmin_wu_toggle")]]
+    opts = [InlineKeyboardButton(f"{mark} Раз/зам", callback_data="garmin_wu_toggle")]
     suffix = ""
     if data.get("type") == "long":
         # 13.09.2026: лонг — галочка ускорения (предвыбрана по рекомендации), на кнопках «+» при включённой
         pmark = "☑" if data.get("progressive") else "☐"
-        rows.append([InlineKeyboardButton(f"{pmark} Ускорение на второй половине",
-                                          callback_data="garmin_prog_toggle")])
+        opts.append(InlineKeyboardButton(f"{pmark} Прогресс", callback_data="garmin_prog_toggle"))
         suffix = "+" if data.get("progressive") else ""
+    _cd = _fit_calendar_date(data)
+    if _cd:
+        # 18.09.2026: календарь — только на сегодня/будущее, иначе галочки нет
+        cmark = "☑" if data.get("calendar", True) else "☐"
+        opts.append(InlineKeyboardButton(f"{cmark} 📅 {_cd.strftime('%d.%m')}",
+                                         callback_data="garmin_cal_toggle"))
+    rows = [opts]
     rows.append([InlineKeyboardButton(f"⌚ Гр.{g}{suffix}" + (f" ({p}%)" if p is not None else ""),
                                       callback_data=f"garmin_grp_{g}")
                  for g, p in (data.get("top3") or [])])
