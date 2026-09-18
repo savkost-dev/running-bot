@@ -6773,7 +6773,8 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
             res.get("splits"), res.get("plan_steps"), res["name"],
             res.get("wdate"), res.get("wgroup"), res.get("source"),
             res.get("s4"), "/tmp", str(db_user_id), dark=False,
-            splits400=res.get("splits400"))
+            splits400=res.get("splits400"),
+            no_gps=bool(res.get("no_gps")), by_watch_plan=bool(res.get("by_watch_plan")))
         if card:
             stacked = await build_charts_stacked(
                 res.get("splits"), res.get("plan_steps"), res["name"],

@@ -43,6 +43,12 @@
 - `set_calc_to_smart.py` — перевод calc → smart (разово, повтор безопасен).
 - uid Антона в базе = 2.
 
+## Библиотеки venv (ставятся руками, файла с зависимостями в проекте нет)
+- `fitdecode` — разбор FIT у COROS (18.09.2026): файлы COROS с нестандартными полями читает только она;
+  `fit-tool` и `fitparse` падают на «invalid field size». `fit-tool` остаётся запасным (файлы Garmin).
+  Установка: `ssh … "cd /opt/running-bot && venv/bin/pip install fitdecode -q"`
+- `garminconnect` (0.3.3), `garth` НЕ стоит.
+
 ## База (SQLite, /opt/running-bot/data/running_bot.db)
 - `last_recommendation` — одна строка на пользователя (последняя). История — `recommendation_history` (ключ user + дата + run_kind: mailing / manual / shadow…; поля workout_type, ai_mode, advice_json целиком).
 - Запросы к базе — только скриптом (см. кавычки), не через `sqlite3` в ssh-строке.

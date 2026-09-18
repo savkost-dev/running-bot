@@ -491,6 +491,7 @@ async def _garmin_candidate(db_user_id, selector):
             plan_steps = ar._flatten_plan_steps(plan_wkt)
         except Exception:
             plan_wkt, plan_steps = None, []
+    by_watch_plan = bool(plan_steps)   # 18.09.2026: план взят из задания в часах, а не из шаблона
     if not plan_steps:
         plan_wkt = _template_json(wdate, wgroup)
         if plan_wkt:
@@ -507,6 +508,7 @@ async def _garmin_candidate(db_user_id, selector):
     return {"source": "garmin", "name": name, "act_id": act_id,
             "display_date": act.get("startTimeLocal"), "wdate": wdate, "wgroup": wgroup,
             "wtype_key": (act.get("activityType") or {}).get("typeKey"),
+            "no_gps": _no_gps(act, "garmin"), "by_watch_plan": by_watch_plan,
             "splits": splits, "plan_steps": plan_steps, "pts": _parse_details(details)}
 
 
@@ -556,6 +558,7 @@ async def _strava_candidate(db_user_id, selector):
             print(f"/report: Strava streams недоступны: {type(e).__name__}: {e}")
     return {"source": "strava", "name": name, "act_id": act.get("id"),
             "display_date": act.get("start_date_local"), "wdate": wdate, "wgroup": wgroup,
+            "no_gps": _no_gps(act, "strava"), "by_watch_plan": False,
             "wtype_key": "running", "splits": splits, "plan_steps": plan_steps, "pts": pts}
 
 
@@ -605,6 +608,7 @@ async def _coros_candidate(db_user_id, selector):
     _assign_button_laps(splits, plan_wkt, plan_steps)
     return {"source": "coros", "name": name, "act_id": rec["label_id"],
             "display_date": wdate, "wdate": wdate, "wgroup": wgroup,
+            "no_gps": False, "by_watch_plan": False,
             "wtype_key": "running", "splits": splits, "plan_steps": plan_steps, "pts": pts}
 
 
@@ -744,6 +748,7 @@ async def build_package(db_user_id: int, selector=None) -> dict:
 
     return {"ok": True, "name": name, "text": "\n".join(L), "msg": "",
             "splits": splits, "plan_steps": plan_steps,
+            "no_gps": bool(cand.get("no_gps")), "by_watch_plan": bool(cand.get("by_watch_plan")),
             "splits200": [r.get("splits200") for r in rows],
             "splits100": [r.get("splits100") for r in rows],
             "splits400": [r.get("splits400") for r in rows],
@@ -1127,7 +1132,8 @@ def _km_label(label: str) -> str:
 
 async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source: str,
                             s4: dict | None, out_dir: str, tag: str,
-                            dark: bool = False, splits400=None) -> str | None:
+                            dark: bool = False, splits400=None,
+                            no_gps: bool = False, by_watch_plan: bool = False) -> str | None:
     """Вертикальная карточка разбора под телефон (портрет, три зоны сверху вниз):
     1) шапка — заголовок, название/дата/группа, суть, структура плана;
     2) факт — таблица повторов (зебра, заливка отклонений, строка «ср.»);
@@ -1248,6 +1254,11 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
 
     # ── Шапка (зона 1) ──
     meta_bits = [b for b in (wdate, f"группа {wgroup}" if wgroup else None, source) if b]
+    # 18.09.2026: пометки о том, на чём построен разбор
+    if by_watch_plan:
+        meta_bits.append("по заданию из часов")
+    if no_gps:
+        meta_bits.append("без GPS — дистанции из плана")
     meta_line = "  ·  ".join(meta_bits)
 
     def _rcs_wrap(label, text, style):
