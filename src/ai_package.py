@@ -305,14 +305,14 @@ def _pick_activity(acts, selector):
     return next((a for a in runs if _name_matches(selector, a.get("activityName"))), None)
 
 
-_DD_INTERVAL_RE = re.compile(r"(?<![A-Za-z])DD[-_](\d{8}|\d{4})(?:[-_]([\d.]+))?(?:[-_]lvl)?(?![\d.])", re.I)
-_DD_LONG_RE = re.compile(r"(?<![A-Za-z])DDLong[-_]?(\d+)(p|\+)?(?![\d.])", re.I)
+_DD_INTERVAL_RE = re.compile(r"(?<![A-Za-z])DD[-_](\d{8}|\d{4})(?:[-_]([\d.]+))?(?:[-_](?:lvl|wu))?(?![\d.])", re.I)
+_DD_LONG_RE = re.compile(r"(?<![A-Za-z])DDLong[-_]?(\d+)(p|\+)?(?:[-_]wu)?(?![\d.])", re.I)
 
 
 def parse_dd_name(name) -> dict | None:
     """13.09.2026: ЕДИНСТВЕННЫЙ разбор имени активности клуба — все поиски по маске идут через него.
     Интервалы: DD_20260913-3.5_lvl, DD_0913-3.5, DD-0913 (год при 4 цифрах — текущий;
-    группа и суффикс _lvl необязательны; '-' и '_' равнозначны).
+    группа и суффикс _lvl / _wu необязательны; '-' и '_' равнозначны).
     Лонг: DDLong-3, DDLong-3p, DDLong-3+ (p и + равнозначны = с ускорением); DD_Long — не маска.
     Возвращает {'kind': 'interval'|'long', 'date': 'YYYY-MM-DD'|None, 'group': str|None,
     'progressive': bool} или None, если имя не по маске."""
@@ -645,8 +645,8 @@ async def build_package(db_user_id: int, selector=None) -> dict:
     if not cand:
         sel = f" по «{selector}»" if selector else ""
         return {"ok": False, "msg": f"DD-активность{sel} не найдена (Garmin/COROS/Strava).\n"
-                                     f"Назови тренировку по маске DD_ГГГГММДД-группа_lvl — например "
-                                     f"DD_20260904-3.5_lvl — и отмечай отрезки кнопкой круга на часах."}
+                                     f"Назови тренировку по маске DD_ГГГГММДД-группа — например "
+                                     f"DD_20260904-3.5 — и отмечай отрезки кнопкой круга на часах."}
 
     name = cand["name"]
     act_id = cand["act_id"]

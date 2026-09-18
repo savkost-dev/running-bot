@@ -290,10 +290,10 @@ def _workout_json(name: str, steps: list) -> dict:
 
 # ── Filename helpers ──────────────────────────────────────────
 
-def workout_filename(workout_date: str, group_num: str) -> str:
-    """'2026-05-22', '3.5' → 'DD_20260522-3.5_lvl.json'"""
+def workout_filename(workout_date: str, group_num: str, with_warmup: bool = False) -> str:
+    """'2026-05-22', '3.5' → 'DD_20260522-3.5.json'; с раз/зам — 'DD_20260522-3.5_wu.json' (18.09.2026)"""
     d = workout_date.replace('-', '')
-    return f'DD_{d}-{group_num}_lvl.json'
+    return f"DD_{d}-{group_num}{'_wu' if with_warmup else ''}.json"
 
 
 def interval_filename(workout_date: str, group_num: str) -> str:
@@ -371,7 +371,7 @@ def _build_interval_json(workout: dict, group: str, recommended_pace: str = '') 
     wkt_steps.append(_repeat_group(repeat_order, reps, inner))
 
     d = date.replace('-', '')
-    return _workout_json(f'DD_{d}-{group}_lvl', wkt_steps)
+    return _workout_json(f'DD_{d}-{group}', wkt_steps)
 
 
 def _build_long_run_json(workout: dict, group: str, strategy: str,
@@ -387,7 +387,7 @@ def _build_long_run_json(workout: dict, group: str, strategy: str,
         steps.append(_step(1, time_s=100 * 60, v_fast=v1, v_slow=v1))
 
     d = date.replace('-', '')
-    return _workout_json(f'DD_{d}-{group}_lvl', steps)
+    return _workout_json(f'DD_{d}-{group}', steps)
 
 
 # ── Public API ────────────────────────────────────────────────
@@ -405,9 +405,9 @@ LONG_GROUP_PACES = {              # темп группы, мин/км (подт
 }
 
 
-def long_template_name(group: str, progressive: bool) -> str:
-    """'3', True → 'DDLong-3p'; '3', False → 'DDLong-3'. («+» Garmin в имени теряет — поэтому p.)"""
-    return f"DDLong-{group}{'p' if progressive else ''}"
+def long_template_name(group: str, progressive: bool, with_warmup: bool = False) -> str:
+    """'3', True → 'DDLong-3p'; с раз/зам — 'DDLong-3p_wu'. («+» Garmin в имени теряет — поэтому p.)"""
+    return f"DDLong-{group}{'p' if progressive else ''}{'_wu' if with_warmup else ''}"
 
 
 def _pace_minus(pace: str, seconds: int) -> str:
@@ -439,7 +439,7 @@ def build_long_template(group: str, progressive: bool, with_warmup: bool = False
         order += 1
     if with_warmup:
         steps.append(_lap_button_step(order, 'cooldown'))
-    return _workout_json(long_template_name(group, progressive), steps)
+    return _workout_json(long_template_name(group, progressive, with_warmup), steps)
 
 
 def create_garmin_workout(workout: dict, recommended_group: str,
@@ -624,7 +624,7 @@ def build_garmin_from_analysis(analysis: dict, group_num: str, with_warmup: bool
         for s in steps:
             s['stepOrder'] = int(s.get('stepOrder') or 0) + 1
         steps = [_lap_button_step(1, 'warmup')] + steps + [_lap_button_step(len(steps) + 2, 'cooldown')]
-    return _workout_json(f'DD_{d}-{group_num}_lvl', steps)
+    return _workout_json(f"DD_{d}-{group_num}{'_wu' if with_warmup else ''}", steps)
 
 
 # ── Backward compatibility aliases ───────────────────────────

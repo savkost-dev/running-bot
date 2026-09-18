@@ -761,7 +761,7 @@ GARMIN_HOWTO = (
     "Connect и заберут тренировку. Если этого не произошло — выполни "
     "синхронизацию вручную.\n\n"
     "2. На тренировке выбирай тип «Бег на стадионе», а из библиотеки — "
-    "соответствующую тренировку (имя вида DD_YYYYMMDD-<группа>_lvl). "
+    "соответствующую тренировку (имя вида DD_YYYYMMDD-<группа>). "
     "Дальше выбери «Начать тренировку» и дождись сигнала GPS. "
     "Разминку и заминку не включай в тренировку.\n\n"
     "3. За всю тренировку нужно только дважды нажать кнопку: старт в начале "
@@ -2909,12 +2909,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _prog = bool(data.get("progressive"))
                 wdate = (data.get("workout") or {}).get("workout_date", "")
                 wkt = build_long_template(group_num, _prog, with_warmup=bool(data.get("warmup")))
-                fname = long_template_name(group_num, _prog) + ".json"
+                fname = long_template_name(group_num, _prog, bool(data.get("warmup"))) + ".json"
             else:
                 analysis_d = data.get("analysis") or {}
                 wdate = analysis_d.get("workout_date", "")
                 wkt = build_garmin_from_analysis(analysis_d, group_num, with_warmup=bool(data.get("warmup")))
-                fname = workout_filename(wdate, group_num)
+                fname = workout_filename(wdate, group_num, bool(data.get("warmup")))
             _fit_data[user.id] = {
                 **data,
                 "recommended_group": group_num,
