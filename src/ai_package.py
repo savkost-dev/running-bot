@@ -456,11 +456,14 @@ def _drop_extra_first_lap(splits, plan_steps) -> bool:
             total += abs(t / (d / 1000) - p_pace) / p_pace
         return total
 
-    first, second = gap(laps[0]), gap(laps[1])
-    if first is None or second is None:
+    # 18.09.2026 (Антон): смотрим первые ТРИ круга — люди в суете нажимают лишние Lap;
+    # кто ближе к первому шагу плана — тот и первый отрезок, всё перед ним (0, 1 или 2 круга) убираем.
+    gaps = [gap(l) for l in laps[:3]]
+    if gaps[0] is None or gaps[1] is None:
         return False
-    if second < first:
-        splits["lapDTOs"] = (splits.get("lapDTOs") or [])[1:]
+    best = min(range(len(gaps)), key=lambda i: (gaps[i] if gaps[i] is not None else float("inf"), i))
+    if best > 0:
+        splits["lapDTOs"] = (splits.get("lapDTOs") or [])[best:]
         return True
     return False
 
