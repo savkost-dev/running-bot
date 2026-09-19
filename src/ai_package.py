@@ -39,7 +39,7 @@ PROMPT = (
     "Рекомендация на основе моих пульсовых зон с часов или введенных вручную. "
     "Я сделал тренировку по программе одной из групп.\n"
     "Вот полные данные моей тренировки: возраст, МПК, ПАНО, целевой план Garmin, "
-    "таблица с темпом, пульсом, биомеханикой по каждому отрезку, и самочувствие наутро "
+    "таблица с темпом, пульсом, биомеханикой по каждому отрезку, и самочувствие утром в день тренировки "
     "(Training Readiness, сон, HRV).\n"
     "Задача: проанализируй тренировку как тренер бегового клуба.\n"
     "Не держи рекомендации за догму, разбор делается для того, чтобы по факту проверить "
@@ -678,7 +678,7 @@ async def build_package(db_user_id: int, selector=None) -> dict:
     pts = cand["pts"]
 
     prof = db.get_user_profile(db_user_id) or {}
-    snap = db.get_morning_caught(db_user_id)
+    snap = db.get_morning_caught(db_user_id, wdate)  # 19.09: утро дня тренировки из истории mornings
     s4 = _s4_by_date(wdate, cand["wtype_key"])
     rows, S = _enrich_laps(splits, plan_steps, pts)
 
@@ -766,7 +766,7 @@ async def build_package(db_user_id: int, selector=None) -> dict:
                 _fmt_pace(p) + (f" ({int(round(dd))} м)" if dd < 180 else "")
                 for p, dd in r["splits200"]))
 
-    A("\n[САМОЧУВСТВИЕ УТРОМ] (текущий снимок)")
+    A("\n[САМОЧУВСТВИЕ УТРОМ] (утро дня тренировки)")
     if snap and snap.get("caught"):
         A(f"  снимок за {snap.get('date')}")
         A(f"  Training Readiness: {_num(snap.get('tr'))}   Body Battery: {_num(snap.get('bb'))}")

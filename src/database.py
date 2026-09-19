@@ -2245,16 +2245,26 @@ def set_morning_caught(user_id: int, date_msk: str, snapshot: dict | None = None
     _db_logger.info(f"morning_caught: user={user_id} date={date_msk} snap={bool(snapshot)}")
 
 
-def get_morning_caught(user_id: int) -> dict | None:
+def get_morning_caught(user_id: int, day: str | None = None) -> dict | None:
     """Слой 3: читает флаг пойманной ночи и снимок на утро.
+    day — ГГГГ-ММ-ДД: снимок за этот день из истории mornings (19.09.2026, для разбора);
+    без day — текущий снимок из unified_cache, как раньше.
     Возвращает {caught, date, tr, bb, hrv, rhr, sleep_h, wake_at, snapshot_at} или None."""
     with get_connection() as conn:
-        row = conn.execute(
-            "SELECT morning_caught, morning_date, morning_tr, morning_bb, morning_hrv, "
-            "morning_rhr, morning_sleep_h, morning_wake_at, morning_snapshot_at "
-            "FROM unified_cache WHERE user_id = ?",
-            (user_id,)
-        ).fetchone()
+        if day:
+            row = conn.execute(
+                "SELECT morning_caught, date, morning_tr, morning_bb, morning_hrv, "
+                "morning_rhr, morning_sleep_h, morning_wake_at, morning_snapshot_at "
+                "FROM mornings WHERE user_id = ? AND date = ?",
+                (user_id, day)
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT morning_caught, morning_date, morning_tr, morning_bb, morning_hrv, "
+                "morning_rhr, morning_sleep_h, morning_wake_at, morning_snapshot_at "
+                "FROM unified_cache WHERE user_id = ?",
+                (user_id,)
+            ).fetchone()
     if not row:
         return None
     return {
