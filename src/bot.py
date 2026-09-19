@@ -1305,7 +1305,8 @@ def _build_help_text(is_admin: bool) -> str:
             "\n/msg_service — написать всем, у кого подключён выбранный сервис"
             "\n/profile_user — посмотреть профиль выбранного пользователя"
             "\n/last — разбор последней выполненной тренировки (графики факт vs план; /last dark — тёмная тема)"
-            "\n/report — ИИ-анализ последней тренировки (/report DD_20260612 — выбрать; /report data — сырой пакет+промпт)"
+            "\n/report — ИИ-анализ последней тренировки (/report DD_20260612 — выбрать)"
+            "\n/report_p — промт разбора целиком (/report_p 0918 — за дату; то же /report data), ИИ не зовётся"
         )
     return text
 
@@ -6709,8 +6710,15 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
             chat_id, "Для разбора тренировки нужен подключённый Garmin или Strava.")
         return
     args = list(context.args or [])
-    raw_mode = bool(args) and args[0].lower() in ("data", "raw", "данные")
-    if raw_mode:
+    # /report_p <дата> = /report data <дата> (промт + пакет, ИИ не зовётся), обе — только admin; дата — через _parse_cmd_date
+    report_p = (update.effective_message.text or "").split()[0].lower().startswith("/report_p")
+    if report_p and args and _parse_cmd_date(args[0]):
+        args[0] = "DD_" + _parse_cmd_date(args[0]).replace("-", "")
+    raw_mode = report_p or (bool(args) and args[0].lower() in ("data", "raw", "данные"))
+    if raw_mode and update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+        await update.message.reply_text("Нет доступа.")
+        return
+    if raw_mode and not report_p:
         args = args[1:]
     simple_mode = bool(args) and args[0].lower() in ("simple", "s")
     if simple_mode:
@@ -6973,6 +6981,7 @@ def main():
     app.add_handler(CommandHandler("profile_user", cmd_profile_user))
     app.add_handler(CommandHandler("howto",     cmd_howto))
     app.add_handler(CommandHandler("report",    cmd_report))
+    app.add_handler(CommandHandler("report_p",  cmd_report))
     app.add_handler(CommandHandler("report_user", report_user_command))
     app.add_handler(CallbackQueryHandler(msg_user_callback,  pattern=r"^msgu_\d+$"))
     app.add_handler(CallbackQueryHandler(msg_service_callback, pattern=r"^msgsvc_\w+$"))

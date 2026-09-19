@@ -1582,19 +1582,21 @@ def get_last_recommendation(user_id: int, workout_date: str | None = None) -> di
 
 def get_recommendations_for_date(workout_date: str) -> list[dict]:
     """Все рекомендации за указанную дату (для отчёта админу после рассылки).
-    JOIN с users по имени. last_recommendation — одна строка на юзера,
-    поэтому это ровно те, кому ушла рекомендация на эту тренировку.
-    Возвращает список {name, recommended_group, evening_recovery_score, lowered_by_recovery}."""
+    JOIN с users по имени. Источник — recommendation_history, run_kind='mailing'
+    (боевая рассылка; теневые прогоны не берём) — работает и для прошлых дат.
+    Возвращает список {name, recommended_group, evening_recovery_score, lowered_by_recovery,
+    username, telegram_id, pace_answer, user_id, groups_pct (dict группа→%)}."""
     with get_connection() as conn:
         rows = conn.execute("""
             SELECT COALESCE(u.name, u.username, 'user_' || lr.user_id),
                    lr.recommended_group, lr.evening_recovery_score, lr.lowered_by_recovery,
-                   u.username, u.telegram_id, pf.answer
-            FROM last_recommendation lr
+                   u.username, u.telegram_id, pf.answer,
+                   lr.user_id, lr.groups_pct
+            FROM recommendation_history lr
             JOIN users u ON u.id = lr.user_id
             LEFT JOIN pace_feedback pf
                    ON pf.user_id = lr.user_id AND pf.workout_date = lr.workout_date
-            WHERE lr.workout_date = ?
+            WHERE lr.workout_date = ? AND lr.run_kind = 'mailing'
             ORDER BY lr.recommended_group, COALESCE(u.name, u.username)
         """, (workout_date,)).fetchall()
     return [
@@ -1606,6 +1608,8 @@ def get_recommendations_for_date(workout_date: str) -> list[dict]:
             "username": r[4],
             "telegram_id": r[5],
             "pace_answer": r[6],
+            "user_id": r[7],
+            "groups_pct": _json.loads(r[8]) if r[8] else None,
         }
         for r in rows
     ]
