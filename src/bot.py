@@ -481,7 +481,7 @@ async def _check_new_ratings(context: ContextTypes.DEFAULT_TYPE) -> None:
                 return
             fresh = conn.execute("""
                 SELECT COALESCE(u.username, u.name), r.rating, r.workout_date,
-                       r.ai_mode, r.comment, r.created_at
+                       r.ai_mode, r.comment, r.created_at, r.kind
                 FROM recommendation_ratings r JOIN users u ON u.id = r.user_id
                 WHERE r.created_at > ? ORDER BY r.created_at
             """, (row[0],)).fetchall()
@@ -492,8 +492,9 @@ async def _check_new_ratings(context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception as e:
         logger.error(f"_check_new_ratings: {e}")
         return
-    for who, rating, wdate, mode, comment, _ in fresh:
-        text = (f"⭐ Оценка {rating}/10 от {who}\n"
+    for who, rating, wdate, mode, comment, _, kind in fresh:
+        _what = "разбора" if kind == "report" else "рекомендации"  # 19.09: что оценено
+        text = (f"⭐ Оценка {_what} {rating}/10 от {who}\n"
                 f"Тренировка: {wdate or '—'} · режим: {mode or '—'}")
         if comment:
             text += f"\n💬 {comment[:500]}"
@@ -1635,7 +1636,8 @@ async def cmd_ratings(update: Update, context: ContextTypes.DEFAULT_TYPE):
         uname = f" (@{username})" if username else ""
         stars = rating * "⭐" if rating >= 8 else (rating * "🟡" if rating >= 5 else rating * "🔴")
         comment_str = f"\n   💬 {comment}" if comment else ""
-        lines.append(f"{rating}/10 — {name}{uname} [{workout_date}] {date_fmt} [{ai_mode_}]{comment_str}")
+        _k = "📋 разбор" if r[8] == "report" else "реком."  # 19.09: что оценено
+        lines.append(f"{rating}/10 — {_k} — {name}{uname} [{workout_date}] {date_fmt} [{ai_mode_}]{comment_str}")
     text = "\n".join(lines)
     for i in range(0, len(text), 4096):
         await update.message.reply_text(text[i:i + 4096])
@@ -3142,6 +3144,24 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("Не сохранилось, попробуй позже.")
         return
 
+    elif query.data.startswith("rate_show:"):
+        # 19.09.2026: оценка с зашитым объектом — rate_show:<kind>:<ГГГГММДД>:<режим ИИ>.
+        # Шкалу шлём НОВЫМ сообщением: кнопка висит на тексте разбора, его не затираем.
+        _p = query.data.split(":")
+        _kind = _p[1] if len(_p) > 1 else "report"
+        _d = _p[2] if len(_p) > 2 else ""
+        _wd = f"{_d[:4]}-{_d[4:6]}-{_d[6:8]}" if len(_d) == 8 else ""
+        context.user_data["rating_pending"] = {
+            "workout_date": _wd, "ai_mode": _p[3] if len(_p) > 3 else "", "kind": _kind}
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton(str(i), callback_data=f"rate_{i}") for i in range(1, 6)],
+            [InlineKeyboardButton(str(i), callback_data=f"rate_{i}") for i in range(6, 11)],
+            [InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu_new")],
+        ])
+        _what = "разбор" if _kind == "report" else "рекомендацию"
+        await context.bot.send_message(
+            user.id, f"Оцени {_what}:\n1 — плохо, 10 — отлично", reply_markup=keyboard)
+
     elif query.data == "rate_show":
         data = _rating_data.get(user.id)
         if not data:
@@ -3184,12 +3204,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         rating = ctx.get("rating", 0)
         if rating:
             db_user_id = get_or_create_user(user.id, user.full_name, user.username)
-            save_rating(db_user_id, ctx.get("workout_date", ""), rating, ctx.get("ai_mode", ""), None)
+            save_rating(db_user_id, ctx.get("workout_date", ""), rating, ctx.get("ai_mode", ""), None,
+                        kind=ctx.get("kind", "recommendation"))
             if rating <= 5:
                 uname = f" (@{user.username})" if user.username else ""
                 await _notify_admin(
                     context.bot,
-                    f"⭐ Низкая оценка: {rating}/10\n"
+                    f"⭐ Низкая оценка ({'разбор' if ctx.get('kind') == 'report' else 'рекомендация'}): {rating}/10\n"
                     f"От: {user.full_name}{uname}\n"
                     f"Тренировка: {ctx.get('workout_date', '—')}\n"
                     f"Режим: {ctx.get('ai_mode', '—')}\n"
@@ -3638,12 +3659,13 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         rating = ctx.get("rating", 0)
         if rating:
             db_user_id = get_or_create_user(user.id, user.full_name, user.username)
-            save_rating(db_user_id, ctx.get("workout_date", ""), rating, ctx.get("ai_mode", ""), text)
+            save_rating(db_user_id, ctx.get("workout_date", ""), rating, ctx.get("ai_mode", ""), text,
+                        kind=ctx.get("kind", "recommendation"))
             if rating <= 5:
                 uname = f" (@{user.username})" if user.username else ""
                 await _notify_admin(
                     context.bot,
-                    f"⭐ Низкая оценка: {rating}/10\n"
+                    f"⭐ Низкая оценка ({'разбор' if ctx.get('kind') == 'report' else 'рекомендация'}): {rating}/10\n"
                     f"От: {user.full_name}{uname}\n"
                     f"Тренировка: {ctx.get('workout_date', '—')}\n"
                     f"Режим: {ctx.get('ai_mode', '—')}\n"
@@ -6848,6 +6870,14 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
     # на последний чанк анализа, в simple-режиме — на последнюю фотографию.
     menu_btn = InlineKeyboardMarkup(
         [[InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu_new")]])
+    # 19.09.2026: «⭐ Оценить разбор» — только если ИИ ответил; что оцениваем — зашито в кнопку:
+    # rate_show:report:<ГГГГММДД>:<режим ИИ>
+    if ai_chunks and not ai_chunks[0].startswith("⚠️"):
+        _rate_cb = (f"rate_show:report:{str(res.get('wdate') or '').replace('-', '')}:"
+                    f"{(_ai_stats or {}).get('mode') or ''}")
+        menu_btn = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⭐ Оценить разбор", callback_data=_rate_cb)],
+            [InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu_new")]])
     btn_on_last_photo = not ai_chunks
     menu_sent = False
     for idx, (png, cap) in enumerate(chart_items):

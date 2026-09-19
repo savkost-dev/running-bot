@@ -346,6 +346,12 @@ def init_db():
             pass
     with get_connection() as conn:
         try:
+            # 19.09.2026: что оценено — 'recommendation' (рекомендация) или 'report' (разбор)
+            conn.execute("ALTER TABLE recommendation_ratings ADD COLUMN kind TEXT DEFAULT 'recommendation'")
+        except Exception:
+            pass
+    with get_connection() as conn:
+        try:
             conn.execute("ALTER TABLE user_preferences ADD COLUMN ai_mode TEXT DEFAULT 'smart'")
         except Exception:
             pass
@@ -874,7 +880,8 @@ def get_bot_stats() -> dict:
         ).fetchone()
         avg_rating_row = conn.execute(
             "SELECT AVG(rating), COUNT(*) FROM recommendation_ratings "
-            "WHERE created_at >= datetime('now', '-30 days')"
+            "WHERE created_at >= datetime('now', '-30 days') "
+            "AND COALESCE(kind, 'recommendation') = 'recommendation'"  # 19.09: без оценок разбора
         ).fetchone()
         avg_rating = round(avg_rating_row[0], 1) if avg_rating_row[0] else None
         ratings_30d = avg_rating_row[1] if avg_rating_row[1] else 0
@@ -1763,13 +1770,13 @@ def get_recent_feedbacks(limit: int = 20) -> list:
 # ── Оценки рекомендаций ───────────────────────────────────────
 
 def save_rating(user_id: int, workout_date: str, rating: int,
-                ai_mode: str, comment: str = None) -> None:
-    """Сохраняет оценку рекомендации."""
+                ai_mode: str, comment: str = None, kind: str = "recommendation") -> None:
+    """Сохраняет оценку. kind: 'recommendation' (по умолчанию) или 'report' — оценка разбора (19.09.2026)."""
     with get_connection() as conn:
         conn.execute(
-            "INSERT INTO recommendation_ratings (user_id, workout_date, rating, ai_mode, comment) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (user_id, workout_date, rating, ai_mode, comment)
+            "INSERT INTO recommendation_ratings (user_id, workout_date, rating, ai_mode, comment, kind) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (user_id, workout_date, rating, ai_mode, comment, kind)
         )
 
 
@@ -1778,7 +1785,7 @@ def get_recent_ratings(limit: int = 20) -> list:
     with get_connection() as conn:
         return conn.execute("""
             SELECT r.id, r.rating, r.ai_mode, r.comment, r.created_at, r.workout_date,
-                   u.name, u.username
+                   u.name, u.username, r.kind
             FROM recommendation_ratings r
             JOIN users u ON r.user_id = u.id
             ORDER BY r.created_at DESC
