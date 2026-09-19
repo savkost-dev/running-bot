@@ -1793,6 +1793,46 @@ def build_ai_b_prompt_reco_challenger(analysis: dict, user_data: dict, zones_map
     )
 
 
+def build_groups_text(analysis: dict) -> str:
+    """19.09.2026: блок ГРУППЫ — темпы всех групп по блокам (recovery, R:W) из анализа анонса (analyzed_json).
+    Сейчас зовётся из пакета разбора (ai_package). Логика — копия сборки «# Группы»
+    в боевом билдере Шага 2; после отладки билдер перевести на эту функцию (один источник)."""
+    structure = analysis.get("structure") or []
+    groups = analysis.get("groups") or []
+    _sb = {b.get("block"): b for b in structure if b.get("block") is not None}
+    groups_lines = []
+    for g in groups:
+        if g.get("health_group"):
+            groups_lines.append(f"  Группа {g.get('number')}: бег/ходьба (группа здоровья)")
+            continue
+        block_strs = []
+        for bl in g.get("blocks") or []:
+            rp = bl.get("recovery_pace")
+            rec_str = f" (recovery {rp}{_work_rest_note(bl, _sb.get(bl.get('block')))})" if rp else ""
+            segs = bl.get("segments") or []
+            if segs:
+                seg_strs = []
+                for s in segs:
+                    sps = s.get("work_pace_start") or "?"
+                    spe = s.get("work_pace_end")
+                    sp = f"{sps}→{spe}" if spe and spe != sps else sps
+                    seg_strs.append(f"{s.get('distance_m')}м@{sp}")
+                block_strs.append(
+                    f"бл{bl.get('block')} {' + '.join(seg_strs)} слитно без отдыха внутри "
+                    f"(стрелка внутри сегмента = прогрессия по повторам){rec_str}")
+                continue
+            ps = bl.get("work_pace_start")
+            pe = bl.get("work_pace_end")
+            if not ps:
+                _br = _block_rest_note(bl, _sb.get(bl.get('block')))
+                block_strs.append(f"бл{bl.get('block')} {_br}" if _br
+                                  else f"бл{bl.get('block')} темп по заданию{rec_str}")
+                continue
+            pace_str = f"{ps}→{pe}" if pe and pe != ps else ps
+            block_strs.append(f"бл{bl.get('block')} {pace_str}/км{rec_str}")
+        groups_lines.append(f"  Группа {g.get('number')}: {'; '.join(block_strs)}")
+    return "\n".join(groups_lines) if groups_lines else "  —"
+
 
 def generate_ai_b_extra(analysis: dict, advice: dict, mode: str = "smart") -> str:
     """Второе сообщение варианта B — свободный текст от ИИ.

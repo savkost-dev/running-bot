@@ -701,6 +701,13 @@ async def build_package(db_user_id: int, selector=None) -> dict:
     else:
         A("  нет анализа за эту дату")
 
+    A("\n[ГРУППЫ] (темпы всех групп, из анализа анонса)")
+    if s4:
+        import claude_advisor as _ca
+        A(_ca.build_groups_text(s4))
+    else:
+        A("  нет анализа за эту дату")
+
     A("\n[РЕКОМЕНДАЦИЯ С ВЕЧЕРА] (рассылка)")
     rec = next((r for r in db.get_recommendations_for_date(wdate) if r.get("user_id") == db_user_id), None)
     if rec:
