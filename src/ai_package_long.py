@@ -310,7 +310,8 @@ def _enrich_laps(splits, plan_steps, pts):
         end_ms = starts[n + 1] if n + 1 < len(starts) else (start_ms + int(t * 1000) if start_ms else None)
         hr_before = _hr_before(pts, start_ms) if (rl == "work" and pts) else None
         sp200 = _splits_200(pts, start_ms, end_ms, d, keep_tail=True, min_tail=25.0) if (rl == "work" and pts and end_ms) else None
-        sp100 = _splits_200(pts, start_ms, end_ms, d, chunk=100.0, keep_tail=True, min_tail=25.0) if (rl == "work" and pts and end_ms) else None
+        # 20.09.2026 (лонг): куски для графика по 200 м (по 100 слишком густо); поле splits100 оставлено ради цепочки до графика
+        sp100 = _splits_200(pts, start_ms, end_ms, d, chunk=200.0, keep_tail=True, min_tail=50.0) if (rl == "work" and pts and end_ms) else None
         sp400 = _splits_200(pts, start_ms, end_ms, d, chunk=400.0, keep_tail=True, min_tail=25.0) if (rl == "work" and pts and end_ms) else None
         rows.append({
             "label": label, "role": rl, "dist": d, "dur": t,
@@ -551,7 +552,7 @@ async def build_charts_stacked(splits, plan_steps, name: str, out_dir: str,
                 xs_, ys_ = xs_[keep], ys_[keep]
                 ax.plot(xs_, ys_, color=c, lw=0.9, alpha=0.6, zorder=2)
                 ax.scatter(xs_, ys_, color=c, s=14, alpha=0.85, zorder=2,
-                           label=None if shown else "куски по 100 м")
+                           label=None if shown else "куски по 200 м")
                 shown = True
         # Ось — по основным данным, места под вылеты не добавляем: медленный вылет
         # ▼ на нижнем краю, быстрый ▲ на верхнем (после invert); внутри оси — на своём месте.
@@ -694,8 +695,15 @@ def _plan_diagram(ax, blocks, plan_steps):
         p = _plan(st)
         if p and p.get("dist"):
             return float(p["dist"])
+        # 20.09.2026 (лонг): шаг по времени — ширина пропорциональна секундам (все шаги лонга по времени, единица одна)
+        if p and p.get("time_s"):
+            return float(p["time_s"])
         lap = next((s[st] for s in blk["series"] if st in s), None)
         return float(lap["dist"]) if (lap and lap.get("dist")) else 100.0
+
+    def _by_time(st):
+        p = _plan(st)
+        return bool(p and not p.get("dist") and p.get("time_s"))
 
     def _role(st, blk):
         lap = next((s[st] for s in blk["series"] if st in s), None)
@@ -744,7 +752,7 @@ def _plan_diagram(ax, blocks, plan_steps):
                 fc = "#ff8c00" if fast else "#1f77b4"
             ax.add_patch(Rectangle((x, y0), w, h, facecolor=fc, edgecolor="none"))
             d = _dist(st, blk)
-            dlab = f"{int(d)} м"
+            dlab = f"{int(round(d / 60))} мин" if _by_time(st) else f"{int(d)} м"
             if w >= 0.055:
                 ax.text(x + w / 2, y0 + h / 2, dlab, fontsize=9, fontweight="bold",
                         color="white", ha="center", va="center")
@@ -758,6 +766,11 @@ def _plan_diagram(ax, blocks, plan_steps):
             if si < len(blk["steps"]) - 1:
                 x += GAP_STEP
         n = len(blk["series"])
+        # 20.09.2026 (лонг): у блока по времени скобку «×N» не рисуем — круги-километры это отсечки, не повторы
+        if all(_by_time(st) for st in blk["steps"]):
+            if bi < len(blocks) - 1:
+                x += GAP_BLK
+            continue
         ax.plot([bx0, x], [0.84, 0.84], color="#666666", lw=1.2)
         ax.plot([bx0, bx0], [0.84, 0.74], color="#666666", lw=1.2)
         ax.plot([x, x], [0.84, 0.74], color="#666666", lw=1.2)
@@ -921,13 +934,19 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
     for st in ws:
         m = rmeta[st]
         b = m["bounds"]
+        # 20.09.2026 (лонг): шаг по времени — «50 мин @ 5:30» без ×N (круги-километры — отсечки, не повторы)
+        _ps = next((q for q in plan_steps if q["idx"] == st), None)
+        if _ps and not _ps.get("dist") and _ps.get("time_s"):
+            lab = f"{int(round(_ps['time_s'] / 60))} мин"
+        else:
+            lab = f"{m['n']} × {m['label']}"
         if b:
             slow, fast = b
             tgt = (_fmt_pace((slow + fast) / 2) if abs(slow - fast) <= ar.WORK_EXACT_EPS
                    else f"{_fmt_pace(slow)}→{_fmt_pace(fast)}")
-            plan_bits.append(f"{m['n']} × {m['label']} @ {tgt}")
+            plan_bits.append(f"{lab} @ {tgt}")
         else:
-            plan_bits.append(f"{m['n']} × {m['label']}")
+            plan_bits.append(lab)
     if rest_plan:
         rd = f"{int(rest_plan['dist'])} м " if rest_plan.get("dist") else ""
         plan_bits.append(f"отдых {rd}@ {_fmt_pace(rest_target)}")
@@ -1170,12 +1189,12 @@ async def build_long_package(db_user_id: int, selector=None) -> dict:
             m = re.search(r"\b(\d:\d\d)\b", work) if not _g.get("health_group") else None
             if even and m:
                 A(f"  Группа {num}: {m.group(1)} ровно все 100 мин")
-                A(f"  Группа {num}p: {work}")
+                A(f"  Группа {num}-прогресс: {work}")
             else:
                 A(f"  Группа {num}: {work}")
         if even:
             A("  Соседние варианты: быстрее = группа на номер меньше, медленнее = на номер больше; "
-              "p = та же группа, вторая половина на 30 с/км быстрее")
+              "-прогресс = та же группа, вторая половина на 30 с/км быстрее")
     else:
         A("  нет анализа за эту дату")
 
@@ -1189,7 +1208,7 @@ async def build_long_package(db_user_id: int, selector=None) -> dict:
         A("  нет записи рассылки за эту дату")
     # Выполнена: номер из имени + «p», если бежал вариант с прогрессом (DDLong-3p / DDLong-3+)
     _pn = parse_dd_name(name) or {}
-    _done = f"{cand['wgroup']}{'p' if _pn.get('progressive') else ''}" if cand.get("wgroup") else None
+    _done = f"{cand['wgroup']}{'-прогресс' if _pn.get('progressive') else ''}" if cand.get("wgroup") else None
     A(f"  Выполнена: гр.{_done}" if _done else "  Выполнена: группа не определена")
 
     A("\n[ПЛАН] (эталон)")
