@@ -1166,6 +1166,21 @@ async def build_long_package(db_user_id: int, selector=None) -> dict:
       f"ПАНО: {prof.get('lactate_threshold_pace') or '—'}/км @ {prof.get('lactate_threshold_hr') or '—'} уд/мин")
     A(f"  Специализация: {prof.get('specialization') or '—'}")
 
+    # 20.09.2026 (лонг): зоны темпа бегуна — те же, по которым строилась рекомендация (формат как в промте Шага 2)
+    A("\n[ЗОНЫ ТЕМПА] (по ним строилась рекомендация)")
+    try:
+        import zones as _zones
+        _zi = _zones.get_pace_zones(db_user_id)
+    except Exception:
+        _zi = None
+    if _zi and _zi.get("zones"):
+        for _z, _p in _zi["zones"].items():
+            A(f"  {_z}: {_p} мин/км")
+        if _zi.get("source"):
+            A(f"  источник зон: {_zi['source']}")
+    else:
+        A("  нет данных")
+
     A("\n[ЦЕЛЬ И СУТЬ ТРЕНИРОВКИ] (из анализа анонса)")
     if s4:
         A(f"  Тип: {s4.get('workout_type')}   Интенсивность: {s4.get('intensity_level')}")
