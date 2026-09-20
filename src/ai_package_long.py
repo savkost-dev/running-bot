@@ -19,6 +19,7 @@ from ai_package import (
     _parse_details,
     _pick_activity,
     _s4_by_date,
+    parse_dd_name,
     _safe_candidate,
     ar,
     asyncio,
@@ -1158,11 +1159,23 @@ async def build_long_package(db_user_id: int, selector=None) -> dict:
     else:
         A("  нет анализа за эту дату")
 
-    A("\n[ГРУППЫ] (задания всех групп, из анализа анонса)")
-    # 20.09.2026: у лонга блоков нет — задание группы одной строкой в поле work
+    A("\n[ГРУППЫ] (варианты на выбор, из анализа анонса; выполнена одна из них)")
+    # 20.09.2026: у лонга блоков нет — задание группы одной строкой в поле work.
+    # При флаге even_pace_available у каждой группы два варианта: N — ровно (темп первой половины все 100 мин),
+    # Np — с прогрессом (как в анонсе). Ровный темп = первый темп М:СС в строке work.
     if s4:
+        even = bool(s4.get("even_pace_available"))
         for _g in s4.get("groups") or []:
-            A(f"  Группа {_g.get('number')}: {_g.get('work') or '—'}")
+            num, work = _g.get("number"), _g.get("work") or "—"
+            m = re.search(r"\b(\d:\d\d)\b", work) if not _g.get("health_group") else None
+            if even and m:
+                A(f"  Группа {num}: {m.group(1)} ровно все 100 мин")
+                A(f"  Группа {num}p: {work}")
+            else:
+                A(f"  Группа {num}: {work}")
+        if even:
+            A("  Соседние варианты: быстрее = группа на номер меньше, медленнее = на номер больше; "
+              "p = та же группа, вторая половина на 30 с/км быстрее")
     else:
         A("  нет анализа за эту дату")
 
@@ -1174,7 +1187,10 @@ async def build_long_package(db_user_id: int, selector=None) -> dict:
             A("  Подходимость: " + "  ".join(f"гр.{g} {p}%" for g, p in rec["groups_pct"].items()))
     else:
         A("  нет записи рассылки за эту дату")
-    A(f"  Выполнена: гр.{cand['wgroup']}" if cand.get("wgroup") else "  Выполнена: группа не определена")
+    # Выполнена: номер из имени + «p», если бежал вариант с прогрессом (DDLong-3p / DDLong-3+)
+    _pn = parse_dd_name(name) or {}
+    _done = f"{cand['wgroup']}{'p' if _pn.get('progressive') else ''}" if cand.get("wgroup") else None
+    A(f"  Выполнена: гр.{_done}" if _done else "  Выполнена: группа не определена")
 
     A("\n[ПЛАН] (эталон)")
     A(_plan_text(plan_steps))
