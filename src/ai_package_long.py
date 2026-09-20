@@ -1085,7 +1085,13 @@ def _plan_text(plan_steps):
         return "  нет (workout не привязан)"
     lines = []
     for s in plan_steps:
-        dist = f"{int(s['dist'])}м" if s.get("dist") else "?"
+        # 20.09.2026 (лонг): шаги заданы временем (time_s), а не дистанцией; без того и другого — «до кнопки»
+        if s.get("dist"):
+            dist = f"{int(s['dist'])}м"
+        elif s.get("time_s"):
+            dist = f"{int(round(s['time_s'] / 60))} мин"
+        else:
+            dist = "до кнопки"
         if s["bounds"]:
             slow, fast = s["bounds"]
             tgt = (f"{_fmt_pace(slow)}" if abs(slow - fast) <= ar.WORK_EXACT_EPS
@@ -1152,10 +1158,11 @@ async def build_long_package(db_user_id: int, selector=None) -> dict:
     else:
         A("  нет анализа за эту дату")
 
-    A("\n[ГРУППЫ] (темпы всех групп, из анализа анонса)")
+    A("\n[ГРУППЫ] (задания всех групп, из анализа анонса)")
+    # 20.09.2026: у лонга блоков нет — задание группы одной строкой в поле work
     if s4:
-        import claude_advisor as _ca
-        A(_ca.build_groups_text(s4))
+        for _g in s4.get("groups") or []:
+            A(f"  Группа {_g.get('number')}: {_g.get('work') or '—'}")
     else:
         A("  нет анализа за эту дату")
 
