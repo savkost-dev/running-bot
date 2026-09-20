@@ -513,7 +513,18 @@ async def _garmin_candidate(db_user_id, selector):
             plan_steps = ar._flatten_plan_steps(plan_wkt)
     _drop_extra_first_lap(splits, plan_steps)
     _assign_button_laps(splits, plan_wkt, plan_steps)
-    if _no_gps(act, "garmin"):
+    # 20.09.2026: Stryd = шагомер (STRIDE_SPEED_DISTANCE) среди датчиков активности (решение Антона).
+    # Со Stryd дистанция точная — дорожка идёт как тренировка со спутниками.
+    # Нет ответа Garmin — stryd = None (неизвестно), логика без GPS как раньше.
+    try:
+        meta = await asyncio.to_thread(client.get_activity, act_id)
+        sensors = ((meta or {}).get("metadataDTO") or {}).get("sensors") or []
+        stryd = any(s.get("antplusDeviceType") == "STRIDE_SPEED_DISTANCE" for s in sensors)
+    except Exception:
+        stryd = None
+    no_gps_raw = _no_gps(act, "garmin")
+    no_gps = no_gps_raw and not stryd
+    if no_gps:
         n = _apply_plan_distances(splits, plan_steps)
         print(f"/report: Garmin-активность без спутников — плановые дистанции у {n} лэпов")
     try:
@@ -523,7 +534,8 @@ async def _garmin_candidate(db_user_id, selector):
     return {"source": "garmin", "name": name, "act_id": act_id,
             "display_date": act.get("startTimeLocal"), "wdate": wdate, "wgroup": wgroup,
             "wtype_key": (act.get("activityType") or {}).get("typeKey"),
-            "no_gps": _no_gps(act, "garmin"), "by_watch_plan": by_watch_plan,
+            "no_gps": no_gps, "stryd": stryd, "by_watch_plan": by_watch_plan,
+            "by_stryd": no_gps_raw and bool(stryd),
             "splits": splits, "plan_steps": plan_steps, "pts": _parse_details(details)}
 
 
@@ -689,6 +701,8 @@ async def build_package(db_user_id: int, selector=None) -> dict:
     A("=" * 64)
     A(f"Тренировка: {name}")
     A(f"Дата: {cand['display_date']}   activityId: {act_id}   источник: {cand['source']}")
+    _st = cand.get("stryd")
+    A(f"Датчик Stryd: {'да' if _st else ('нет' if _st is False else 'нет данных')}")
 
     A("\n[СПОРТСМЕН]")
     A(f"  Пол: {prof.get('gender') or '—'}   Возраст: {_age(prof.get('birthdate')) or '—'}")
@@ -781,6 +795,7 @@ async def build_package(db_user_id: int, selector=None) -> dict:
     return {"ok": True, "name": name, "text": "\n".join(L), "msg": "",
             "splits": splits, "plan_steps": plan_steps,
             "no_gps": bool(cand.get("no_gps")), "by_watch_plan": bool(cand.get("by_watch_plan")),
+            "by_stryd": bool(cand.get("by_stryd")),
             "splits200": [r.get("splits200") for r in rows],
             "splits100": [r.get("splits100") for r in rows],
             "splits400": [r.get("splits400") for r in rows],
@@ -1187,7 +1202,8 @@ def _km_label(label: str) -> str:
 async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source: str,
                             s4: dict | None, out_dir: str, tag: str,
                             dark: bool = False, splits400=None,
-                            no_gps: bool = False, by_watch_plan: bool = False) -> str | None:
+                            no_gps: bool = False, by_watch_plan: bool = False,
+                            by_stryd: bool = False) -> str | None:
     """Вертикальная карточка разбора под телефон (портрет, три зоны сверху вниз):
     1) шапка — заголовок, название/дата/группа, суть, структура плана;
     2) факт — таблица повторов (зебра, заливка отклонений, строка «ср.»);
@@ -1313,6 +1329,8 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
         meta_bits.append("по заданию из часов")
     if no_gps:
         meta_bits.append("без GPS — дистанции из плана")
+    if by_stryd:   # 20.09.2026: дорожка без спутников, но со Stryd
+        meta_bits.append("без GPS — дистанции по шагомеру Stryd")
     meta_line = "  ·  ".join(meta_bits)
 
     def _rcs_wrap(label, text, style):
