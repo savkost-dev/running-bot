@@ -6734,6 +6734,11 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
     args = list(context.args or [])
     # /report_p <дата> = /report data <дата> (промт + пакет, ИИ не зовётся), обе — только admin; дата — через _parse_cmd_date
     report_p = (update.effective_message.text or "").split()[0].lower().startswith("/report_p")
+    # 20.09.2026: /report_long — разбор лонга (DDLong-…): свой сборщик пакета и свой промт; пока только admin
+    long_mode = (update.effective_message.text or "").split()[0].lower().startswith("/report_long")
+    if long_mode and update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+        await update.message.reply_text("Нет доступа.")
+        return
     if report_p and args and _parse_cmd_date(args[0]):
         args[0] = "DD_" + _parse_cmd_date(args[0]).replace("-", "")
     raw_mode = report_p or (bool(args) and args[0].lower() in ("data", "raw", "данные"))
@@ -6764,8 +6769,8 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
     if raw_mode:
         msg = await context.bot.send_message(chat_id, "⏳ Собираю пакет данных…")
         try:
-            from ai_package import build_package, PROMPT
-            res = await build_package(db_user_id, selector)
+            from ai_package import build_package, build_long_package, PROMPT, PROMPT_LONG
+            res = await (build_long_package if long_mode else build_package)(db_user_id, selector)
         except Exception as e:
             logger.error(f"/report data error for {update.effective_user.id}: {e}", exc_info=True)
             await msg.edit_text(f"❌ Ошибка сборки: {type(e).__name__}: {e}")
@@ -6774,7 +6779,7 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
             await msg.edit_text(f"⚠️ {res.get('msg')}")
             return
         await msg.edit_text(f"📦 Пакет данных: {res['name']}")
-        full = PROMPT + "\n\n" + res["text"]
+        full = (PROMPT_LONG if long_mode else PROMPT) + "\n\n" + res["text"]
         for ch in _send_chunks(full):
             await context.bot.send_message(
                 update.effective_user.id, f"<pre>{html.escape(ch)}</pre>", parse_mode="HTML")
@@ -6784,8 +6789,8 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
             "⏳ Собираю данные, графики и анализ через ИИ…\nМожет занять 1-3 мин.")
     msg = await context.bot.send_message(chat_id, wait)
     try:
-        from ai_package import build_package, PROMPT
-        res = await build_package(db_user_id, selector)
+        from ai_package import build_package, build_long_package, PROMPT, PROMPT_LONG
+        res = await (build_long_package if long_mode else build_package)(db_user_id, selector)
     except Exception as e:
         logger.error(f"/report error for {update.effective_user.id}: {e}", exc_info=True)
         await msg.edit_text(f"❌ Ошибка сборки: {type(e).__name__}: {e}")
@@ -6840,7 +6845,7 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
         await msg.edit_text(f"🤖 Анализирую через ИИ ({_rlabel})… ({res['name']})")
         import claude_advisor
         answer, _ai_stats = await asyncio.to_thread(
-            claude_advisor.ask_text, PROMPT + "\n\n" + res["text"], _rmode, 0.4, True)
+            claude_advisor.ask_text, (PROMPT_LONG if long_mode else PROMPT) + "\n\n" + res["text"], _rmode, 0.4, True)
         if answer:
             import re as _re_md
             _ans = _re_md.sub(r"\*\*(.+?)\*\*", r"\1", answer)
@@ -7013,6 +7018,7 @@ def main():
     app.add_handler(CommandHandler("howto",     cmd_howto))
     app.add_handler(CommandHandler("report",    cmd_report))
     app.add_handler(CommandHandler("report_p",  cmd_report))
+    app.add_handler(CommandHandler("report_long", cmd_report))
     app.add_handler(CommandHandler("report_user", report_user_command))
     app.add_handler(CallbackQueryHandler(msg_user_callback,  pattern=r"^msgu_\d+$"))
     app.add_handler(CallbackQueryHandler(msg_service_callback, pattern=r"^msgsvc_\w+$"))

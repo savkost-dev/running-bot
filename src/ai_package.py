@@ -305,10 +305,10 @@ def _name_matches(selector, name) -> bool:
     return re.search(pat, str(name or "")) is not None
 
 
-def _pick_activity(acts, selector):
+def _pick_activity(acts, selector, kind=None):
     runs = [a for a in (acts or [])
             if "running" in str((a.get("activityType") or {}).get("typeKey", ""))
-            and _is_dd_name(a.get("activityName"))]
+            and _is_dd_name(a.get("activityName"), kind)]
     # Самая свежая — первой: на порядок выдачи API не полагаемся.
     runs.sort(key=lambda a: str(a.get("startTimeLocal") or a.get("startTimeGMT") or ""),
               reverse=True)
@@ -350,10 +350,12 @@ def parse_dd_name(name) -> dict | None:
     return {"kind": "interval", "date": wdate, "group": m.group(2), "progressive": False}
 
 
-def _is_dd_name(name) -> bool:
-    """Фильтр кандидатов /report: интервалы и лонги DDLong-… (лонг пока разбирается как интервалы —
-    прикидка до отдельного разбора); DD_Long не маска (Антон, 13.09)."""
-    return parse_dd_name(name) is not None
+def _is_dd_name(name, kind=None) -> bool:
+    """Фильтр кандидатов разбора по маске имени. kind: 'interval' (DD_…) | 'long' (DDLong-…) | None (любая).
+    20.09.2026: разбор интервалов и разбор лонга разведены — каждый ищет свою маску.
+    DD_Long не маска (Антон, 13.09)."""
+    p = parse_dd_name(name)
+    return p is not None and (kind is None or p["kind"] == kind)
 
 
 def _date_from_name(name):
@@ -483,14 +485,14 @@ def _drop_extra_first_lap(splits, plan_steps) -> bool:
     return False
 
 
-async def _garmin_candidate(db_user_id, selector):
+async def _garmin_candidate(db_user_id, selector, kind=None):
     """Кандидат из Garmin (последняя DD-активность) или None.
     План: Garmin workout по workoutId, иначе фолбэк на workout_templates."""
     client = await garmin._client(db_user_id)
     if not client:
         return None
     acts = await asyncio.to_thread(client.get_activities, 0, 60)
-    act = _pick_activity(acts, selector)
+    act = _pick_activity(acts, selector, kind)
     if not act:
         return None
     name = act.get("activityName")
@@ -539,7 +541,7 @@ async def _garmin_candidate(db_user_id, selector):
             "splits": splits, "plan_steps": plan_steps, "pts": _parse_details(details)}
 
 
-async def _strava_candidate(db_user_id, selector):
+async def _strava_candidate(db_user_id, selector, kind=None):
     """Кандидат из Strava (последняя DD-активность) или None.
     План берётся из workout_templates (без него размечать лэпы нечем → None).
     pts — секундный ряд из /streams (один запрос, если есть GPS)."""
@@ -549,7 +551,7 @@ async def _strava_candidate(db_user_id, selector):
         return None
     acts = await strava.get_recent_activities(token, days=30)
     runs = [a for a in (acts or [])
-            if a.get("type") == "Run" and _is_dd_name(a.get("name"))]
+            if a.get("type") == "Run" and _is_dd_name(a.get("name"), kind)]
     # ВАЖНО: Strava с параметром `after` отдаёт активности по ВОЗРАСТАНИЮ даты,
     # то есть первой в списке идёт САМАЯ СТАРАЯ тренировка. Сортируем явно.
     runs.sort(key=lambda a: str(a.get("start_date_local") or a.get("start_date") or ""),
@@ -589,7 +591,7 @@ async def _strava_candidate(db_user_id, selector):
             "wtype_key": "running", "splits": splits, "plan_steps": plan_steps, "pts": pts}
 
 
-async def _coros_candidate(db_user_id, selector):
+async def _coros_candidate(db_user_id, selector, kind=None):
     """Кандидат из COROS (новая схема, MCP) — последняя DD-активность или None.
     Имя тренировки COROS отдаёт в поле Location (без имени там место — под маску не попадёт).
     Круги — РУЧНЫЕ отрезки с часов (автоматические километры отбрасываются).
@@ -600,7 +602,7 @@ async def _coros_candidate(db_user_id, selector):
     import coros_mcp
     records = coros_mcp.parse_sport_records(
         await coros_mcp.fetch_sport_records(db_user_id, days=30))
-    runs = [r for r in records if _is_dd_name(r.get("name"))]
+    runs = [r for r in records if _is_dd_name(r.get("name"), kind)]
     # На порядок выдачи не полагаемся: самая свежая по дате-из-имени — первой.
     runs.sort(key=lambda r: _date_from_name(r.get("name"))[0] or "", reverse=True)
     if selector is None:
@@ -672,15 +674,153 @@ async def build_package(db_user_id: int, selector=None) -> dict:
     selector: None → последняя DD; маска 'DD_YYYYMMDD'; либо activityId.
     Возвращает {ok, msg, name, text}. text — пакет без промпта (PROMPT добавляет вызывающий)."""
     selector = _expand_selector(selector)
-    g = await _safe_candidate("garmin", _garmin_candidate(db_user_id, selector))
-    c = await _safe_candidate("coros", _coros_candidate(db_user_id, selector))
-    s = await _safe_candidate("strava", _strava_candidate(db_user_id, selector))
+    g = await _safe_candidate("garmin", _garmin_candidate(db_user_id, selector, "interval"))
+    c = await _safe_candidate("coros", _coros_candidate(db_user_id, selector, "interval"))
+    s = await _safe_candidate("strava", _strava_candidate(db_user_id, selector, "interval"))
     cand = _choose_candidate(g, c, s)
     if not cand:
         sel = f" по «{selector}»" if selector else ""
         return {"ok": False, "msg": f"DD-активность{sel} не найдена (Garmin/COROS/Strava).\n"
                                      f"Назови тренировку по маске DD_ГГГГММДД-группа — например "
                                      f"DD_20260904-3.5 — и отмечай отрезки кнопкой круга на часах."}
+
+    name = cand["name"]
+    act_id = cand["act_id"]
+    wdate = cand["wdate"]
+    splits = cand["splits"]
+    plan_steps = cand["plan_steps"]
+    pts = cand["pts"]
+
+    prof = db.get_user_profile(db_user_id) or {}
+    snap = db.get_morning_caught(db_user_id, wdate)  # 19.09: утро дня тренировки из истории mornings
+    s4 = _s4_by_date(wdate, cand["wtype_key"])
+    rows, S = _enrich_laps(splits, plan_steps, pts)
+
+    L = []
+    A = L.append
+    A("=" * 64)
+    A("ПАКЕТ ДАННЫХ ДЛЯ АНАЛИЗА ТРЕНИРОВКИ")
+    A("=" * 64)
+    A(f"Тренировка: {name}")
+    A(f"Дата: {cand['display_date']}   activityId: {act_id}   источник: {cand['source']}")
+    _st = cand.get("stryd")
+    A(f"Датчик Stryd: {'да' if _st else ('нет' if _st is False else 'нет данных')}")
+
+    A("\n[СПОРТСМЕН]")
+    A(f"  Пол: {prof.get('gender') or '—'}   Возраст: {_age(prof.get('birthdate')) or '—'}")
+    A(f"  МПК: {prof.get('vo2max') or '—'}   "
+      f"ПАНО: {prof.get('lactate_threshold_pace') or '—'}/км @ {prof.get('lactate_threshold_hr') or '—'} уд/мин")
+    A(f"  Специализация: {prof.get('specialization') or '—'}")
+
+    A("\n[ЦЕЛЬ И СУТЬ ТРЕНИРОВКИ] (из анализа анонса)")
+    if s4:
+        A(f"  Тип: {s4.get('workout_type')}   Интенсивность: {s4.get('intensity_level')}")
+        if s4.get("summary"):
+            A(f"  Суть: {s4['summary']}")
+        if s4.get("overall_purpose"):
+            A(f"  Цель: {s4['overall_purpose']}")
+        if s4.get("what_to_watch"):
+            A(f"  На что смотреть: {s4['what_to_watch']}")
+    else:
+        A("  нет анализа за эту дату")
+
+    A("\n[ГРУППЫ] (темпы всех групп, из анализа анонса)")
+    if s4:
+        import claude_advisor as _ca
+        A(_ca.build_groups_text(s4))
+    else:
+        A("  нет анализа за эту дату")
+
+    A("\n[РЕКОМЕНДАЦИЯ С ВЕЧЕРА] (рассылка)")
+    rec = next((r for r in db.get_recommendations_for_date(wdate) if r.get("user_id") == db_user_id), None)
+    if rec:
+        A(f"  Рекомендована: гр.{rec['recommended_group']}")
+        if rec.get("groups_pct"):
+            A("  Подходимость: " + "  ".join(f"гр.{g} {p}%" for g, p in rec["groups_pct"].items()))
+    else:
+        A("  нет записи рассылки за эту дату")
+    A(f"  Выполнена: гр.{cand['wgroup']}" if cand.get("wgroup") else "  Выполнена: группа не определена")
+
+    A("\n[ПЛАН] (эталон)")
+    A(_plan_text(plan_steps))
+
+    work = [r for r in rows if r["role"] == "work"]
+    rest = [r for r in rows if r["role"] == "rest"]
+
+    A("\n[ФАКТ — ТЕМП И ПУЛЬС ПО ОТРЕЗКАМ]")
+    A(f"  {'отр':>5} {'роль':<6} {'дист':>5} {'время':>6} {'темп':>6} "
+      f"{'ЧССср':>5} {'ЧССмакс':>7} {'ЧССперед':>8}")
+    for r in rows:
+        A(f"  {r['label'] or '·':>5} {r['role']:<6} {_num(r['dist']):>4}м "
+          f"{_fmt_time(r['dur']):>6} {_fmt_pace(r['pace']):>6} "
+          f"{_num(r['avg_hr']):>5} {_num(r['max_hr']):>7} {_num(r['hr_before']):>8}")
+    def _wpace(rr_):
+        d = sum(r["dist"] for r in rr_ if r["dist"])
+        t = sum(r["dur"] for r in rr_ if r["dur"])
+        return (t / (d / 1000)) if (d and t) else None
+
+    if work:
+        A(f"  средн. работа: темп {_fmt_pace(_wpace(work))}  "
+          f"ЧССср {_num(_avg([r['avg_hr'] for r in work]))}")
+    if rest:
+        A(f"  средн. отдых:  темп {_fmt_pace(_wpace(rest))}  "
+          f"ЧССср {_num(_avg([r['avg_hr'] for r in rest]))}")
+
+    A("\n[ФАКТ — БИОМЕХАНИКА И МОЩНОСТЬ ПО ОТРЕЗКАМ]")
+    A(f"  {'отр':>5} {'роль':<6} {'кад':>4} {'мощн':>5} {'NP':>4} {'GCTмс':>5} "
+      f"{'ВКсм':>5} {'балL':>5} {'дых':>4} {'compl':>5}")
+    for r in rows:
+        A(f"  {r['label'] or '·':>5} {r['role']:<6} {_num(r['cad']):>4} "
+          f"{_num(r['pwr']):>5} {_num(r['npwr']):>4} {_num(r['gct']):>5} "
+          f"{_num(r['vo'], 1):>5} {_num(r['bal'], 1):>5} {_num(r['resp']):>4} {_num(r['compl']):>5}")
+
+    sp_rows = [r for r in work if r.get("splits200")]
+    if sp_rows:
+        A("\n[СПЛИТЫ ПО 200 м ВНУТРИ ДЛИННЫХ ОТРЕЗКОВ] (темп каждого 200 м)")
+        for r in sp_rows:
+            A(f"  отр {r['label']}: " + ", ".join(
+                _fmt_pace(p) + (f" ({int(round(dd))} м)" if dd < 180 else "")
+                for p, dd in r["splits200"]))
+
+    A("\n[САМОЧУВСТВИЕ УТРОМ] (утро дня тренировки)")
+    if snap and snap.get("caught"):
+        A(f"  снимок за {snap.get('date')}")
+        A(f"  Training Readiness: {_num(snap.get('tr'))}   Body Battery: {_num(snap.get('bb'))}")
+        A(f"  Сон: {_num(snap.get('sleep_h'), 1)}ч   HRV: {_num(snap.get('hrv'))}   "
+          f"ЧСС покоя: {_num(snap.get('rhr'))}   Пробуждение: {snap.get('wake_at') or '—'}")
+    else:
+        A("  снимка нет")
+
+    A("\n[НЕТ ДАННЫХ] лактат, субъективная оценка (RPE), погода")
+    A("=" * 64)
+
+    return {"ok": True, "name": name, "text": "\n".join(L), "msg": "",
+            "splits": splits, "plan_steps": plan_steps,
+            "no_gps": bool(cand.get("no_gps")), "by_watch_plan": bool(cand.get("by_watch_plan")),
+            "by_stryd": bool(cand.get("by_stryd")),
+            "splits200": [r.get("splits200") for r in rows],
+            "splits100": [r.get("splits100") for r in rows],
+            "splits400": [r.get("splits400") for r in rows],
+            "wdate": wdate, "wgroup": cand["wgroup"], "source": cand["source"],
+            "act_id": act_id, "s4": s4}
+
+
+PROMPT_LONG = PROMPT   # 20.09.2026: пока тот же промт, что у интервалов — правим под лонг отдельно
+
+
+async def build_long_package(db_user_id: int, selector=None) -> dict:
+    """20.09.2026: пакет данных для ИИ по ЛОНГУ (DDLong-…) — отдельно от интервалов (build_package).
+    Пока копия build_package с поиском по маске лонга; правится под лонг отдельно.
+    selector: None → последний лонг; activityId. Выбор по дате — потом (дата сейчас раскрывается в маску DD_…)."""
+    selector = _expand_selector(selector)
+    g = await _safe_candidate("garmin", _garmin_candidate(db_user_id, selector, "long"))
+    c = await _safe_candidate("coros", _coros_candidate(db_user_id, selector, "long"))
+    s = await _safe_candidate("strava", _strava_candidate(db_user_id, selector, "long"))
+    cand = _choose_candidate(g, c, s)
+    if not cand:
+        sel = f" по «{selector}»" if selector else ""
+        return {"ok": False, "msg": f"Лонг{sel} не найден (Garmin/COROS/Strava).\n"
+                                     f"Назови тренировку по маске DDLong-группа — например DDLong-3 или DDLong-3p."}
 
     name = cand["name"]
     act_id = cand["act_id"]
