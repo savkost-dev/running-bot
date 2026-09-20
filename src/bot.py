@@ -6772,7 +6772,8 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
     if raw_mode:
         msg = await context.bot.send_message(chat_id, "⏳ Собираю пакет данных…")
         try:
-            from ai_package import build_package, build_long_package, PROMPT, PROMPT_LONG
+            from ai_package import build_package, PROMPT
+            from ai_package_long import build_long_package, PROMPT_LONG
             res = await (build_long_package if long_mode else build_package)(db_user_id, selector)
         except Exception as e:
             logger.error(f"/report data error for {update.effective_user.id}: {e}", exc_info=True)
@@ -6792,7 +6793,8 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
             "⏳ Собираю данные, графики и анализ через ИИ…\nМожет занять 1-3 мин.")
     msg = await context.bot.send_message(chat_id, wait)
     try:
-        from ai_package import build_package, build_long_package, PROMPT, PROMPT_LONG
+        from ai_package import build_package, PROMPT
+        from ai_package_long import build_long_package, PROMPT_LONG
         res = await (build_long_package if long_mode else build_package)(db_user_id, selector)
     except Exception as e:
         logger.error(f"/report error for {update.effective_user.id}: {e}", exc_info=True)
@@ -6806,7 +6808,11 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
     # Фолбэк на старые 3 PNG, если карточка не построилась.
     chart_items = []
     try:
-        from ai_package import build_report_card, build_charts_stacked
+        # 20.09.2026: карточка и графики лонга — свои (ai_package_long), интервалов — ai_package
+        if long_mode:
+            from ai_package_long import build_report_card, build_charts_stacked
+        else:
+            from ai_package import build_report_card, build_charts_stacked
         card = await build_report_card(
             res.get("splits"), res.get("plan_steps"), res["name"],
             res.get("wdate"), res.get("wgroup"), res.get("source"),
@@ -6826,7 +6832,10 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
         logger.error(f"/report card error: {e}", exc_info=True)
     if not chart_items:
         try:
-            from ai_package import build_charts
+            if long_mode:
+                from ai_package_long import build_charts
+            else:
+                from ai_package import build_charts
             charts = await build_charts(res.get("splits"), res.get("plan_steps"),
                                         res["name"], "/tmp", str(db_user_id), dark=False)
         except Exception as e:

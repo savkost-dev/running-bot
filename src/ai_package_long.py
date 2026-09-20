@@ -1,491 +1,33 @@
-"""Сборка пакета данных для ИИ-анализа тренировки (read-only).
-
-Канонический модуль: используется и админ-командой бота, и отладочным
-scripts/ai_data_package.py. Собирает по DD-активности всё, что нужно ИИ по таблице,
-КРОМЕ лактата и субъективных оценок (источника нет) и погоды (пока нет источника).
-
-Источники:
-  PROFILE   database.get_user_profile   — пол, возраст, МПК, ПАНО
-  S4        workout_analysis по дате     — суть/цель/интенсивность (анализ анонса)
-  PLAN      activity_review._flatten_plan_steps — структура и целевые темпы (Garmin workout)
-  SPLITS    lapDTO                        — факт по отрезкам (время/темп/ЧСС/каденс/мощность/
-                                            GCT/верт.колеб/баланс/дыхание/compliance)
-  DETAILS   get_activity_details (1 Гц)   — ЧСС перед стартом повтора; сплиты по 200 м
-  MORNING   database.get_morning_caught   — текущий утренний снимок (TR/BB/HRV/RHR/сон)
-
-Привязка точек DETAILS к лэпу — по времени (directTimestamp vs startTimeGMT как UTC).
-Валидация сплитов: пройденная дистанция ≈ lapDTO.distance, иначе не считаем (без подстановок).
-
-Главная точка: build_package(db_user_id, selector=None) -> {ok, msg, name, text}.
-text — готовый текстовый пакет (без промпта). PROMPT — инструкция для ИИ (добавляется
-вызывающим, если нужно). НЕ импортирует bot.py.
+"""ai_package_long.py — разбор ЛОНГА (DDLong-…), с 20.09.2026. Пара к ai_package.py (интервалы).
+Общее с интервалами — только поиск активности по маске и чтение данных (импорт из ai_package);
+всё остальное (разметка кругов, план, пакет, промт, графики, карточка) — своё: правки лонга только здесь.
+Собран scripts/make_long_report.py + scripts/extend_long_report.py.
 """
-import os
-import re
-import bisect
-import asyncio
-from datetime import datetime, timezone, date
-
-import garmin
-import database as db
-import activity_review as ar
-
-_fmt_pace = ar._pace_formatter
-_fmt_time = ar._fmt_time
-
-PROMPT = (
-    "Ты тренер бегового клуба. Накануне была тренировка для разных групп по уровню подготовки. "
-    "Мне была дана рекомендация с %% подходимости для каждой группы. "
-    "Рекомендация на основе моих пульсовых зон с часов или введенных вручную. "
-    "Я сделал тренировку по программе одной из групп.\n"
-    "Вот полные данные моей тренировки: возраст, МПК, ПАНО, целевой план Garmin, "
-    "таблица с темпом, пульсом, биомеханикой по каждому отрезку, и самочувствие утром в день тренировки "
-    "(Training Readiness, сон, HRV).\n"
-    "Задача: проанализируй тренировку как тренер бегового клуба.\n"
-    "Не держи рекомендации за догму, разбор делается для того, чтобы по факту проверить "
-    "и качество выполнения, и качество рекомендации.\n"
-    "Отдельно нужно понять:\n"
-    "- верный ли был выбор группы и следовал ли рекомендации;\n"
-    "- что мог дать переход на группу быстрее или медленнее, группы строго из предложенных вариантов "
-    "(при переходе в более быструю группу учитывай необходимость выполнить тренировку целиком; "
-    "при переходе в более медленную группу смотри за стимулом — тренировка без развития теряет смысл);\n"
-    "- если выбор не совпал с рекомендацией, то кто оказался прав.\n"
-    "Когда упоминаешь группу, указывай её % подходимости из рекомендации (например: «гр.3.5 (90%)»).\n"
-    "Требования к ответу:\n\n"
-    "* только суть, живым языком, без лишних цифр\n"
-    "* сначала оцени, соблюдён ли план по темпу и по отдыху (особенно если есть расхождения); "
-    "если в данных НЕТ отрезков с ролью rest — тренировка непрерывная, про отдых и паузы "
-    "не пиши вообще ни слова\n"
-    "* на ПОСЛЕДНЕМ рабочем отрезке допустимо отклонение от задания; если он быстрее цели — "
-    "игнорируй это отклонение и не считай его ошибкой\n"
-    "* определи, не была ли тренировка слишком тяжёлой, и если да – то что именно перегружено: "
-    "темп, количество повторов, восстановление\n"
-    "* если вся работа стабильно быстрее плана — не считай это ошибкой автоматически: сам оцени по данным, "
-    "была ли она чрезмерной (пульс относительно ПАНО, развал темпа к концу, рост времени или темпа "
-    "восстановления от повтора к повтору, деградация биомеханики). Если признаков перегруза нет — "
-    "похвали за запас и предложи в следующий раз попробовать более быструю группу; если признаки есть — "
-    "прямо назови их и чем это грозит\n"
-    "* зеркально: если план системно НЕ выполнен (медленнее целей, развал темпа, пульс выше ПАНО "
-    "без шансов удержать задание) — прямо скажи, что выбранная группа сегодня оказалась перебором, "
-    "и в рекомендации предложи на следующей похожей тренировке группу ниже — не ограничивайся "
-    "советами, как пробежать ту же группу лучше. Разовый плохой день (плохой сон, низкая готовность) "
-    "отличай от несоответствия уровню: в первом случае группу можно оставить, сказав об этом явно\n"
-    "* дай конкретную рекомендацию: что изменить в следующий раз (меньше повторов, другой темп, другая пауза)\n"
-    "* не пиши общие фразы про биомеханику, если только там нет явных проблем\n\n"
-    "ФОРМАТ ОТВЕТА (это сообщение в Telegram, без Markdown):\n"
-    "* НЕ используй звёздочки **, решётки # и любую Markdown-разметку\n"
-    "* раздели ответ на короткие смысловые блоки, между блоками — ПУСТАЯ СТРОКА\n"
-    "* каждый блок начинай со строки-заголовка с эмодзи, например:\n"
-    "  «📋 План и отдых», «🔥 Нагрузка», «🧭 Выбор группы», «⏩ Что дал бы переход быстрее», "
-    "«⏪ Что дал бы переход медленнее», «✅ Рекомендация на следующий раз»\n"
-    "* внутри блока 2–4 коротких предложения или маркеры «— » с новой строки\n"
-    "* не лепи всё в один абзац\n\n"
-    "Данные:"
+from ai_package import (
+    PROMPT,
+    _age,
+    _avg,
+    _choose_candidate,
+    _date_from_name,
+    _fmt_pace,
+    _fmt_time,
+    _gmt_ms,
+    _is_dd_name,
+    _name_matches,
+    _no_gps,
+    _num,
+    _parse_details,
+    _pick_activity,
+    _s4_by_date,
+    _safe_candidate,
+    ar,
+    asyncio,
+    bisect,
+    db,
+    garmin,
+    os,
+    re,
 )
-
-
-def _age(birthdate):
-    try:
-        b = datetime.strptime(str(birthdate)[:10], "%Y-%m-%d").date()
-        t = date.today()
-        return t.year - b.year - ((t.month, t.day) < (b.month, b.day))
-    except Exception:
-        return None
-
-
-def _gmt_ms(s):
-    """startTimeGMT 'YYYY-MM-DDTHH:MM:SS(.s)' как UTC → epoch ms. None если не парсится."""
-    if not s:
-        return None
-    try:
-        base = str(s).split(".")[0]
-        dt = datetime.strptime(base, "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
-        return int(dt.timestamp() * 1000)
-    except Exception:
-        return None
-
-
-def _num(v, nd=0):
-    if v is None:
-        return "—"
-    return f"{v:.{nd}f}" if nd else f"{int(round(v))}"
-
-
-def _parse_details(details):
-    """Отсортированные по времени точки (t_ms, dist_m, speed_ms, hr) или None."""
-    if not isinstance(details, dict):
-        return None
-    idx = {}
-    for d in (details.get("metricDescriptors") or []):
-        idx[d.get("key")] = d.get("metricsIndex")
-    rows = details.get("activityDetailMetrics") or []
-    it, idd, isp, ihr = (idx.get("directTimestamp"), idx.get("sumDistance"),
-                         idx.get("directSpeed"), idx.get("directHeartRate"))
-    if it is None:
-        return None
-    pts = []
-    for r in rows:
-        m = r.get("metrics") if isinstance(r, dict) else None
-        if not m:
-            continue
-
-        def g(i):
-            return m[i] if (i is not None and i < len(m)) else None
-
-        t = g(it)
-        if t is None:
-            continue
-        pts.append((t, g(idd), g(isp), g(ihr)))
-    pts.sort(key=lambda x: x[0])
-    return pts or None
-
-
-def _hr_before(pts, ts):
-    """ЧСС точки непосредственно перед отсечкой ts (epoch ms). None если нет."""
-    if not pts or ts is None:
-        return None
-    times = [p[0] for p in pts]
-    i = bisect.bisect_left(times, ts) - 1
-    if i < 0:
-        return None
-    return pts[i][3]
-
-
-def _splits_200(pts, start_ms, end_ms, lap_dist, chunk=200.0, keep_tail=False, min_tail=50.0):
-    """Сплиты по chunk м (по умолчанию 200) внутри отрезка. [темп_сек] или None.
-    Последний неполный кусок — по фактической дистанции, но короче половины куска отбрасывается
-    (остаток в несколько метров из-за сглаживания дистанции у Strava даёт мусорный темп).
-    keep_tail=True: хвост от min_tail м (единый порог 25 м — отсекаем только GPS-мусор) сохраняется,
-    а результат — [(темп_сек, длина_м)].
-    Валидация: дистанция по точкам ≈ lap_dist (±10%)."""
-    seg = [p for p in pts if p[0] is not None and start_ms <= p[0] < end_ms and p[1] is not None]
-    if len(seg) < 4 or not lap_dist or lap_dist < 2 * float(chunk):
-        return None
-    d0 = seg[0][1]
-    covered = seg[-1][1] - d0
-    if abs(covered - lap_dist) > max(20, 0.10 * lap_dist):
-        return None
-    out = []
-    chunk = float(chunk)
-    target = d0 + chunk
-    t_start = seg[0][0]
-    # Граница куска — интерполяцией между соседними секундными точками (дробные секунды),
-    # иначе длительность куска целая и темп идёт ступенями (при 100 м — по 10 с/км).
-    prev_t, prev_d = seg[0][0], seg[0][1]
-    for t, dist, _, _ in seg[1:]:
-        while dist >= target and dist > prev_d:
-            frac = (target - prev_d) / (dist - prev_d)
-            t_cross = prev_t + frac * (t - prev_t)
-            dt = (t_cross - t_start) / 1000.0
-            if dt > 0:
-                pace = round(dt / (chunk / 1000.0), 1)
-                out.append((pace, chunk) if keep_tail else pace)
-            t_start = t_cross
-            target += chunk
-        prev_t, prev_d = t, dist
-    last_t, last_d = seg[-1][0], seg[-1][1]
-    rem_d = last_d - (target - chunk)
-    rem_t = (last_t - t_start) / 1000.0
-    min_tail = min_tail if keep_tail else chunk / 2
-    if rem_d >= min_tail and rem_t > 0:
-        pace = round(rem_t / (rem_d / 1000.0), 1)
-        out.append((pace, round(rem_d)) if keep_tail else pace)
-    return out or None
-
-
-def _plan_text(plan_steps):
-    if not plan_steps:
-        return "  нет (workout не привязан)"
-    lines = []
-    for s in plan_steps:
-        dist = f"{int(s['dist'])}м" if s.get("dist") else "?"
-        if s["bounds"]:
-            slow, fast = s["bounds"]
-            tgt = (f"{_fmt_pace(slow)}" if abs(slow - fast) <= ar.WORK_EXACT_EPS
-                   else f"{_fmt_pace(slow)}→{_fmt_pace(fast)}")
-        else:
-            tgt = "без цели"
-        role = {"interval": "работа", "recovery": "отдых"}.get(s["stype"], s["stype"])
-        lines.append(f"  шаг {s['idx']}: {role} {dist} — цель {tgt}")
-    return "\n".join(lines)
-
-
-def _s4_by_date(workout_date, workout_type):
-    """analyzed_json последнего валидного анализа за дату (точное совпадение)."""
-    import json
-    if not workout_date:
-        return None
-    with db.get_connection() as conn:
-        row = conn.execute(
-            "SELECT analyzed_json FROM workout_analysis "
-            "WHERE workout_date = ? AND is_valid = 1 "
-            "ORDER BY (workout_type = ?) DESC, updated_at DESC LIMIT 1",
-            (workout_date, workout_type or "")
-        ).fetchone()
-    if not row or not row[0]:
-        return None
-    try:
-        return json.loads(row[0])
-    except Exception:
-        return None
-
-
-def _enrich_laps(splits, plan_steps, pts):
-    """Лэпы в хронологии с полным набором полей + индекс i.j + ЧСС перед стартом (work)."""
-    laps = (splits.get("lapDTOs") or []) if isinstance(splits, dict) else []
-    laps = [l for l in laps if isinstance(l, dict)]
-    starts = [_gmt_ms(l.get("startTimeGMT")) for l in laps]
-
-    def role(lp):
-        return ar._role_of(lp.get("wktStepIndex"), str(lp.get("intensityType") or "").upper(), plan_steps)
-
-    work_steps = sorted({lp.get("wktStepIndex") for lp in laps
-                         if role(lp) == "work" and lp.get("wktStepIndex") is not None})
-    j_of = {st: k + 1 for k, st in enumerate(work_steps)}
-    S = len(work_steps)
-
-    rows, occ = [], {}
-    for n, lp in enumerate(laps):
-        st = lp.get("wktStepIndex")
-        if st is None:          # хвост-добегание (нет шага плана)
-            continue
-        if str(lp.get("intensityType") or "").upper() in ar.WARMUP_COOLDOWN:   # 13.09: раз/зам мимо
-            continue
-        d = lp.get("distance")
-        t = lp.get("duration") or lp.get("movingDuration")
-        if not d or not t:
-            continue
-        rl = role(lp)
-        label = ""
-        if rl == "work" and st in j_of:
-            occ[st] = occ.get(st, 0) + 1
-            label = f"{occ[st]}" if S == 1 else f"{occ[st]}.{j_of[st]}"
-        start_ms = starts[n]
-        end_ms = starts[n + 1] if n + 1 < len(starts) else (start_ms + int(t * 1000) if start_ms else None)
-        hr_before = _hr_before(pts, start_ms) if (rl == "work" and pts) else None
-        sp200 = _splits_200(pts, start_ms, end_ms, d, keep_tail=True, min_tail=25.0) if (rl == "work" and pts and end_ms) else None
-        sp100 = _splits_200(pts, start_ms, end_ms, d, chunk=100.0, keep_tail=True, min_tail=25.0) if (rl == "work" and pts and end_ms) else None
-        sp400 = _splits_200(pts, start_ms, end_ms, d, chunk=400.0, keep_tail=True, min_tail=25.0) if (rl == "work" and pts and end_ms) else None
-        rows.append({
-            "label": label, "role": rl, "dist": d, "dur": t,
-            "step": st, "intensity": str(lp.get("intensityType") or "").upper(),
-            "start_ms": start_ms,
-            "pace": t / (d / 1000),
-            "avg_hr": lp.get("averageHR"), "max_hr": lp.get("maxHR"),
-            "cad": lp.get("averageRunCadence"),
-            "pwr": lp.get("averagePower"), "npwr": lp.get("normalizedPower"), "mpwr": lp.get("maxPower"),
-            "gct": lp.get("groundContactTime"), "vo": lp.get("verticalOscillation"),
-            "bal": lp.get("groundContactBalanceLeft"), "resp": lp.get("avgRespirationRate"),
-            "compl": lp.get("directWorkoutComplianceScore"),
-            "hr_before": hr_before, "splits200": sp200, "splits100": sp100, "splits400": sp400,
-        })
-    return rows, S
-
-
-def _avg(vals):
-    vals = [v for v in vals if v is not None]
-    return sum(vals) / len(vals) if vals else None
-
-
-def _expand_selector(selector):
-    """Короткий селектор даты → маска имени: '0901' → 'DD_20260901' (текущий год),
-    '20260901' → 'DD_20260901'. Остальное — как есть."""
-    from datetime import date
-    s = str(selector or "")
-    if re.fullmatch(r"\d{4}", s):
-        return f"DD_{date.today().year}{s}"
-    if re.fullmatch(r"\d{8}", s):
-        return f"DD_{s}"
-    return selector
-
-
-def _name_matches(selector, name) -> bool:
-    """Селектор в имени активности; разделители '-' и '_' равнозначны."""
-    pat = re.escape(str(selector)).replace("_", "[-_]").replace("\\-", "[-_]")
-    return re.search(pat, str(name or "")) is not None
-
-
-def _pick_activity(acts, selector, kind=None):
-    runs = [a for a in (acts or [])
-            if "running" in str((a.get("activityType") or {}).get("typeKey", ""))
-            and _is_dd_name(a.get("activityName"), kind)]
-    # Самая свежая — первой: на порядок выдачи API не полагаемся.
-    runs.sort(key=lambda a: str(a.get("startTimeLocal") or a.get("startTimeGMT") or ""),
-              reverse=True)
-    if selector is None:
-        return runs[0] if runs else None
-    # 20.09.2026: лонг по дате — сверяем с датой старта (в имени лонга даты нет)
-    if kind == "long" and re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(selector)):
-        return next((a for a in runs if str(a.get("startTimeLocal") or "")[:10] == selector), None)
-    selector = _expand_selector(selector)
-    if str(selector).isdigit():
-        return next((a for a in (acts or []) if str(a.get("activityId")) == str(selector)), None)
-    return next((a for a in runs if _name_matches(selector, a.get("activityName"))), None)
-
-
-_DD_INTERVAL_RE = re.compile(r"(?<![A-Za-z])DD[-_](\d{8}|\d{4})(?:[-_]([\d.]+))?(?:[-_](?:lvl|wu))?(?![\d.])", re.I)
-_DD_LONG_RE = re.compile(r"(?<![A-Za-z])DDLong[-_]?(\d+)(p|\+)?(?:[-_]wu)?(?![\d.])", re.I)
-
-
-def parse_dd_name(name) -> dict | None:
-    """13.09.2026: ЕДИНСТВЕННЫЙ разбор имени активности клуба — все поиски по маске идут через него.
-    Интервалы: DD_20260913-3.5_lvl, DD_0913-3.5, DD-0913 (год при 4 цифрах — текущий;
-    группа и суффикс _lvl / _wu необязательны; '-' и '_' равнозначны).
-    Лонг: DDLong-3, DDLong-3p, DDLong-3+ (p и + равнозначны = с ускорением); DD_Long — не маска.
-    Возвращает {'kind': 'interval'|'long', 'date': 'YYYY-MM-DD'|None, 'group': str|None,
-    'progressive': bool} или None, если имя не по маске."""
-    from datetime import datetime as _dt
-    s = str(name or "")
-    m = _DD_LONG_RE.search(s)
-    if m:
-        return {"kind": "long", "date": None, "group": m.group(1),
-                "progressive": bool(m.group(2))}
-    m = _DD_INTERVAL_RE.search(s)
-    if not m:
-        return None
-    d = m.group(1)
-    if len(d) == 4:
-        d = f"{_dt.now().year}{d}"
-    try:
-        wdate = _dt.strptime(d, "%Y%m%d").strftime("%Y-%m-%d")
-    except ValueError:
-        return None
-    return {"kind": "interval", "date": wdate, "group": m.group(2), "progressive": False}
-
-
-def _is_dd_name(name, kind=None) -> bool:
-    """Фильтр кандидатов разбора по маске имени. kind: 'interval' (DD_…) | 'long' (DDLong-…) | None (любая).
-    20.09.2026: разбор интервалов и разбор лонга разведены — каждый ищет свою маску.
-    DD_Long не маска (Антон, 13.09)."""
-    p = parse_dd_name(name)
-    return p is not None and (kind is None or p["kind"] == kind)
-
-
-def _date_from_name(name):
-    """(wdate 'YYYY-MM-DD', wgroup) из имени по маске DD<разд>YYYYMMDD<разд><группа><разд>lvl.
-    Разделители '-' и '_' считаются эквивалентными."""
-    p = parse_dd_name(name)
-    if not p:
-        return None, None
-    return p["date"], p["group"]
-
-
-def _template_json(wdate, wgroup):
-    """Распарсенный JSON эталона из workout_templates или None."""
-    if not (wdate and wgroup):
-        return None
-    import json as _json
-    tmpl = db.get_workout_template(wdate, wgroup, "interval")
-    if not tmpl:
-        return None
-    try:
-        return _json.loads(tmpl)
-    except Exception:
-        return None
-
-
-def _assign_button_laps(splits, plan_wkt, plan_steps):
-    """Кнопочные лэпы Garmin (у всех wktStepIndex=None) при наличии плана:
-    раздаёт wktStepIndex/intensityType по порядку исполнения (strava._expand_plan_roles),
-    лишние лэпы-хвосты остаются без шага.
-    Мутирует splits. Ничего не делает, если индексы уже есть.
-    Дистанции здесь НЕ трогаются — этим занимается _apply_plan_distances."""
-    laps = (splits.get("lapDTOs") or []) if isinstance(splits, dict) else []
-    laps = [l for l in laps if isinstance(l, dict)]
-    if not laps or not plan_wkt or not plan_steps:
-        return
-    if any(l.get("wktStepIndex") is not None for l in laps):
-        return
-    import strava as _sv
-    seq = _sv._expand_plan_roles(plan_wkt)
-    for lap, (idx, stype) in zip(laps, seq):
-        lap["wktStepIndex"] = idx
-        lap["intensityType"] = "REST" if stype in ("recovery", "rest") else "INTERVAL"
-
-
-def _no_gps(act, source: str) -> bool:
-    """Запись без спутников (стадион/манеж/дорожка): дистанция с датчика врёт.
-    Strava: пустой start_latlng / пустая полилиния / trainer=true.
-    Garmin: нет координат старта (None или 0.0) либо treadmill в типе."""
-    if not isinstance(act, dict):
-        return False
-    if source == "strava":
-        if act.get("trainer") is True:
-            return True
-        if not (act.get("start_latlng") or []):
-            return True
-        return not ((act.get("map") or {}).get("summary_polyline") or "")
-    lat, lon = act.get("startLatitude"), act.get("startLongitude")
-    if "treadmill" in str((act.get("activityType") or {}).get("typeKey") or ""):
-        return True
-    return not lat and not lon
-
-
-def _apply_plan_distances(splits, plan_steps) -> int:
-    """Заменяет дистанции лэпов на плановые (время — фактическое,
-    темп пересчитается сам). Общий шаг для обеих веток: вызывается ПОСЛЕ разметки
-    лэпов, поэтому работает и с кнопочными лэпами, и со структурированной тренировкой.
-    Возвращает число заменённых лэпов."""
-    laps = (splits.get("lapDTOs") or []) if isinstance(splits, dict) else []
-    dist_of = {p["idx"]: p.get("dist") for p in (plan_steps or [])}
-    n = 0
-    for lap in laps:
-        if not isinstance(lap, dict):
-            continue
-        d = dist_of.get(lap.get("wktStepIndex"))
-        if d:
-            lap["distance"] = float(d)
-            n += 1
-    return n
-
-
-def _drop_extra_first_lap(splits, plan_steps) -> bool:
-    """Сбрасывает лишний ПЕРВЫЙ круг факта (короткая разминка перед работой).
-
-    Сравнивает первые ДВА фактических круга с ПЕРВЫМ шагом плана: у каждого считается
-    отклонение по дистанции плюс отклонение по темпу (в долях от плана). Кто в сумме
-    ближе — тот и есть первый отрезок; если это второй круг — первый убирается
-    и разбор идёт со второго. Целевой темп — середина диапазона шага; если темпа
-    в плане нет, сравнение идёт только по дистанции.
-
-    Общая для всех источников (COROS/Garmin/Strava). Звать ДО разметки кругов по плану:
-    разметка накладывается по порядку с первого круга. Если круги УЖЕ размечены (Garmin-тренировка
-    по эталону из часов) — не трогаем ничего: там шаги проставили сами часы.
-    Мутирует splits, возвращает True, если первый круг убран."""
-    laps = (splits.get("lapDTOs") or []) if isinstance(splits, dict) else []
-    laps = [l for l in laps if isinstance(l, dict)]
-    if len(laps) < 2 or not plan_steps:
-        return False
-    if any(l.get("wktStepIndex") is not None for l in laps):
-        return False
-
-    step = plan_steps[0]
-    p_dist = step.get("dist")
-    bounds = step.get("bounds")
-    p_pace = (bounds[0] + bounds[1]) / 2 if bounds else None
-    if not p_dist:
-        return False
-
-    def gap(lap):
-        """Отклонение от шага плана: доля по дистанции + доля по темпу. None — сравнить нечем."""
-        d, t = lap.get("distance"), lap.get("duration")
-        if not d or not t:
-            return None
-        total = abs(d - p_dist) / p_dist
-        if p_pace:
-            total += abs(t / (d / 1000) - p_pace) / p_pace
-        return total
-
-    # 18.09.2026 (Антон): смотрим первые ТРИ круга — люди в суете нажимают лишние Lap;
-    # кто ближе к первому шагу плана — тот и первый отрезок, всё перед ним (0, 1 или 2 круга) убираем.
-    gaps = [gap(l) for l in laps[:3]]
-    if gaps[0] is None or gaps[1] is None:
-        return False
-    best = min(range(len(gaps)), key=lambda i: (gaps[i] if gaps[i] is not None else float("inf"), i))
-    if best > 0:
-        splits["lapDTOs"] = (splits.get("lapDTOs") or [])[best:]
-        return True
-    return False
 
 
 async def _garmin_candidate(db_user_id, selector, kind=None):
@@ -647,172 +189,195 @@ async def _coros_candidate(db_user_id, selector, kind=None):
             "wtype_key": "running", "splits": splits, "plan_steps": plan_steps, "pts": pts}
 
 
-async def _safe_candidate(source: str, coro):
-    """Кандидат источника или None при любой ошибке (503 у Strava, таймаут и т.п.):
-    отказ одного источника не должен ронять разбор по остальным."""
-    try:
-        return await coro
-    except Exception as e:  # noqa: BLE001
-        print(f"/report: источник {source} недоступен: {type(e).__name__}: {e}")
+def _drop_extra_first_lap(splits, plan_steps) -> bool:
+    """Сбрасывает лишний ПЕРВЫЙ круг факта (короткая разминка перед работой).
+
+    Сравнивает первые ДВА фактических круга с ПЕРВЫМ шагом плана: у каждого считается
+    отклонение по дистанции плюс отклонение по темпу (в долях от плана). Кто в сумме
+    ближе — тот и есть первый отрезок; если это второй круг — первый убирается
+    и разбор идёт со второго. Целевой темп — середина диапазона шага; если темпа
+    в плане нет, сравнение идёт только по дистанции.
+
+    Общая для всех источников (COROS/Garmin/Strava). Звать ДО разметки кругов по плану:
+    разметка накладывается по порядку с первого круга. Если круги УЖЕ размечены (Garmin-тренировка
+    по эталону из часов) — не трогаем ничего: там шаги проставили сами часы.
+    Мутирует splits, возвращает True, если первый круг убран."""
+    laps = (splits.get("lapDTOs") or []) if isinstance(splits, dict) else []
+    laps = [l for l in laps if isinstance(l, dict)]
+    if len(laps) < 2 or not plan_steps:
+        return False
+    if any(l.get("wktStepIndex") is not None for l in laps):
+        return False
+
+    step = plan_steps[0]
+    p_dist = step.get("dist")
+    bounds = step.get("bounds")
+    p_pace = (bounds[0] + bounds[1]) / 2 if bounds else None
+    if not p_dist:
+        return False
+
+    def gap(lap):
+        """Отклонение от шага плана: доля по дистанции + доля по темпу. None — сравнить нечем."""
+        d, t = lap.get("distance"), lap.get("duration")
+        if not d or not t:
+            return None
+        total = abs(d - p_dist) / p_dist
+        if p_pace:
+            total += abs(t / (d / 1000) - p_pace) / p_pace
+        return total
+
+    # 18.09.2026 (Антон): смотрим первые ТРИ круга — люди в суете нажимают лишние Lap;
+    # кто ближе к первому шагу плана — тот и первый отрезок, всё перед ним (0, 1 или 2 круга) убираем.
+    gaps = [gap(l) for l in laps[:3]]
+    if gaps[0] is None or gaps[1] is None:
+        return False
+    best = min(range(len(gaps)), key=lambda i: (gaps[i] if gaps[i] is not None else float("inf"), i))
+    if best > 0:
+        splits["lapDTOs"] = (splits.get("lapDTOs") or [])[best:]
+        return True
+    return False
+
+
+def _assign_button_laps(splits, plan_wkt, plan_steps):
+    """Кнопочные лэпы Garmin (у всех wktStepIndex=None) при наличии плана:
+    раздаёт wktStepIndex/intensityType по порядку исполнения (strava._expand_plan_roles),
+    лишние лэпы-хвосты остаются без шага.
+    Мутирует splits. Ничего не делает, если индексы уже есть.
+    Дистанции здесь НЕ трогаются — этим занимается _apply_plan_distances."""
+    laps = (splits.get("lapDTOs") or []) if isinstance(splits, dict) else []
+    laps = [l for l in laps if isinstance(l, dict)]
+    if not laps or not plan_wkt or not plan_steps:
+        return
+    if any(l.get("wktStepIndex") is not None for l in laps):
+        return
+    import strava as _sv
+    seq = _sv._expand_plan_roles(plan_wkt)
+    for lap, (idx, stype) in zip(laps, seq):
+        lap["wktStepIndex"] = idx
+        lap["intensityType"] = "REST" if stype in ("recovery", "rest") else "INTERVAL"
+
+
+def _apply_plan_distances(splits, plan_steps) -> int:
+    """Заменяет дистанции лэпов на плановые (время — фактическое,
+    темп пересчитается сам). Общий шаг для обеих веток: вызывается ПОСЛЕ разметки
+    лэпов, поэтому работает и с кнопочными лэпами, и со структурированной тренировкой.
+    Возвращает число заменённых лэпов."""
+    laps = (splits.get("lapDTOs") or []) if isinstance(splits, dict) else []
+    dist_of = {p["idx"]: p.get("dist") for p in (plan_steps or [])}
+    n = 0
+    for lap in laps:
+        if not isinstance(lap, dict):
+            continue
+        d = dist_of.get(lap.get("wktStepIndex"))
+        if d:
+            lap["distance"] = float(d)
+            n += 1
+    return n
+
+
+def _enrich_laps(splits, plan_steps, pts):
+    """Лэпы в хронологии с полным набором полей + индекс i.j + ЧСС перед стартом (work)."""
+    laps = (splits.get("lapDTOs") or []) if isinstance(splits, dict) else []
+    laps = [l for l in laps if isinstance(l, dict)]
+    starts = [_gmt_ms(l.get("startTimeGMT")) for l in laps]
+
+    def role(lp):
+        return ar._role_of(lp.get("wktStepIndex"), str(lp.get("intensityType") or "").upper(), plan_steps)
+
+    work_steps = sorted({lp.get("wktStepIndex") for lp in laps
+                         if role(lp) == "work" and lp.get("wktStepIndex") is not None})
+    j_of = {st: k + 1 for k, st in enumerate(work_steps)}
+    S = len(work_steps)
+
+    rows, occ = [], {}
+    for n, lp in enumerate(laps):
+        st = lp.get("wktStepIndex")
+        if st is None:          # хвост-добегание (нет шага плана)
+            continue
+        if str(lp.get("intensityType") or "").upper() in ar.WARMUP_COOLDOWN:   # 13.09: раз/зам мимо
+            continue
+        d = lp.get("distance")
+        t = lp.get("duration") or lp.get("movingDuration")
+        if not d or not t:
+            continue
+        rl = role(lp)
+        label = ""
+        if rl == "work" and st in j_of:
+            occ[st] = occ.get(st, 0) + 1
+            label = f"{occ[st]}" if S == 1 else f"{occ[st]}.{j_of[st]}"
+        start_ms = starts[n]
+        end_ms = starts[n + 1] if n + 1 < len(starts) else (start_ms + int(t * 1000) if start_ms else None)
+        hr_before = _hr_before(pts, start_ms) if (rl == "work" and pts) else None
+        sp200 = _splits_200(pts, start_ms, end_ms, d, keep_tail=True, min_tail=25.0) if (rl == "work" and pts and end_ms) else None
+        sp100 = _splits_200(pts, start_ms, end_ms, d, chunk=100.0, keep_tail=True, min_tail=25.0) if (rl == "work" and pts and end_ms) else None
+        sp400 = _splits_200(pts, start_ms, end_ms, d, chunk=400.0, keep_tail=True, min_tail=25.0) if (rl == "work" and pts and end_ms) else None
+        rows.append({
+            "label": label, "role": rl, "dist": d, "dur": t,
+            "step": st, "intensity": str(lp.get("intensityType") or "").upper(),
+            "start_ms": start_ms,
+            "pace": t / (d / 1000),
+            "avg_hr": lp.get("averageHR"), "max_hr": lp.get("maxHR"),
+            "cad": lp.get("averageRunCadence"),
+            "pwr": lp.get("averagePower"), "npwr": lp.get("normalizedPower"), "mpwr": lp.get("maxPower"),
+            "gct": lp.get("groundContactTime"), "vo": lp.get("verticalOscillation"),
+            "bal": lp.get("groundContactBalanceLeft"), "resp": lp.get("avgRespirationRate"),
+            "compl": lp.get("directWorkoutComplianceScore"),
+            "hr_before": hr_before, "splits200": sp200, "splits100": sp100, "splits400": sp400,
+        })
+    return rows, S
+
+
+def _splits_200(pts, start_ms, end_ms, lap_dist, chunk=200.0, keep_tail=False, min_tail=50.0):
+    """Сплиты по chunk м (по умолчанию 200) внутри отрезка. [темп_сек] или None.
+    Последний неполный кусок — по фактической дистанции, но короче половины куска отбрасывается
+    (остаток в несколько метров из-за сглаживания дистанции у Strava даёт мусорный темп).
+    keep_tail=True: хвост от min_tail м (единый порог 25 м — отсекаем только GPS-мусор) сохраняется,
+    а результат — [(темп_сек, длина_м)].
+    Валидация: дистанция по точкам ≈ lap_dist (±10%)."""
+    seg = [p for p in pts if p[0] is not None and start_ms <= p[0] < end_ms and p[1] is not None]
+    if len(seg) < 4 or not lap_dist or lap_dist < 2 * float(chunk):
         return None
-
-
-def _choose_candidate(*cands):
-    """Более новый по дате-из-имени; при равенстве — по порядку аргументов
-    (Garmin, COROS, Strava). Пустые кандидаты пропускаются."""
-    cands = [c for c in cands if c]
-    if not cands:
+    d0 = seg[0][1]
+    covered = seg[-1][1] - d0
+    if abs(covered - lap_dist) > max(20, 0.10 * lap_dist):
         return None
-
-    def _key(c):
-        # 13.09.2026: у лонга даты в имени нет — берём дату старта активности (YYYY-MM-DD в начале display_date)
-        return c["wdate"] or str(c.get("display_date") or "")[:10]
-
-    best = cands[0]
-    for c in cands[1:]:
-        if _key(c) > _key(best):
-            best = c
-    return best
-
-
-async def build_package(db_user_id: int, selector=None) -> dict:
-    """Собирает пакет данных для ИИ по DD-активности.
-    selector: None → последняя DD; маска 'DD_YYYYMMDD'; либо activityId.
-    Возвращает {ok, msg, name, text}. text — пакет без промпта (PROMPT добавляет вызывающий)."""
-    selector = _expand_selector(selector)
-    g = await _safe_candidate("garmin", _garmin_candidate(db_user_id, selector, "interval"))
-    c = await _safe_candidate("coros", _coros_candidate(db_user_id, selector, "interval"))
-    s = await _safe_candidate("strava", _strava_candidate(db_user_id, selector, "interval"))
-    cand = _choose_candidate(g, c, s)
-    if not cand:
-        sel = f" по «{selector}»" if selector else ""
-        return {"ok": False, "msg": f"DD-активность{sel} не найдена (Garmin/COROS/Strava).\n"
-                                     f"Назови тренировку по маске DD_ГГГГММДД-группа — например "
-                                     f"DD_20260904-3.5 — и отмечай отрезки кнопкой круга на часах."}
-
-    name = cand["name"]
-    act_id = cand["act_id"]
-    wdate = cand["wdate"]
-    splits = cand["splits"]
-    plan_steps = cand["plan_steps"]
-    pts = cand["pts"]
-
-    prof = db.get_user_profile(db_user_id) or {}
-    snap = db.get_morning_caught(db_user_id, wdate)  # 19.09: утро дня тренировки из истории mornings
-    s4 = _s4_by_date(wdate, cand["wtype_key"])
-    rows, S = _enrich_laps(splits, plan_steps, pts)
-
-    L = []
-    A = L.append
-    A("=" * 64)
-    A("ПАКЕТ ДАННЫХ ДЛЯ АНАЛИЗА ТРЕНИРОВКИ")
-    A("=" * 64)
-    A(f"Тренировка: {name}")
-    A(f"Дата: {cand['display_date']}   activityId: {act_id}   источник: {cand['source']}")
-    _st = cand.get("stryd")
-    A(f"Датчик Stryd: {'да' if _st else ('нет' if _st is False else 'нет данных')}")
-
-    A("\n[СПОРТСМЕН]")
-    A(f"  Пол: {prof.get('gender') or '—'}   Возраст: {_age(prof.get('birthdate')) or '—'}")
-    A(f"  МПК: {prof.get('vo2max') or '—'}   "
-      f"ПАНО: {prof.get('lactate_threshold_pace') or '—'}/км @ {prof.get('lactate_threshold_hr') or '—'} уд/мин")
-    A(f"  Специализация: {prof.get('specialization') or '—'}")
-
-    A("\n[ЦЕЛЬ И СУТЬ ТРЕНИРОВКИ] (из анализа анонса)")
-    if s4:
-        A(f"  Тип: {s4.get('workout_type')}   Интенсивность: {s4.get('intensity_level')}")
-        if s4.get("summary"):
-            A(f"  Суть: {s4['summary']}")
-        if s4.get("overall_purpose"):
-            A(f"  Цель: {s4['overall_purpose']}")
-        if s4.get("what_to_watch"):
-            A(f"  На что смотреть: {s4['what_to_watch']}")
-    else:
-        A("  нет анализа за эту дату")
-
-    A("\n[ГРУППЫ] (темпы всех групп, из анализа анонса)")
-    if s4:
-        import claude_advisor as _ca
-        A(_ca.build_groups_text(s4))
-    else:
-        A("  нет анализа за эту дату")
-
-    A("\n[РЕКОМЕНДАЦИЯ С ВЕЧЕРА] (рассылка)")
-    rec = next((r for r in db.get_recommendations_for_date(wdate) if r.get("user_id") == db_user_id), None)
-    if rec:
-        A(f"  Рекомендована: гр.{rec['recommended_group']}")
-        if rec.get("groups_pct"):
-            A("  Подходимость: " + "  ".join(f"гр.{g} {p}%" for g, p in rec["groups_pct"].items()))
-    else:
-        A("  нет записи рассылки за эту дату")
-    A(f"  Выполнена: гр.{cand['wgroup']}" if cand.get("wgroup") else "  Выполнена: группа не определена")
-
-    A("\n[ПЛАН] (эталон)")
-    A(_plan_text(plan_steps))
-
-    work = [r for r in rows if r["role"] == "work"]
-    rest = [r for r in rows if r["role"] == "rest"]
-
-    A("\n[ФАКТ — ТЕМП И ПУЛЬС ПО ОТРЕЗКАМ]")
-    A(f"  {'отр':>5} {'роль':<6} {'дист':>5} {'время':>6} {'темп':>6} "
-      f"{'ЧССср':>5} {'ЧССмакс':>7} {'ЧССперед':>8}")
-    for r in rows:
-        A(f"  {r['label'] or '·':>5} {r['role']:<6} {_num(r['dist']):>4}м "
-          f"{_fmt_time(r['dur']):>6} {_fmt_pace(r['pace']):>6} "
-          f"{_num(r['avg_hr']):>5} {_num(r['max_hr']):>7} {_num(r['hr_before']):>8}")
-    def _wpace(rr_):
-        d = sum(r["dist"] for r in rr_ if r["dist"])
-        t = sum(r["dur"] for r in rr_ if r["dur"])
-        return (t / (d / 1000)) if (d and t) else None
-
-    if work:
-        A(f"  средн. работа: темп {_fmt_pace(_wpace(work))}  "
-          f"ЧССср {_num(_avg([r['avg_hr'] for r in work]))}")
-    if rest:
-        A(f"  средн. отдых:  темп {_fmt_pace(_wpace(rest))}  "
-          f"ЧССср {_num(_avg([r['avg_hr'] for r in rest]))}")
-
-    A("\n[ФАКТ — БИОМЕХАНИКА И МОЩНОСТЬ ПО ОТРЕЗКАМ]")
-    A(f"  {'отр':>5} {'роль':<6} {'кад':>4} {'мощн':>5} {'NP':>4} {'GCTмс':>5} "
-      f"{'ВКсм':>5} {'балL':>5} {'дых':>4} {'compl':>5}")
-    for r in rows:
-        A(f"  {r['label'] or '·':>5} {r['role']:<6} {_num(r['cad']):>4} "
-          f"{_num(r['pwr']):>5} {_num(r['npwr']):>4} {_num(r['gct']):>5} "
-          f"{_num(r['vo'], 1):>5} {_num(r['bal'], 1):>5} {_num(r['resp']):>4} {_num(r['compl']):>5}")
-
-    sp_rows = [r for r in work if r.get("splits200")]
-    if sp_rows:
-        A("\n[СПЛИТЫ ПО 200 м ВНУТРИ ДЛИННЫХ ОТРЕЗКОВ] (темп каждого 200 м)")
-        for r in sp_rows:
-            A(f"  отр {r['label']}: " + ", ".join(
-                _fmt_pace(p) + (f" ({int(round(dd))} м)" if dd < 180 else "")
-                for p, dd in r["splits200"]))
-
-    A("\n[САМОЧУВСТВИЕ УТРОМ] (утро дня тренировки)")
-    if snap and snap.get("caught"):
-        A(f"  снимок за {snap.get('date')}")
-        A(f"  Training Readiness: {_num(snap.get('tr'))}   Body Battery: {_num(snap.get('bb'))}")
-        A(f"  Сон: {_num(snap.get('sleep_h'), 1)}ч   HRV: {_num(snap.get('hrv'))}   "
-          f"ЧСС покоя: {_num(snap.get('rhr'))}   Пробуждение: {snap.get('wake_at') or '—'}")
-    else:
-        A("  снимка нет")
-
-    A("\n[НЕТ ДАННЫХ] лактат, субъективная оценка (RPE), погода")
-    A("=" * 64)
-
-    return {"ok": True, "name": name, "text": "\n".join(L), "msg": "",
-            "splits": splits, "plan_steps": plan_steps,
-            "no_gps": bool(cand.get("no_gps")), "by_watch_plan": bool(cand.get("by_watch_plan")),
-            "by_stryd": bool(cand.get("by_stryd")),
-            "splits200": [r.get("splits200") for r in rows],
-            "splits100": [r.get("splits100") for r in rows],
-            "splits400": [r.get("splits400") for r in rows],
-            "wdate": wdate, "wgroup": cand["wgroup"], "source": cand["source"],
-            "act_id": act_id, "s4": s4}
+    out = []
+    chunk = float(chunk)
+    target = d0 + chunk
+    t_start = seg[0][0]
+    # Граница куска — интерполяцией между соседними секундными точками (дробные секунды),
+    # иначе длительность куска целая и темп идёт ступенями (при 100 м — по 10 с/км).
+    prev_t, prev_d = seg[0][0], seg[0][1]
+    for t, dist, _, _ in seg[1:]:
+        while dist >= target and dist > prev_d:
+            frac = (target - prev_d) / (dist - prev_d)
+            t_cross = prev_t + frac * (t - prev_t)
+            dt = (t_cross - t_start) / 1000.0
+            if dt > 0:
+                pace = round(dt / (chunk / 1000.0), 1)
+                out.append((pace, chunk) if keep_tail else pace)
+            t_start = t_cross
+            target += chunk
+        prev_t, prev_d = t, dist
+    last_t, last_d = seg[-1][0], seg[-1][1]
+    rem_d = last_d - (target - chunk)
+    rem_t = (last_t - t_start) / 1000.0
+    min_tail = min_tail if keep_tail else chunk / 2
+    if rem_d >= min_tail and rem_t > 0:
+        pace = round(rem_t / (rem_d / 1000.0), 1)
+        out.append((pace, round(rem_d)) if keep_tail else pace)
+    return out or None
 
 
-
-
+def _hr_before(pts, ts):
+    """ЧСС точки непосредственно перед отсечкой ts (epoch ms). None если нет."""
+    if not pts or ts is None:
+        return None
+    times = [p[0] for p in pts]
+    i = bisect.bisect_left(times, ts) - 1
+    if i < 0:
+        return None
+    return pts[i][3]
 
 
 async def build_charts(splits, plan_steps, name: str, out_dir: str,
@@ -842,62 +407,6 @@ async def build_charts(splits, plan_steps, name: str, out_dir: str,
         "Повторы: время / темп / отклонение", base + "_table.png") if (ws and maxi) else None
 
     return {"work_png": work_png, "rest_png": rest_png, "table_png": table_png}
-
-
-def _series_model(ordered, plan_steps):
-    """Хронологическая модель «блоки → серии». Границы блоков — по номеру
-    repeat-группы плана (поле grp в plan_steps): серия закрывается при повторе
-    шага ВНУТРИ серии ИЛИ при смене группы (переход в новый блок без отдыха
-    тоже ловится). Одиночный rest-блок МЕЖДУ блоками (топ-уровневый отдых)
-    приклеивается колонкой к последней серии предыдущего блока.
-    Возвращает [{steps: [idx...], series: [{idx: lap}, ...]}]."""
-    grp_of = {p["idx"]: p.get("grp") for p in plan_steps}
-    blocks = []
-    cur, cur_steps, cur_grp = {}, [], None
-
-    def flush():
-        nonlocal cur, cur_steps
-        if not cur:
-            return
-        last = blocks[-1] if blocks else None
-        same = last and last["steps"] == cur_steps
-        prefix = (last and len(cur_steps) < len(last["steps"])
-                  and last["steps"][:len(cur_steps)] == cur_steps)
-        if same or prefix:
-            last["series"].append(cur)
-        else:
-            blocks.append({"steps": list(cur_steps), "series": [cur]})
-        cur, cur_steps = {}, []
-
-    for l in ordered:
-        st = l["step"]
-        g = grp_of.get(st)
-        if cur and (st in cur or g != cur_grp):
-            flush()
-        cur_grp = g
-        if st not in cur_steps:
-            cur_steps.append(st)
-        cur[st] = l
-    flush()
-
-    # Одиночный rest-only блок (отдых между блоками) → колонкой в предыдущий.
-    merged = []
-    for b in blocks:
-        rest_only = all(
-            ar._role_of(st, next((s[st]["intensity"] for s in b["series"] if st in s), ""),
-                        plan_steps) == "rest"
-            for st in b["steps"])
-        if rest_only and merged and len(b["series"]) == 1:
-            prev = merged[-1]
-            for st in b["steps"]:
-                if st not in prev["steps"]:
-                    prev["steps"].append(st)
-                prev["series"][-1][st] = b["series"][0][st]
-                # 15.09.2026: пометка «отдых между блоками» — только для схемы; таблица ключ не читает.
-                prev.setdefault("between", []).append(st)
-        else:
-            merged.append(b)
-    return merged
 
 
 async def build_charts_stacked(splits, plan_steps, name: str, out_dir: str,
@@ -1107,6 +616,62 @@ async def build_charts_stacked(splits, plan_steps, name: str, out_dir: str,
     return out_path
 
 
+def _series_model(ordered, plan_steps):
+    """Хронологическая модель «блоки → серии». Границы блоков — по номеру
+    repeat-группы плана (поле grp в plan_steps): серия закрывается при повторе
+    шага ВНУТРИ серии ИЛИ при смене группы (переход в новый блок без отдыха
+    тоже ловится). Одиночный rest-блок МЕЖДУ блоками (топ-уровневый отдых)
+    приклеивается колонкой к последней серии предыдущего блока.
+    Возвращает [{steps: [idx...], series: [{idx: lap}, ...]}]."""
+    grp_of = {p["idx"]: p.get("grp") for p in plan_steps}
+    blocks = []
+    cur, cur_steps, cur_grp = {}, [], None
+
+    def flush():
+        nonlocal cur, cur_steps
+        if not cur:
+            return
+        last = blocks[-1] if blocks else None
+        same = last and last["steps"] == cur_steps
+        prefix = (last and len(cur_steps) < len(last["steps"])
+                  and last["steps"][:len(cur_steps)] == cur_steps)
+        if same or prefix:
+            last["series"].append(cur)
+        else:
+            blocks.append({"steps": list(cur_steps), "series": [cur]})
+        cur, cur_steps = {}, []
+
+    for l in ordered:
+        st = l["step"]
+        g = grp_of.get(st)
+        if cur and (st in cur or g != cur_grp):
+            flush()
+        cur_grp = g
+        if st not in cur_steps:
+            cur_steps.append(st)
+        cur[st] = l
+    flush()
+
+    # Одиночный rest-only блок (отдых между блоками) → колонкой в предыдущий.
+    merged = []
+    for b in blocks:
+        rest_only = all(
+            ar._role_of(st, next((s[st]["intensity"] for s in b["series"] if st in s), ""),
+                        plan_steps) == "rest"
+            for st in b["steps"])
+        if rest_only and merged and len(b["series"]) == 1:
+            prev = merged[-1]
+            for st in b["steps"]:
+                if st not in prev["steps"]:
+                    prev["steps"].append(st)
+                prev["series"][-1][st] = b["series"][0][st]
+                # 15.09.2026: пометка «отдых между блоками» — только для схемы; таблица ключ не читает.
+                prev.setdefault("between", []).append(st)
+        else:
+            merged.append(b)
+    return merged
+
+
 def _plan_diagram(ax, blocks, plan_steps):
     """Схема структуры работы: блоки → прямоугольники шагов в хронологии.
     Ширина ∝ дистанции, высота ∝ интенсивности (быстрее — выше), отдых — низкий серый.
@@ -1200,15 +765,6 @@ def _plan_diagram(ax, blocks, plan_steps):
         if bi < len(blocks) - 1:
             x += GAP_BLK
     ax.add_patch(Rectangle((0, 0.10), 1.0, 0.07, facecolor="#e0e0e0", edgecolor="none"))
-
-
-def _km_label(label: str) -> str:
-    """'1000 м' → '1 км', '1600 м' → '1,6 км'; короче 1 км — как есть."""
-    m = re.fullmatch(r"(\d+) м", str(label or ""))
-    if not m or int(m.group(1)) < 1000:
-        return label
-    km = int(m.group(1)) / 1000
-    return (f"{km:.1f}".rstrip("0").rstrip(".")).replace(".", ",") + " км"
 
 
 async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source: str,
@@ -1515,15 +1071,180 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
     return out_path
 
 
-async def analyze_with_ai(db_user_id: int, selector=None, mode: str = "deep") -> dict:
-    """Собирает пакет и отправляет его в DeepSeek с промптом-инструкцией.
-    Возвращает {ok, msg, name, answer, package}. answer — свободный текст анализа от ИИ."""
-    pkg = await build_package(db_user_id, selector)
-    if not pkg.get("ok"):
-        return pkg
-    import claude_advisor
-    prompt = PROMPT + "\n\n" + pkg["text"]
-    answer = await asyncio.to_thread(claude_advisor.ask_text, prompt, mode)
-    if not answer:
-        return {"ok": False, "msg": "ИИ не ответил (пустой ответ или таймаут)."}
-    return {"ok": True, "name": pkg["name"], "answer": answer, "package": pkg["text"], "msg": ""}
+def _km_label(label: str) -> str:
+    """'1000 м' → '1 км', '1600 м' → '1,6 км'; короче 1 км — как есть."""
+    m = re.fullmatch(r"(\d+) м", str(label or ""))
+    if not m or int(m.group(1)) < 1000:
+        return label
+    km = int(m.group(1)) / 1000
+    return (f"{km:.1f}".rstrip("0").rstrip(".")).replace(".", ",") + " км"
+
+
+def _plan_text(plan_steps):
+    if not plan_steps:
+        return "  нет (workout не привязан)"
+    lines = []
+    for s in plan_steps:
+        dist = f"{int(s['dist'])}м" if s.get("dist") else "?"
+        if s["bounds"]:
+            slow, fast = s["bounds"]
+            tgt = (f"{_fmt_pace(slow)}" if abs(slow - fast) <= ar.WORK_EXACT_EPS
+                   else f"{_fmt_pace(slow)}→{_fmt_pace(fast)}")
+        else:
+            tgt = "без цели"
+        role = {"interval": "работа", "recovery": "отдых"}.get(s["stype"], s["stype"])
+        lines.append(f"  шаг {s['idx']}: {role} {dist} — цель {tgt}")
+    return "\n".join(lines)
+
+
+async def build_long_package(db_user_id: int, selector=None) -> dict:
+    """20.09.2026: пакет данных для ИИ по ЛОНГУ (DDLong-…) — отдельно от интервалов (build_package).
+    Пока копия build_package с поиском по маске лонга; правится под лонг отдельно.
+    selector: None → последний лонг; дата 'YYYY-MM-DD' (разобрана в bot._parse_cmd_date; сверяется с датой
+    СТАРТА — в имени лонга даты нет); activityId."""
+    g = await _safe_candidate("garmin", _garmin_candidate(db_user_id, selector, "long"))
+    c = await _safe_candidate("coros", _coros_candidate(db_user_id, selector, "long"))
+    s = await _safe_candidate("strava", _strava_candidate(db_user_id, selector, "long"))
+    cand = _choose_candidate(g, c, s)
+    if not cand:
+        sel = f" по «{selector}»" if selector else ""
+        return {"ok": False, "msg": f"Лонг{sel} не найден (Garmin/COROS/Strava).\n"
+                                     f"Назови тренировку по маске DDLong-группа — например DDLong-3 или DDLong-3p."}
+
+    name = cand["name"]
+    act_id = cand["act_id"]
+    # У лонга даты в имени нет — дата тренировки = дата старта (для рекомендации с вечера, утра, анализа анонса).
+    wdate = cand["wdate"] or (str(cand.get("display_date") or "")[:10] or None)
+    splits = cand["splits"]
+    plan_steps = cand["plan_steps"]
+    pts = cand["pts"]
+
+    prof = db.get_user_profile(db_user_id) or {}
+    snap = db.get_morning_caught(db_user_id, wdate)  # 19.09: утро дня тренировки из истории mornings
+    s4 = _s4_by_date(wdate, cand["wtype_key"])
+    rows, S = _enrich_laps(splits, plan_steps, pts)
+
+    L = []
+    A = L.append
+    A("=" * 64)
+    A("ПАКЕТ ДАННЫХ ДЛЯ АНАЛИЗА ТРЕНИРОВКИ")
+    A("=" * 64)
+    A(f"Тренировка: {name}")
+    A(f"Дата: {cand['display_date']}   activityId: {act_id}   источник: {cand['source']}")
+    _st = cand.get("stryd")
+    A(f"Датчик Stryd: {'да' if _st else ('нет' if _st is False else 'нет данных')}")
+
+    A("\n[СПОРТСМЕН]")
+    A(f"  Пол: {prof.get('gender') or '—'}   Возраст: {_age(prof.get('birthdate')) or '—'}")
+    A(f"  МПК: {prof.get('vo2max') or '—'}   "
+      f"ПАНО: {prof.get('lactate_threshold_pace') or '—'}/км @ {prof.get('lactate_threshold_hr') or '—'} уд/мин")
+    A(f"  Специализация: {prof.get('specialization') or '—'}")
+
+    A("\n[ЦЕЛЬ И СУТЬ ТРЕНИРОВКИ] (из анализа анонса)")
+    if s4:
+        A(f"  Тип: {s4.get('workout_type')}   Интенсивность: {s4.get('intensity_level')}")
+        if s4.get("summary"):
+            A(f"  Суть: {s4['summary']}")
+        if s4.get("overall_purpose"):
+            A(f"  Цель: {s4['overall_purpose']}")
+        if s4.get("what_to_watch"):
+            A(f"  На что смотреть: {s4['what_to_watch']}")
+    else:
+        A("  нет анализа за эту дату")
+
+    A("\n[ГРУППЫ] (темпы всех групп, из анализа анонса)")
+    if s4:
+        import claude_advisor as _ca
+        A(_ca.build_groups_text(s4))
+    else:
+        A("  нет анализа за эту дату")
+
+    A("\n[РЕКОМЕНДАЦИЯ С ВЕЧЕРА] (рассылка)")
+    rec = next((r for r in db.get_recommendations_for_date(wdate) if r.get("user_id") == db_user_id), None)
+    if rec:
+        A(f"  Рекомендована: гр.{rec['recommended_group']}")
+        if rec.get("groups_pct"):
+            A("  Подходимость: " + "  ".join(f"гр.{g} {p}%" for g, p in rec["groups_pct"].items()))
+    else:
+        A("  нет записи рассылки за эту дату")
+    A(f"  Выполнена: гр.{cand['wgroup']}" if cand.get("wgroup") else "  Выполнена: группа не определена")
+
+    A("\n[ПЛАН] (эталон)")
+    A(_plan_text(plan_steps))
+
+    work = [r for r in rows if r["role"] == "work"]
+    rest = [r for r in rows if r["role"] == "rest"]
+
+    A("\n[ФАКТ — ТЕМП И ПУЛЬС ПО ОТРЕЗКАМ]")
+    A(f"  {'отр':>5} {'роль':<6} {'дист':>5} {'время':>6} {'темп':>6} "
+      f"{'ЧССср':>5} {'ЧССмакс':>7} {'ЧССперед':>8}")
+    for r in rows:
+        A(f"  {r['label'] or '·':>5} {r['role']:<6} {_num(r['dist']):>4}м "
+          f"{_fmt_time(r['dur']):>6} {_fmt_pace(r['pace']):>6} "
+          f"{_num(r['avg_hr']):>5} {_num(r['max_hr']):>7} {_num(r['hr_before']):>8}")
+    def _wpace(rr_):
+        d = sum(r["dist"] for r in rr_ if r["dist"])
+        t = sum(r["dur"] for r in rr_ if r["dur"])
+        return (t / (d / 1000)) if (d and t) else None
+
+    if work:
+        A(f"  средн. работа: темп {_fmt_pace(_wpace(work))}  "
+          f"ЧССср {_num(_avg([r['avg_hr'] for r in work]))}")
+    if rest:
+        A(f"  средн. отдых:  темп {_fmt_pace(_wpace(rest))}  "
+          f"ЧССср {_num(_avg([r['avg_hr'] for r in rest]))}")
+
+    A("\n[ФАКТ — БИОМЕХАНИКА И МОЩНОСТЬ ПО ОТРЕЗКАМ]")
+    A(f"  {'отр':>5} {'роль':<6} {'кад':>4} {'мощн':>5} {'NP':>4} {'GCTмс':>5} "
+      f"{'ВКсм':>5} {'балL':>5} {'дых':>4} {'compl':>5}")
+    for r in rows:
+        A(f"  {r['label'] or '·':>5} {r['role']:<6} {_num(r['cad']):>4} "
+          f"{_num(r['pwr']):>5} {_num(r['npwr']):>4} {_num(r['gct']):>5} "
+          f"{_num(r['vo'], 1):>5} {_num(r['bal'], 1):>5} {_num(r['resp']):>4} {_num(r['compl']):>5}")
+
+    sp_rows = [r for r in work if r.get("splits200")]
+    if sp_rows:
+        A("\n[СПЛИТЫ ПО 200 м ВНУТРИ ДЛИННЫХ ОТРЕЗКОВ] (темп каждого 200 м)")
+        for r in sp_rows:
+            A(f"  отр {r['label']}: " + ", ".join(
+                _fmt_pace(p) + (f" ({int(round(dd))} м)" if dd < 180 else "")
+                for p, dd in r["splits200"]))
+
+    A("\n[САМОЧУВСТВИЕ УТРОМ] (утро дня тренировки)")
+    if snap and snap.get("caught"):
+        A(f"  снимок за {snap.get('date')}")
+        A(f"  Training Readiness: {_num(snap.get('tr'))}   Body Battery: {_num(snap.get('bb'))}")
+        A(f"  Сон: {_num(snap.get('sleep_h'), 1)}ч   HRV: {_num(snap.get('hrv'))}   "
+          f"ЧСС покоя: {_num(snap.get('rhr'))}   Пробуждение: {snap.get('wake_at') or '—'}")
+    else:
+        A("  снимка нет")
+
+    A("\n[НЕТ ДАННЫХ] лактат, субъективная оценка (RPE), погода")
+    A("=" * 64)
+
+    return {"ok": True, "name": name, "text": "\n".join(L), "msg": "",
+            "splits": splits, "plan_steps": plan_steps,
+            "no_gps": bool(cand.get("no_gps")), "by_watch_plan": bool(cand.get("by_watch_plan")),
+            "by_stryd": bool(cand.get("by_stryd")),
+            "splits200": [r.get("splits200") for r in rows],
+            "splits100": [r.get("splits100") for r in rows],
+            "splits400": [r.get("splits400") for r in rows],
+            "wdate": wdate, "wgroup": cand["wgroup"], "source": cand["source"],
+            "act_id": act_id, "s4": s4}
+
+
+PROMPT_LONG = PROMPT   # 20.09.2026: пока тот же промт, что у интервалов — правим под лонг отдельно
+
+
+def _template_json(wdate, wgroup):
+    """Распарсенный JSON эталона из workout_templates или None."""
+    if not (wdate and wgroup):
+        return None
+    import json as _json
+    tmpl = db.get_workout_template(wdate, wgroup, "interval")
+    if not tmpl:
+        return None
+    try:
+        return _json.loads(tmpl)
+    except Exception:
+        return None
