@@ -118,6 +118,116 @@
     <p class="cta-note">Отдельной регистрации нет: вход и все настройки — внутри бота.</p>
   </section>
 
+  <!-- 19.09.2026: схема цикла «стадион» — без библиотек (Cloudflare-CDN режут из РФ) -->
+  <style>
+    .cycle svg{width:100%;height:auto;display:block}
+    .cy-t{font:600 14px "IBM Plex Sans",sans-serif;fill:var(--ink)}
+    .cy-s{font:400 12px "IBM Plex Mono",monospace;fill:var(--muted)}
+    .cy-ai{fill:#ECEBFB;stroke:var(--mark);stroke-width:1}
+    .cy-me{fill:#fff;stroke:var(--ink);stroke-width:1}
+    .cy-stn{cursor:pointer}.cy-stn.on>*{stroke-width:2.5}
+    .cy-leg{display:flex;gap:18px;flex-wrap:wrap;font:400 13px "IBM Plex Mono",monospace;color:var(--muted);margin-top:6px}
+    .cy-leg i{display:inline-block;width:11px;height:11px;margin-right:6px;vertical-align:-1px}
+    .cy-tip{margin-top:14px;color:#2A2F38;font-size:15px;min-height:26px}
+    .cy-A,.cy-B,.cy-sA,.cy-sB,.cy-aA,.cy-aB{transform-origin:0 0}
+    @media (prefers-reduced-motion:no-preference){
+      .cy-pulse{animation:cyP 1.6s ease-out infinite;transform-origin:230px 110px}
+      .cy-dial{animation:cyR 6s linear infinite;transform-origin:130px 210px}
+      .cy-A{animation:cyTh .34s ease-in-out infinite alternate}.cy-B{animation:cyTh .34s ease-in-out infinite alternate-reverse}
+      .cy-sA{animation:cySh .34s ease-in-out infinite alternate}.cy-sB{animation:cySh .34s ease-in-out infinite alternate-reverse}
+      .cy-aA{animation:cyAr .34s ease-in-out infinite alternate}.cy-aB{animation:cyAr .34s ease-in-out infinite alternate-reverse}
+    }
+    @keyframes cyP{0%{opacity:.6;transform:scale(1)}100%{opacity:0;transform:scale(1.9)}}
+    @keyframes cyR{to{transform:rotate(360deg)}}
+    @keyframes cyTh{from{transform:rotate(-45deg)}to{transform:rotate(35deg)}}
+    @keyframes cySh{from{transform:rotate(15deg)}to{transform:rotate(80deg)}}
+    @keyframes cyAr{from{transform:rotate(40deg)}to{transform:rotate(-45deg)}}
+  </style>
+  <section class="card cycle" aria-label="Как работает DoDick">
+    <div class="card-label">Как это работает — один круг</div>
+    <svg viewBox="0 0 680 390" role="img" aria-label="Цикл: анонс и ИИ, рекомендация, утро, тренировка, разбор, оценка, калибровка">
+      <path id="cy-trk" d="M230,110 H450 A100,100 0 0 1 450,310 H230 A100,100 0 0 1 230,110 Z" fill="none" stroke="#D9D6CC" stroke-width="14"/>
+      <path d="M230,110 H450 A100,100 0 0 1 450,310 H230 A100,100 0 0 1 230,110 Z" fill="none" stroke="#fff" stroke-width="1" stroke-dasharray="6 6"/>
+      <text class="cy-s" x="340" y="204" text-anchor="middle">каждая тренировка —</text>
+      <text class="cy-s" x="340" y="222" text-anchor="middle">новый круг</text>
+
+      <circle class="cy-pulse" cx="230" cy="110" r="18" fill="none" stroke="#2E2BD6" stroke-width="1"/>
+      <g class="cy-stn" data-i="0"><polygon class="cy-ai" points="230,90 247,100 247,120 230,130 213,120 213,100"/></g>
+      <text class="cy-t" x="230" y="62" text-anchor="middle">Анонс → ИИ</text>
+      <text class="cy-s" x="230" y="80" text-anchor="middle">раскладка по группам</text>
+
+      <g class="cy-stn" data-i="1"><rect class="cy-ai" x="432" y="94" width="36" height="32" rx="4"/></g>
+      <rect x="439" y="112" width="5" height="9" fill="#2E2BD6"/><rect x="447" y="104" width="5" height="17" fill="#2E2BD6"/><rect x="455" y="108" width="5" height="13" fill="#2E2BD6"/>
+      <text class="cy-t" x="450" y="62" text-anchor="middle">Рекомендация</text>
+      <text class="cy-s" x="450" y="80" text-anchor="middle">группа и %</text>
+
+      <g class="cy-stn" data-i="2"><circle class="cy-me" cx="550" cy="210" r="17"/></g>
+      <text class="cy-t" x="578" y="206">Утро</text>
+      <text class="cy-s" x="578" y="224">сон и HRV</text>
+
+      <g class="cy-stn" data-i="3"><rect class="cy-me" x="430" y="298" width="40" height="24" rx="12"/></g>
+      <text class="cy-t" x="450" y="348" text-anchor="middle">Тренировка</text>
+      <text class="cy-s" x="450" y="366" text-anchor="middle">своя группа</text>
+
+      <g class="cy-stn" data-i="4"><rect class="cy-ai" x="322" y="294" width="36" height="32" rx="4"/></g>
+      <polyline points="327,318 334,309 341,313 348,302 353,306" fill="none" stroke="#2E2BD6" stroke-width="1.5"/>
+      <text class="cy-t" x="340" y="348" text-anchor="middle">Разбор</text>
+      <text class="cy-s" x="340" y="366" text-anchor="middle">кто был прав</text>
+
+      <g class="cy-stn" data-i="5"><polygon class="cy-me" points="230,292 235,304 248,304 238,312 242,325 230,317 218,325 222,312 212,304 225,304"/></g>
+      <text class="cy-t" x="230" y="348" text-anchor="middle">Оценка</text>
+      <text class="cy-s" x="230" y="366" text-anchor="middle">от 1 до 10</text>
+
+      <g class="cy-stn" data-i="6"><circle class="cy-ai" cx="130" cy="210" r="17"/></g>
+      <g class="cy-dial" stroke="#2E2BD6" stroke-width="2"><line x1="130" y1="196" x2="130" y2="201"/><line x1="130" y1="219" x2="130" y2="224"/><line x1="116" y1="210" x2="121" y2="210"/><line x1="139" y1="210" x2="144" y2="210"/></g>
+      <text class="cy-t" x="102" y="206" text-anchor="end">Калибровка</text>
+      <text class="cy-s" x="102" y="224" text-anchor="end">всё точнее</text>
+
+      <g class="cy-stn" data-i="7"><rect class="cy-ai" x="329" y="97" width="22" height="26" rx="6"/></g>
+      <line x1="335" y1="90" x2="345" y2="90" stroke="#2E2BD6" stroke-width="2"/><line x1="335" y1="130" x2="345" y2="130" stroke="#2E2BD6" stroke-width="2"/>
+      <polyline points="332,110 336,110 338,105 341,115 343,110 348,110" fill="none" stroke="#2E2BD6" stroke-width="1.2"/>
+      <line x1="340" y1="50" x2="340" y2="84" stroke="#9A9EA6" stroke-width="0.8" stroke-dasharray="3 3"/>
+      <text class="cy-t" x="340" y="22" text-anchor="middle">Данные с часов</text>
+      <text class="cy-s" x="340" y="40" text-anchor="middle">зоны, нагрузка, сон</text>
+
+      <g id="cy-rn"><g id="cy-rnf" stroke="#E4572E" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none">
+        <g transform="translate(0,-9)"><g class="cy-B"><line x1="0" y1="0" x2="0" y2="7"/><g transform="translate(0,7)"><g class="cy-sB"><line x1="0" y1="0" x2="0" y2="7"/></g></g></g></g>
+        <g transform="translate(4,-19)"><g class="cy-aB"><polyline points="0,0 0,5 3,8"/></g></g>
+        <line x1="0" y1="-9" x2="4" y2="-19"/>
+        <circle cx="6.5" cy="-24" r="3.8" fill="#E4572E" stroke="none"/>
+        <g transform="translate(0,-9)"><g class="cy-A"><line x1="0" y1="0" x2="0" y2="7"/><g transform="translate(0,7)"><g class="cy-sA"><line x1="0" y1="0" x2="0" y2="7"/></g></g></g></g>
+        <g transform="translate(4,-19)"><g class="cy-aA"><polyline points="0,0 0,5 3,8"/></g></g>
+      </g></g>
+    </svg>
+    <div class="cy-leg"><span><i style="background:#ECEBFB;border:1px solid #2E2BD6"></i>делает ИИ</span><span><i style="background:#fff;border:1px solid #15181D"></i>делаете вы</span></div>
+    <div class="cy-tip" id="cy-tip">Нажмите на шаг, чтобы узнать подробнее.</div>
+  </section>
+  <script>
+  (function(){
+    var trk=document.getElementById('cy-trk'),rn=document.getElementById('cy-rn'),rnf=document.getElementById('cy-rnf'),L=trk.getTotalLength();
+    var st=[].slice.call(document.querySelectorAll('.cy-stn'));
+    var at=[0,220,377,534,644,754,911,110];
+    var tips=["Тренер публикует анонс — ИИ раскладывает тренировку по группам и темпам.",
+      "Вечером накануне: какая группа вам подходит и насколько — в процентах.",
+      "Утром бот смотрит сон, HRV и готовность с часов.",
+      "Вы бежите свою группу — или выбираете другую.",
+      "Разбор: факт против плана и чей выбор группы оказался верным.",
+      "Вы оцениваете разбор от 1 до 10.",
+      "По результатам всё калибруется — следующий совет точнее.",
+      "Бот сам берёт данные с ваших часов: беговые зоны, нагрузку и восстановление."];
+    var D=14000,paused=false,t0=performance.now(),rt;
+    function place(d){var p=trk.getPointAtLength(d),q=trk.getPointAtLength((d+2)%L),dir=q.x<p.x-0.05?-1:1;
+      rn.setAttribute('transform','translate('+p.x+','+(p.y-3)+')');rnf.setAttribute('transform','scale('+dir+',1)');}
+    function hl(k){st.forEach(function(s,j){s.classList.toggle('on',j===k);});}
+    function frame(now){if(!paused){var d=((now-t0)%D)/D*L,k=-1;place(d);at.forEach(function(a,j){if(Math.abs(d-a)<40)k=j;});hl(k);}requestAnimationFrame(frame);}
+    requestAnimationFrame(frame);
+    st.forEach(function(s){s.addEventListener('click',function(){var k=+s.dataset.i;
+      document.getElementById('cy-tip').textContent=tips[k];paused=true;place(at[k]);hl(k);
+      var img=s.getAttribute('data-img');if(img){var lb=document.getElementById('lb');document.getElementById('lb-img').src=img;lb.style.display='flex';}
+      clearTimeout(rt);rt=setTimeout(function(){t0=performance.now()-at[k]/L*D;paused=false;},5000);});});
+  })();
+  </script>
+
   <section class="card" aria-label="Пример рекомендации">
     <div class="card-label">Пример рекомендации на вечер</div>
     <div class="lane"><b>Группа 2</b><div class="bar-track"><div class="bar-fill" style="width:34%"></div></div><i>34%</i></div>

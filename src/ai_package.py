@@ -943,6 +943,7 @@ async def build_charts_stacked(splits, plan_steps, name: str, out_dir: str,
         fig.suptitle(f"Тренировка: {name}", fontsize=13, fontweight="bold")
 
         # ── верх: рабочие интервалы (как _plot_work_segmented, без статблоков) ──
+        et_of = {}   # x крупной точки → темп эталона (опора для кусков 100 м)
         for ri, r in enumerate(work_roles):
             xs = np.array(r["xs"], dtype=float)
             ys = np.array(r["ys"], dtype=float)
@@ -966,6 +967,7 @@ async def build_charts_stacked(splits, plan_steps, name: str, out_dir: str,
                     ax.plot(xs, et_pts, color="red", ls="-", lw=3.0, alpha=0.85, zorder=4,
                             label=f"{r['label']} — эталон ({ar._pace_formatter(slow)}→{ar._pace_formatter(fast)})")
                 ar._draw_deltas(ax, xs, ys, et_pts)
+                et_of.update({float(x): float(e) for x, e in zip(xs, et_pts)})
             if len(xs) >= 2:
                 # Выброс из тренда (решение 08.08.2026): при ≥8 повторах ПОСЛЕДНИЙ
                 # повтор с отклонением от эталона > 15 сек/км не участвует в линии
@@ -981,6 +983,8 @@ async def build_charts_stacked(splits, plan_steps, name: str, out_dir: str,
                         label=f"{r['label']} — тренд ({ar._pace_formatter(tr[0])}→{ar._pace_formatter(tr[-1])})")
         # Куски по 100 м внутри каждого рабочего отрезка: мелкие точки
         # равномерно по ширине отрезка (хронология), крупная точка — средний темп.
+        piece_lim = 3 * ar.WORK_CORR_YELLOW   # ±30 с/км от опоры: дальше — вылет
+        outliers = []                         # (x, темп, цвет) вылетевших кусков
         if span_of:
             col_of = {float(x): r["color"] for r in work_roles for x in r["xs"]}
             shown = False
@@ -1000,10 +1004,28 @@ async def build_charts_stacked(splits, plan_steps, name: str, out_dir: str,
                     acc += dd
                 xs_ = np.array(xs_)
                 c = col_of.get((a + b) / 2.0, th["fact"])
+                # Вылеты (светофор, вода, сбой GPS): кусок дальше опоры, чем ±piece_lim,
+                # в линию не идёт, рисуется значком на краю оси (ниже).
+                # Опора — эталон отрезка; без эталона — медиана кусков отрезка.
+                ys_ = np.array(ys_, dtype=float)
+                ref = et_of.get((a + b) / 2.0, float(np.median(ys_)))
+                keep = np.abs(ys_ - ref) <= piece_lim
+                outliers += [(x_o, y_o, c) for x_o, y_o in zip(xs_[~keep], ys_[~keep])]
+                xs_, ys_ = xs_[keep], ys_[keep]
                 ax.plot(xs_, ys_, color=c, lw=0.9, alpha=0.6, zorder=2)
                 ax.scatter(xs_, ys_, color=c, s=14, alpha=0.85, zorder=2,
                            label=None if shown else "куски по 100 м")
                 shown = True
+        # Ось — по основным данным, места под вылеты не добавляем: медленный вылет
+        # ▼ на нижнем краю, быстрый ▲ на верхнем (после invert); внутри оси — на своём месте.
+        if outliers:
+            lo, hi = ax.get_ylim()
+            for i, (x_o, y_o, c_o) in enumerate(outliers):
+                y_e = min(max(y_o, lo), hi)
+                ax.scatter([x_o], [y_e], marker="v" if y_o > (lo + hi) / 2 else "^",
+                           color=c_o, s=40, zorder=5, clip_on=False,
+                           label="вылет (стоп, сбой GPS)" if i == 0 else None)
+            ax.set_ylim(lo, hi)
         ax.invert_yaxis()
         ax.set_ylabel("Темп (мин:сек/км)", fontsize=10)
         ax.set_title("Рабочие интервалы", fontsize=11, fontweight="bold")
