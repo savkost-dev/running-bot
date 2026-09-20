@@ -314,6 +314,9 @@ def _pick_activity(acts, selector, kind=None):
               reverse=True)
     if selector is None:
         return runs[0] if runs else None
+    # 20.09.2026: лонг по дате — сверяем с датой старта (в имени лонга даты нет)
+    if kind == "long" and re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(selector)):
+        return next((a for a in runs if str(a.get("startTimeLocal") or "")[:10] == selector), None)
     selector = _expand_selector(selector)
     if str(selector).isdigit():
         return next((a for a in (acts or []) if str(a.get("activityId")) == str(selector)), None)
@@ -558,6 +561,9 @@ async def _strava_candidate(db_user_id, selector, kind=None):
               reverse=True)
     if selector is None:
         act = runs[0] if runs else None
+    elif kind == "long" and re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(selector)):
+        # 20.09.2026: лонг по дате — по дате старта (в имени лонга даты нет)
+        act = next((a for a in runs if str(a.get("start_date_local") or "")[:10] == selector), None)
     elif str(selector).isdigit():
         act = next((a for a in (acts or []) if str(a.get("id")) == str(selector)), None)
     else:
@@ -811,8 +817,8 @@ PROMPT_LONG = PROMPT   # 20.09.2026: пока тот же промт, что у 
 async def build_long_package(db_user_id: int, selector=None) -> dict:
     """20.09.2026: пакет данных для ИИ по ЛОНГУ (DDLong-…) — отдельно от интервалов (build_package).
     Пока копия build_package с поиском по маске лонга; правится под лонг отдельно.
-    selector: None → последний лонг; activityId. Выбор по дате — потом (дата сейчас раскрывается в маску DD_…)."""
-    selector = _expand_selector(selector)
+    selector: None → последний лонг; дата 'YYYY-MM-DD' (разобрана в bot._parse_cmd_date; сверяется с датой
+    СТАРТА — в имени лонга даты нет); activityId."""
     g = await _safe_candidate("garmin", _garmin_candidate(db_user_id, selector, "long"))
     c = await _safe_candidate("coros", _coros_candidate(db_user_id, selector, "long"))
     s = await _safe_candidate("strava", _strava_candidate(db_user_id, selector, "long"))
@@ -824,7 +830,8 @@ async def build_long_package(db_user_id: int, selector=None) -> dict:
 
     name = cand["name"]
     act_id = cand["act_id"]
-    wdate = cand["wdate"]
+    # У лонга даты в имени нет — дата тренировки = дата старта (для рекомендации с вечера, утра, анализа анонса).
+    wdate = cand["wdate"] or (str(cand.get("display_date") or "")[:10] or None)
     splits = cand["splits"]
     plan_steps = cand["plan_steps"]
     pts = cand["pts"]

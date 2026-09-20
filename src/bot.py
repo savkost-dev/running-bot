@@ -6750,6 +6750,9 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
     simple_mode = bool(args) and args[0].lower() in ("simple", "s")
     if simple_mode:
         args = args[1:]
+    # 20.09.2026: /report_long <дата> — дата любого формата через _parse_cmd_date → 'YYYY-MM-DD' (лонг ищется по дате старта)
+    if long_mode and args and _parse_cmd_date(args[0]):
+        args[0] = _parse_cmd_date(args[0])
     selector = selector_override if selector_override else (args[0] if args else None)
 
     import html
