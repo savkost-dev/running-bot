@@ -452,12 +452,15 @@ async def _strava_activity_ingest(uid: int, activity_id) -> None:
     try:
         import strava as _sv
         from data_normalizer import run_normalization
-        from database import save_strava_activity
+        from database import save_strava_activity, get_strava_activities
         from fitness import refresh_athlete_cache
         token = await _sv.ensure_valid_token(uid)
         if not token:
             logger.warning(f"strava ingest: uid={uid} без валидного токена — пропуск")
             return
+        # Пустое окно проверяем ДО записи новой тренировки: иначе она станет
+        # единственной записью, и страховка в refresh_athlete_cache не сработает.
+        window_was_empty = not get_strava_activities(uid)
         detail = await _sv.get_activity_detail(token, int(activity_id))
         if not detail:
             logger.warning(f"strava ingest: uid={uid} activity={activity_id} — "
@@ -472,7 +475,9 @@ async def _strava_activity_ingest(uid: int, activity_id) -> None:
                         f"не в WINDOW_ACTIVITY_TYPES, в окно не пишем")
         await _sv.fetch_raw(uid)
         run_normalization(uid)
-        await refresh_athlete_cache(uid, token, fill_window=False)
+        if window_was_empty:
+            logger.info(f"strava ingest: uid={uid} окно было пустым — заполняю целиком")
+        await refresh_athlete_cache(uid, token, fill_window=window_was_empty)
         logger.info(f"strava ingest: uid={uid} activity={activity_id} — "
                     f"сырьё+нормализация+кэш обновлены по вебхуку")
     except Exception as e:
