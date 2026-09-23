@@ -153,6 +153,18 @@ async def get_recent_activities(access_token: str, days: int = 90) -> list:
     return activities
 
 
+def _log_rate_limit(resp, label: str) -> None:
+    """Пишет в лог заголовки лимита Strava для сверки с панелью.
+
+    X-ReadRateLimit-Usage: "за 15 мин,за день" (только чтение),
+    X-ReadRateLimit-Limit: соответствующие лимиты.
+    """
+    usage = resp.headers.get("X-ReadRateLimit-Usage")
+    limit = resp.headers.get("X-ReadRateLimit-Limit")
+    if usage:
+        print(f"Strava rate [{label}] read usage={usage} limit={limit} status={resp.status}")
+
+
 async def get_activity_detail(access_token: str, activity_id: int) -> dict | None:
     """Получает детали активности включая best_efforts"""
     headers = {"Authorization": f"Bearer {access_token}"}
@@ -161,9 +173,61 @@ async def get_activity_detail(access_token: str, activity_id: int) -> dict | Non
             f"{STRAVA_API_BASE}/activities/{activity_id}",
             headers=headers
         ) as resp:
+            _log_rate_limit(resp, f"activities/{activity_id}")
             if resp.status != 200:
                 return None
             return await resp.json()
+
+
+# ── Окно тренировок (strava_activities, 90 дней) ─────────────────
+
+# Типы Strava, которые грузим в окно. Точка контроля: мусор (прогулки, йога,
+# силовые) сюда не попадает, при необходимости список расширяем.
+WINDOW_ACTIVITY_TYPES = {
+    "Run", "TrailRun", "VirtualRun",
+    "Ride", "VirtualRide", "GravelRide", "MountainBikeRide", "EBikeRide",
+    "Swim",
+    "NordicSki", "BackcountrySki", "RollerSki",
+    "Hike", "Rowing", "Elliptical",
+}
+
+
+def _window_activities(db_user_id: int, days: int) -> list:
+    """Тренировки из окна strava_activities за последние N дней (новые сверху)."""
+    from database import get_strava_activities
+    cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    return [a for a in get_strava_activities(db_user_id)
+            if (a.get("start_date") or "")[:10] >= cutoff]
+
+
+async def _fill_window(access_token: str, db_user_id: int) -> int:
+    """Заполняет окно: список за 90 дней + деталь по каждой тренировке → таблица.
+
+    Грузятся типы из WINDOW_ACTIVITY_TYPES (бег, вело, лыжи, плавание и т.д.);
+    дальнейший отбор делают потребители. Пропускает тренировки, уже лежащие в окне.
+    Возвращает число запрошенных деталей.
+    """
+    import json as _json
+    from database import get_strava_activities, save_strava_activity
+
+    have = {a.get("id") for a in get_strava_activities(db_user_id)}
+    activities = await get_recent_activities(access_token, days=90)
+    fetched = 0
+    for a in activities:
+        # type — старое поле (Run/Ride/...), sport_type — новое (TrailRun/GravelRide/...)
+        if (a.get("type") not in WINDOW_ACTIVITY_TYPES
+                and a.get("sport_type") not in WINDOW_ACTIVITY_TYPES):
+            continue
+        if a.get("id") in have:
+            continue
+        detail = await get_activity_detail(access_token, a["id"])
+        if not detail:
+            continue
+        save_strava_activity(db_user_id, detail["id"], detail.get("start_date") or "",
+                             _json.dumps(detail, ensure_ascii=False))
+        fetched += 1
+    print(f"Strava window fill uid={db_user_id}: list={len(activities)} details={fetched}")
+    return fetched
 
 
 # ── Лэпы в Garmin-формате для разбора тренировки (/ai) ───────────
@@ -328,9 +392,16 @@ async def get_recent_48h_load(access_token: str) -> dict:
     }
 
 
-async def get_recent_runs(access_token: str, days: int = 14) -> list:
-    """Получает пробежки за последние N дней (для анализа усталости)"""
-    activities = await get_recent_activities(access_token, days)
+async def get_recent_runs(access_token: str, days: int = 14,
+                          db_user_id: int | None = None) -> list:
+    """Получает пробежки за последние N дней (для анализа усталости).
+
+    db_user_id задан → берём из окна strava_activities (без запроса к API).
+    """
+    if db_user_id is not None:
+        activities = _window_activities(db_user_id, days)
+    else:
+        activities = await get_recent_activities(access_token, days)
     runs = []
     for a in activities:
         if a.get("type") != "Run":
@@ -349,7 +420,7 @@ async def get_recent_runs(access_token: str, days: int = 14) -> list:
     return runs
 
 
-async def get_training_load(access_token: str) -> dict:
+async def get_training_load(access_token: str, db_user_id: int | None = None) -> dict:
     """
     Считает CTL/ATL/TSB (Fitness/Fatigue/Form) на основе suffer_score.
     Только активности с пульсом (suffer_score > 0).
@@ -357,8 +428,13 @@ async def get_training_load(access_token: str) -> dict:
     CTL (Fitness) = 42-дневная экспоненциальная средняя
     ATL (Fatigue) = 7-дневная экспоненциальная средняя
     TSB (Form)    = CTL - ATL
+
+    db_user_id задан → активности из окна strava_activities (без запроса к API).
     """
-    activities = await get_recent_activities(access_token, days=90)
+    if db_user_id is not None:
+        activities = _window_activities(db_user_id, 90)
+    else:
+        activities = await get_recent_activities(access_token, days=90)
 
     # Фильтруем только пробежки с пульсом
     runs_with_hr = [
@@ -441,21 +517,32 @@ async def get_training_load(access_token: str) -> dict:
     }
 
 
-async def get_best_efforts_and_predictions(access_token: str) -> dict:
+async def get_best_efforts_and_predictions(access_token: str,
+                                           db_user_id: int | None = None) -> dict:
     """
     Собирает best_efforts за последние 3 месяца и считает прогнозы
     на стандартные дистанции по формуле Риегеля.
+
+    db_user_id задан → детали берутся из окна strava_activities
+    (там уже лежат ответы GET /activities/{id} с best_efforts), запросов к API нет.
     """
-    activities = await get_recent_activities(access_token, days=90)
-    runs = [a for a in activities if a.get("type") == "Run"]
+    if db_user_id is not None:
+        activities = _window_activities(db_user_id, 90)
+        runs = [a for a in activities if a.get("type") == "Run"]
+        details = runs
+    else:
+        activities = await get_recent_activities(access_token, days=90)
+        runs = [a for a in activities if a.get("type") == "Run"]
+        details = []
+        for activity in runs[:30]:  # ограничиваем 30 активностями
+            detail = await get_activity_detail(access_token, activity["id"])
+            if detail:
+                details.append(detail)
 
     # Лучшие результаты по дистанциям за 3 месяца
     best = {}  # {"5km": {"time_sec": 1182, "pace": "3:56", "date": "2026-03-15"}}
 
-    for activity in runs[:30]:  # ограничиваем 30 активностями
-        detail = await get_activity_detail(access_token, activity["id"])
-        if not detail:
-            continue
+    for detail in details:
 
         for effort in detail.get("best_efforts", []):
             name = effort.get("name")
@@ -530,24 +617,34 @@ def _calculate_riegels_predictions(best: dict) -> dict:
     return predictions
 
 
-async def get_full_athlete_data(access_token: str) -> dict:
+async def get_full_athlete_data(access_token: str, db_user_id: int | None = None,
+                                fill_window: bool = False) -> dict:
     """
     Собирает все данные атлета для передачи в AI:
     - Последние пробежки (14 дней)
     - CTL/ATL/TSB с трендом
     - Best efforts + прогнозы по Риегелю
+
+    db_user_id задан → всё считается из окна strava_activities (0 запросов к API).
+    fill_window=True (только с db_user_id) → перед расчётом окно заполняется:
+      список за 90 дней + GET /activities/{id} по каждой тренировке → save_strava_activity.
+      Использовать только при подключении и по ручной команде.
+    db_user_id не задан → старое поведение (всё из API).
     """
     import asyncio
 
+    if db_user_id is not None and fill_window:
+        await _fill_window(access_token, db_user_id)
+
     # Запускаем параллельно
-    runs_task = get_recent_runs(access_token, days=14)
-    load_task = get_training_load(access_token)
+    runs_task = get_recent_runs(access_token, days=14, db_user_id=db_user_id)
+    load_task = get_training_load(access_token, db_user_id=db_user_id)
 
     runs, load = await asyncio.gather(runs_task, load_task)
     fitness = analyze_fitness(runs)
 
     # Best efforts — отдельно (много запросов, не параллелим)
-    efforts = await get_best_efforts_and_predictions(access_token)
+    efforts = await get_best_efforts_and_predictions(access_token, db_user_id=db_user_id)
 
     return {
         "recent_runs": runs,
@@ -647,6 +744,7 @@ async def fetch_raw(db_user_id: int) -> dict | None:
     async def _raw_get(session, url, params=None):
         try:
             async with session.get(url, headers=headers, params=params or {}) as r:
+                _log_rate_limit(r, url.rsplit("/", 1)[-1])
                 if r.status != 200:
                     return None
                 return await r.json()

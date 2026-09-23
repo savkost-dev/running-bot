@@ -590,7 +590,7 @@ async def cmd_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     msg = await update.message.reply_text("⏳ Обновляю данные...")
-    athlete_data = await refresh_athlete_cache(db_user_id, access_token, msg)
+    athlete_data = await refresh_athlete_cache(db_user_id, access_token, msg, fill_window=True)
 
     if athlete_data:
         load = athlete_data["training_load"]
@@ -2494,7 +2494,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             access_token = await ensure_valid_token(db_user_id)
             if access_token:
-                athlete_data = await refresh_athlete_cache(db_user_id, access_token)
+                athlete_data = await refresh_athlete_cache(db_user_id, access_token, fill_window=True)
                 if athlete_data:
                     load = athlete_data["training_load"]
                     result_lines.append(

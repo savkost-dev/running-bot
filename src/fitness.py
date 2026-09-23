@@ -14,7 +14,7 @@ database/сервисов/strava, обратных импортов в bot.py н
 import asyncio
 import logging
 
-from database import get_token, save_athlete_cache, get_athlete_cache
+from database import get_token, save_athlete_cache, get_athlete_cache, get_strava_activities
 from strava import get_full_athlete_data
 
 logger = logging.getLogger(__name__)
@@ -22,10 +22,13 @@ logger = logging.getLogger(__name__)
 
 # ── КЭШ АТЛЕТА ───────────────────────────────────────────────
 
-async def refresh_athlete_cache(db_user_id: int, access_token: str, notify_msg=None) -> dict | None:
+async def refresh_athlete_cache(db_user_id: int, access_token: str, notify_msg=None,
+                                fill_window: bool = False) -> dict | None:
     """
     Обновляет кэш данных атлета (CTL/ATL/TSB, прогнозы, соревнования).
-    Занимает 30-60 сек — вызывать только при подключении или по запросу.
+    Считается из окна strava_activities (90 дней), запросов к API нет.
+    fill_window=True — сначала заполнить окно из API (список + деталь по каждой
+    тренировке, 30-60 сек): только при подключении или по ручной команде.
     """
     try:
         if notify_msg:
@@ -34,7 +37,14 @@ async def refresh_athlete_cache(db_user_id: int, access_token: str, notify_msg=N
                 "Это займёт около минуты (только первый раз)"
             )
 
-        athlete_data = await get_full_athlete_data(access_token)
+        # Страховка: окно пустое (первый запуск после деплоя, чистка БД) —
+        # заполняем один раз, иначе CTL/ATL посчитаются по одной тренировке.
+        if not fill_window and not get_strava_activities(db_user_id):
+            logger.info(f"Окно strava_activities пусто для user_id={db_user_id} — заполняю")
+            fill_window = True
+
+        athlete_data = await get_full_athlete_data(access_token, db_user_id=db_user_id,
+                                                   fill_window=fill_window)
 
         save_athlete_cache(
             db_user_id,
@@ -81,7 +91,7 @@ async def get_fitness_data(db_user_id: int, access_token: str) -> dict | None:
         fitness["last_race"]     = cache["last_race"]
     else:
         logger.info(f"Кэш отсутствует для user_id={db_user_id}, обновляю...")
-        athlete_data = await refresh_athlete_cache(db_user_id, access_token)
+        athlete_data = await refresh_athlete_cache(db_user_id, access_token, fill_window=True)
         if athlete_data:
             fitness["training_load"] = athlete_data["training_load"]
             fitness["predictions"]   = athlete_data["predictions"]

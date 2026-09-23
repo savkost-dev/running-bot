@@ -174,7 +174,8 @@ async def _notify_strava(telegram_id: int, db_user_id: int, access_token: str) -
         from strava import get_full_athlete_data
         from database import save_athlete_cache, get_user_display, count_users_with_service
 
-        athlete_data = await get_full_athlete_data(access_token)
+        athlete_data = await get_full_athlete_data(access_token, db_user_id=db_user_id,
+                                                   fill_window=True)
         save_athlete_cache(
             db_user_id,
             athlete_data["training_load"],
@@ -443,21 +444,35 @@ async def _strava_webhook_verify(request: web.Request) -> web.Response:
 
 async def _strava_activity_ingest(uid: int, activity_id) -> None:
     """Фоновая обработка события activity.create: полный цикл загрузки одного юзера.
+    get_activity_detail (1 запрос) → save_strava_activity (окно 90 дней) →
     fetch_raw (сырьё) → run_normalization (unified_cache; для Strava-only юзеров это
     ЕДИНСТВЕННАЯ точка нормализации — wakeup_poll их не трогает) →
-    refresh_athlete_cache (CTL/ATL/TSB + прогнозы).
+    refresh_athlete_cache (CTL/ATL/TSB + прогнозы из окна, без запросов к API).
     Заменяет ночной опрос Strava: данные те же, триггер — событие, а не расписание."""
     try:
         import strava as _sv
         from data_normalizer import run_normalization
+        from database import save_strava_activity
         from fitness import refresh_athlete_cache
         token = await _sv.ensure_valid_token(uid)
         if not token:
             logger.warning(f"strava ingest: uid={uid} без валидного токена — пропуск")
             return
+        detail = await _sv.get_activity_detail(token, int(activity_id))
+        if not detail:
+            logger.warning(f"strava ingest: uid={uid} activity={activity_id} — "
+                           f"деталь не получена, окно не обновлено")
+        elif (detail.get("type") in _sv.WINDOW_ACTIVITY_TYPES
+                or detail.get("sport_type") in _sv.WINDOW_ACTIVITY_TYPES):
+            save_strava_activity(uid, detail["id"], detail.get("start_date") or "",
+                                 json.dumps(detail, ensure_ascii=False))
+        else:
+            logger.info(f"strava ingest: uid={uid} activity={activity_id} "
+                        f"type={detail.get('sport_type') or detail.get('type')} — "
+                        f"не в WINDOW_ACTIVITY_TYPES, в окно не пишем")
         await _sv.fetch_raw(uid)
         run_normalization(uid)
-        await refresh_athlete_cache(uid, token)
+        await refresh_athlete_cache(uid, token, fill_window=False)
         logger.info(f"strava ingest: uid={uid} activity={activity_id} — "
                     f"сырьё+нормализация+кэш обновлены по вебхуку")
     except Exception as e:

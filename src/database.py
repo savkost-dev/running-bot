@@ -311,6 +311,16 @@ def init_db():
                 FOREIGN KEY (user_id) REFERENCES users(id)
             );
 
+            CREATE TABLE IF NOT EXISTS strava_activities (
+                user_id INTEGER NOT NULL,
+                activity_id INTEGER NOT NULL,
+                start_date TEXT NOT NULL,
+                detail_json TEXT NOT NULL,
+                fetched_at TEXT DEFAULT (datetime('now')),
+                PRIMARY KEY (user_id, activity_id),
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            );
+
             CREATE TABLE IF NOT EXISTS unified_cache (
                 user_id    INTEGER PRIMARY KEY,
                 unified_json TEXT NOT NULL,
@@ -2158,6 +2168,50 @@ def get_raw_service_data(user_id: int, service: str) -> dict | None:
     if not row:
         return None
     return {"raw_json": row[0], "fetched_at": row[1]}
+
+
+# ── Окно тренировок Strava (90 дней) ─────────────────────────
+
+STRAVA_WINDOW_DAYS = 90
+
+
+def save_strava_activity(user_id: int, activity_id: int, start_date: str, detail_json: str) -> None:
+    """Сохраняет полную тренировку Strava (ответ GET /activities/{id}) в окно 90 дней.
+
+    start_date — ISO-строка из ответа Strava (start_date, UTC).
+    После вставки удаляет записи этого пользователя старше окна.
+    """
+    with get_connection() as conn:
+        conn.execute(
+            """INSERT OR REPLACE INTO strava_activities
+               (user_id, activity_id, start_date, detail_json, fetched_at)
+               VALUES (?, ?, ?, ?, datetime('now'))""",
+            (user_id, activity_id, start_date, detail_json)
+        )
+        conn.execute(
+            f"""DELETE FROM strava_activities
+                WHERE user_id = ? AND substr(start_date, 1, 10) < date('now', '-{STRAVA_WINDOW_DAYS} days')""",
+            (user_id,)
+        )
+    _db_logger.info(f"strava_activities сохранён: user={user_id} activity={activity_id}")
+
+
+def get_strava_activities(user_id: int) -> list[dict]:
+    """Тренировки Strava из окна 90 дней, новые сверху. detail_json уже разобран."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            """SELECT detail_json FROM strava_activities
+               WHERE user_id = ? AND substr(start_date, 1, 10) >= date('now', ?)
+               ORDER BY start_date DESC""",
+            (user_id, f"-{STRAVA_WINDOW_DAYS} days")
+        ).fetchall()
+    result = []
+    for (detail_json,) in rows:
+        try:
+            result.append(_json.loads(detail_json))
+        except (TypeError, ValueError):
+            continue
+    return result
 
 
 # ── Нормализованный кэш (слой 2) ─────────────────────────────
