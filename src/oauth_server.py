@@ -444,9 +444,9 @@ async def _strava_webhook_verify(request: web.Request) -> web.Response:
 
 async def _strava_activity_ingest(uid: int, activity_id) -> None:
     """Фоновая обработка события activity.create: полный цикл загрузки одного юзера.
-    get_activity_detail (1 запрос) → save_strava_activity (окно 90 дней) →
-    fetch_raw (сырьё) → run_normalization (unified_cache; для Strava-only юзеров это
-    ЕДИНСТВЕННАЯ точка нормализации — wakeup_poll их не трогает) →
+    get_activity_detail (1 запрос — единственный к API) → save_strava_activity
+    (окно 90 дней) → run_normalization (unified_cache из окна; для Strava-only
+    юзеров это ЕДИНСТВЕННАЯ точка нормализации — wakeup_poll их не трогает) →
     refresh_athlete_cache (CTL/ATL/TSB + прогнозы из окна, без запросов к API).
     Заменяет ночной опрос Strava: данные те же, триггер — событие, а не расписание."""
     try:
@@ -473,13 +473,12 @@ async def _strava_activity_ingest(uid: int, activity_id) -> None:
             logger.info(f"strava ingest: uid={uid} activity={activity_id} "
                         f"type={detail.get('sport_type') or detail.get('type')} — "
                         f"не в WINDOW_ACTIVITY_TYPES, в окно не пишем")
-        await _sv.fetch_raw(uid)
         run_normalization(uid)
         if window_was_empty:
             logger.info(f"strava ingest: uid={uid} окно было пустым — заполняю целиком")
         await refresh_athlete_cache(uid, token, fill_window=window_was_empty)
         logger.info(f"strava ingest: uid={uid} activity={activity_id} — "
-                    f"сырьё+нормализация+кэш обновлены по вебхуку")
+                    f"окно+нормализация+кэш обновлены по вебхуку")
     except Exception as e:
         logger.error(f"strava ingest error uid={uid}: {e}")
 

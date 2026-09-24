@@ -274,14 +274,22 @@ def _expand_plan_roles(plan_wkt: dict) -> list:
 
 
 async def get_activity_splits(access_token: str, activity_id: int,
-                              plan_wkt: dict) -> dict | None:
+                              plan_wkt: dict, db_user_id: int | None = None) -> dict | None:
     """Лэпы Strava в Garmin-формате ({"lapDTOs": [...]}) для рисовалок activity_review.
 
     Каждый лэп получает wktStepIndex + intensityType: лэпы Strava накладываются
     ПО ПОРЯДКУ с первого на развёрнутую последовательность шагов эталона (разминки/заминки
     в DD-тренировке нет). Лэпы сверх плана → wktStepIndex None (рисовалки их отбросят).
-    plan_wkt — распарсенный JSON эталона (из workout_templates или Garmin workout)."""
-    detail = await get_activity_detail(access_token, activity_id)
+    plan_wkt — распарсенный JSON эталона (из workout_templates или Garmin workout).
+    db_user_id задан → деталь сначала ищется в окне strava_activities,
+    в API идём только если её там нет."""
+    detail = None
+    if db_user_id is not None:
+        from database import get_strava_activities
+        detail = next((a for a in get_strava_activities(db_user_id)
+                       if a.get("id") == activity_id), None)
+    if not detail:
+        detail = await get_activity_detail(access_token, activity_id)
     if not detail:
         return None
     laps = detail.get("laps") or []
@@ -351,20 +359,34 @@ async def get_activity_streams(access_token: str, activity_id: int,
     return pts
 
 
-async def get_recent_48h_load(access_token: str) -> dict:
-    """Острая нагрузка за последние 48 часов — всегда свежие данные (1 запрос к API)."""
-    after = int((datetime.now() - timedelta(hours=48)).timestamp())
-    headers = {"Authorization": f"Bearer {access_token}"}
+async def get_recent_48h_load(access_token: str, db_user_id: int | None = None) -> dict:
+    """Острая нагрузка за последние 48 часов.
+
+    db_user_id задан → из окна strava_activities (без запроса к API, новые сверху).
+    Иначе — 1 запрос к API (список возвращается старыми вперёд).
+    """
+    cutoff = datetime.now() - timedelta(hours=48)
     activities = []
 
-    async with aiohttp.ClientSession() as session:
-        async with session.get(
-            f"{STRAVA_API_BASE}/athlete/activities",
-            headers=headers,
-            params={"after": after, "per_page": 30, "page": 1}
-        ) as resp:
-            if resp.status == 200:
-                activities = await resp.json()
+    if db_user_id is not None:
+        for a in _window_activities(db_user_id, 3):
+            try:
+                dt = datetime.strptime((a.get("start_date") or "")[:19], "%Y-%m-%dT%H:%M:%S")
+            except ValueError:
+                continue
+            if dt >= cutoff:
+                activities.append(a)
+    else:
+        after = int(cutoff.timestamp())
+        headers = {"Authorization": f"Bearer {access_token}"}
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"{STRAVA_API_BASE}/athlete/activities",
+                headers=headers,
+                params={"after": after, "per_page": 30, "page": 1}
+            ) as resp:
+                if resp.status == 200:
+                    activities = await resp.json()
 
     runs = [a for a in activities if a.get("type") == "Run"]
     if not runs:

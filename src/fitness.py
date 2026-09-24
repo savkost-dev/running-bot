@@ -64,16 +64,25 @@ async def refresh_athlete_cache(db_user_id: int, access_token: str, notify_msg=N
 async def get_fitness_data(db_user_id: int, access_token: str) -> dict | None:
     """
     Получает данные атлета:
-    - Быстрые (всегда свежие): пробежки за 14 дней + острая нагрузка за 48 ч
+    - Быстрые: пробежки за 14 дней + острая нагрузка за 48 ч — из окна
+      strava_activities (обновляется вебхуком), без запросов к API
     - Медленные (из кэша): CTL/ATL/TSB, прогнозы Риегеля, последнее соревнование
+    Нет кэша или окно пустое → разовое заполнение окна (fill_window) + пересчёт кэша.
     """
     from strava import get_recent_runs, analyze_fitness, get_recent_48h_load
 
-    # ── Быстрые данные (2 запроса к Strava API) ──────────────
+    # ── Медленные данные (из кэша); при пустом окне — заполнить ──
+    cache = get_athlete_cache(db_user_id)
+    athlete_data = None
+    if not cache or not get_strava_activities(db_user_id):
+        logger.info(f"Кэш или окно Strava отсутствует для user_id={db_user_id}, заполняю...")
+        athlete_data = await refresh_athlete_cache(db_user_id, access_token, fill_window=True)
+
+    # ── Быстрые данные (из окна, 0 запросов к Strava API) ─────
     try:
         runs, load_48h = await asyncio.gather(
-            get_recent_runs(access_token, days=14),
-            get_recent_48h_load(access_token),
+            get_recent_runs(access_token, days=14, db_user_id=db_user_id),
+            get_recent_48h_load(access_token, db_user_id=db_user_id),
         )
         fitness = analyze_fitness(runs)
         fitness["load_48h"] = load_48h
@@ -83,19 +92,11 @@ async def get_fitness_data(db_user_id: int, access_token: str) -> dict | None:
                    "avg_pace": "—", "avg_hr": None, "fatigue_level": "unknown",
                    "load_48h": None}
 
-    # ── Медленные данные (из кэша) ────────────────────────────
-    cache = get_athlete_cache(db_user_id)
-    if cache:
-        fitness["training_load"] = cache["training_load"]
-        fitness["predictions"]   = cache["predictions"]
-        fitness["last_race"]     = cache["last_race"]
-    else:
-        logger.info(f"Кэш отсутствует для user_id={db_user_id}, обновляю...")
-        athlete_data = await refresh_athlete_cache(db_user_id, access_token, fill_window=True)
-        if athlete_data:
-            fitness["training_load"] = athlete_data["training_load"]
-            fitness["predictions"]   = athlete_data["predictions"]
-            fitness["last_race"]     = athlete_data["last_race"]
+    slow = athlete_data or cache
+    if slow:
+        fitness["training_load"] = slow["training_load"]
+        fitness["predictions"]   = slow["predictions"]
+        fitness["last_race"]     = slow["last_race"]
 
     return fitness
 

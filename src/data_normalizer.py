@@ -933,7 +933,8 @@ def _parse_whoop_raw(raw: dict) -> dict:
 def _parse_strava_raw(raw: dict, athlete_cache: dict | None = None) -> dict:
     """Извлекает нужные поля из сырого ответа Strava API в формат для normalize_strava.
 
-    raw — dict из strava.fetch_raw: {athlete, activities}.
+    raw — {activities: [...]}: полные тренировки из окна strava_activities
+    (или, как запасной вариант, краткий список из strava.fetch_raw).
     athlete_cache — опциональный кэш (predictions, CTL/ATL/TSB) из БД.
     """
     from datetime import datetime as _dt, timedelta as _td
@@ -1068,15 +1069,20 @@ def run_normalization(user_id: int) -> "UnifiedUserData | None":
         except Exception as e:
             logger.warning(f"normalize_polar error user={user_id}: {e}")
 
-    # Strava (обогащаем athlete_cache для CTL/predictions)
-    raw_s = db.get_raw_service_data(user_id, "strava")
-    if raw_s:
-        data_dates["strava_fetched"] = raw_s["fetched_at"]
+    # Strava (обогащаем athlete_cache для CTL/predictions).
+    # Список тренировок — из окна strava_activities (обновляется вебхуком),
+    # raw_service_data('strava') — только запасной вариант, если окно пустое.
+    window_s = db.get_strava_activities(user_id)
+    raw_s = None if window_s else db.get_raw_service_data(user_id, "strava")
+    if window_s or raw_s:
+        if raw_s:
+            data_dates["strava_fetched"] = raw_s["fetched_at"]
         try:
             athlete_cache = db.get_athlete_cache(user_id)
             if athlete_cache and athlete_cache.get("updated_at"):
                 data_dates["strava_ctl_at"] = athlete_cache["updated_at"]
-            parsed = _parse_strava_raw(_json.loads(raw_s["raw_json"]), athlete_cache)
+            raw_dict = {"activities": window_s} if window_s else _json.loads(raw_s["raw_json"])
+            parsed = _parse_strava_raw(raw_dict, athlete_cache)
             u_strava = normalize_strava(parsed)
         except Exception as e:
             logger.warning(f"normalize_strava error user={user_id}: {e}")

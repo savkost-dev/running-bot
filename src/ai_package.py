@@ -578,7 +578,8 @@ async def _strava_candidate(db_user_id, selector, kind=None):
     plan_steps = ar._flatten_plan_steps(plan_wkt)
     # Круги берём БЕЗ разметки: сначала сбрасываем лишний первый круг (разминка),
     # и только потом накладываем план — как у COROS и кнопочных лэпов Garmin.
-    splits = await strava.get_activity_splits(token, act.get("id"), None)
+    splits = await strava.get_activity_splits(token, act.get("id"), None,
+                                              db_user_id=db_user_id)
     _drop_extra_first_lap(splits, plan_steps)
     _assign_button_laps(splits, plan_wkt, plan_steps)
     pts = None

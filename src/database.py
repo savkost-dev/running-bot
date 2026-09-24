@@ -578,12 +578,13 @@ def purge_strava_data(user_id: int) -> None:
     """Полная очистка Strava-данных пользователя при деавторизации
     (Strava API Policy 7.4: удалять не только токен, а все Strava Data
     и производные). Удаляет: токен; athlete_cache (CTL/ATL/TSB и прогнозы
-    считаны из strava-активностей); raw_service_data('strava'); строку
-    unified_cache (смешанные источники — пересоберётся ночным джобом
-    из оставшихся сервисов без strava)."""
+    считаны из strava-активностей); raw_service_data('strava'); окно
+    strava_activities; строку unified_cache (смешанные источники —
+    пересоберётся ночным джобом из оставшихся сервисов без strava)."""
     with get_connection() as conn:
         conn.execute("DELETE FROM user_tokens WHERE user_id = ? AND service = 'strava'",
                      (user_id,))
+        conn.execute("DELETE FROM strava_activities WHERE user_id = ?", (user_id,))
         conn.execute("DELETE FROM athlete_cache WHERE user_id = ?", (user_id,))
         conn.execute("DELETE FROM raw_service_data WHERE user_id = ? AND service = 'strava'",
                      (user_id,))
