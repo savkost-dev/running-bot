@@ -947,7 +947,8 @@ def _vo2max_tag(profile: dict) -> str:
             return f"Garmin · {date_str} · устарело"
         return f"Garmin · {date_str}"
     if source == "manual":
-        return "вручную"
+        note = ((profile.get("vo2max_resolved") or {}).get("manual") or {}).get("note")
+        return f"из забега · {note}" if note else "вручную"
     return "вручную" if updated else ""
 
 
@@ -2620,6 +2621,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["awaiting_profile"] = "set_race_time"
         context.user_data["race_dist_m"] = dist_m
         label = {5000: "5 км", 10000: "10 км", 21097: "21,1 км"}.get(dist_m, f"{dist_m} м")
+        context.user_data["race_label"] = label
         await query.edit_message_text(
             f"Дистанция: {label}.\n\nВведи время (ч:мм:сс или мм:сс), например: 1:52:30"
         )
@@ -3302,17 +3304,19 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("Не удалось посчитать. Нажми «🏁 Пороги из результатов забега» ещё раз.")
                 return
             vo2max = round(vdot / zones.K_VO2MAX, 1)
+            race_note = f"{context.user_data.pop('race_label', None) or f'{dist_m} м'} за {text.strip()}"
             context.user_data.pop("race_dist_m", None)
-            saved_note = f"✅ Забег учтён: VDOT {vdot} → VO2max {vo2max} мл/кг/мин"
+            saved_note = f"✅ Забег учтён: {race_note} → VO2max {vo2max} мл/кг/мин"
         else:
             if not re.match(r'^\d+(?:[.,]\d+)?$', text):
                 await update.message.reply_text("Введи число, например: 53")
                 return
             vo2max = float(text.replace(',', '.'))
+            race_note = None
             saved_note = f"✅ VO2max сохранён: {vo2max} мл/кг/мин"
         db_user_id = get_or_create_user(user.id, user.full_name, user.username)
         save_user_profile(db_user_id, vo2max=vo2max, vo2max_source="manual")
-        save_vo2max_manual(db_user_id, vo2max)
+        save_vo2max_manual(db_user_id, vo2max, note=race_note)
         try:
             zones.recalculate_and_save(db_user_id)
         except Exception as e:

@@ -160,7 +160,8 @@ def resolve_anchor(profile: dict | None) -> dict | None:
         except (TypeError, ValueError):
             vdot = None
         if vdot and vdot > 0:
-            src = "вручную" if vo2_manual else (p.get("vo2max_source") or "часы")
+            src = (((p.get("vo2max_resolved") or {}).get("source") or "вручную")
+                   if vo2_manual else (p.get("vo2max_source") or "часы"))
             return {"kind": "vo2max_manual" if vo2_manual else "vo2max_device", "vdot": vdot,
                     "text": f"VO2max {vo2} ({src}) × {K_VO2MAX}"}
     if lt:

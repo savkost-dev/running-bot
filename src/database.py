@@ -401,6 +401,7 @@ def init_db():
                 "vo2max_device_at TEXT",
                 "vo2max_manual REAL",
                 "vo2max_manual_at TEXT",
+                "vo2max_manual_note TEXT",
                 "vo2max_priority TEXT",
                 "lt_pace_device TEXT",
                 "lt_hr_device INTEGER",
@@ -1819,15 +1820,17 @@ def save_vo2max_device(user_id: int, value: float, source: str) -> None:
             (float(value), source, now, user_id))
 
 
-def save_vo2max_manual(user_id: int, value: float) -> None:
+def save_vo2max_manual(user_id: int, value: float, note: str | None = None) -> None:
     """Запись ручного VO2max (кнопка в профиле). Ставит приоритет manual —
-    явный ввод означает «используй моё», пока пользователь не переключит."""
+    явный ввод означает «используй моё», пока пользователь не переключит.
+    note — откуда число, если не с клавиатуры (напр. «21,1 км за 2:01:34»);
+    обычный ввод передаёт None и стирает прежнюю пометку."""
     now = datetime.now().isoformat()
     with get_connection() as conn:
         conn.execute(
             "UPDATE user_profile SET vo2max_manual = ?, vo2max_manual_at = ?, "
-            "vo2max_priority = 'manual' WHERE user_id = ?",
-            (float(value), now, user_id))
+            "vo2max_manual_note = ?, vo2max_priority = 'manual' WHERE user_id = ?",
+            (float(value), now, note, user_id))
 
 
 def set_vo2max_priority(user_id: int, priority: str) -> None:
@@ -1847,11 +1850,11 @@ def get_vo2max_resolved(user_id: int) -> dict | None:
     with get_connection() as conn:
         row = conn.execute(
             "SELECT vo2max_device, vo2max_device_source, vo2max_device_at, "
-            "vo2max_manual, vo2max_manual_at, vo2max_priority "
+            "vo2max_manual, vo2max_manual_at, vo2max_priority, vo2max_manual_note "
             "FROM user_profile WHERE user_id = ?", (user_id,)).fetchone()
     if not row:
         return None
-    dev_v, dev_src, dev_at, man_v, man_at, prio = row
+    dev_v, dev_src, dev_at, man_v, man_at, prio, man_note = row
 
     def _age(ts):
         if not ts:
@@ -1862,14 +1865,15 @@ def get_vo2max_resolved(user_id: int) -> dict | None:
             return None
 
     device = {"value": dev_v, "source": dev_src, "at": dev_at, "age_days": _age(dev_at)}
-    manual = {"value": man_v, "at": man_at, "age_days": _age(man_at)}
+    manual = {"value": man_v, "at": man_at, "age_days": _age(man_at), "note": man_note}
     prio = prio or "device"
     order = ("manual", "device") if prio == "manual" else ("device", "manual")
     for kind in order:
         v = man_v if kind == "manual" else dev_v
         if v is not None:
             return {"value": float(v),
-                    "source": "вручную" if kind == "manual" else (dev_src or "трекер"),
+                    "source": ((f"из забега {man_note}" if man_note else "вручную")
+                               if kind == "manual" else (dev_src or "трекер")),
                     "kind": kind,
                     "at": man_at if kind == "manual" else dev_at,
                     "age_days": manual["age_days"] if kind == "manual" else device["age_days"],
