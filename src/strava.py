@@ -153,6 +153,15 @@ async def get_recent_activities(access_token: str, days: int = 90) -> list:
     return activities
 
 
+# Последний прочитанный X-ReadRateLimit-Usage: [за 15 мин, за день].
+# Обновляется в _log_rate_limit, читается циклом заполнения окна.
+_last_read_usage: list[int] = [0, 0]
+
+# Признак «Strava ответила 429 (лимит)». Пустой dict: для обычных вызовов
+# он ложный, как None («нет данных»), а _fill_window отличает его по `is`.
+RATE_LIMITED: dict = {}
+
+
 def _log_rate_limit(resp, label: str) -> None:
     """Пишет в лог заголовки лимита Strava для сверки с панелью.
 
@@ -163,10 +172,19 @@ def _log_rate_limit(resp, label: str) -> None:
     limit = resp.headers.get("X-ReadRateLimit-Limit")
     if usage:
         print(f"Strava rate [{label}] read usage={usage} limit={limit} status={resp.status}")
+        try:
+            q, d = usage.split(",")
+            _last_read_usage[0], _last_read_usage[1] = int(q), int(d)
+        except (ValueError, AttributeError):
+            pass
 
 
 async def get_activity_detail(access_token: str, activity_id: int) -> dict | None:
-    """Получает детали активности включая best_efforts"""
+    """Получает детали активности включая best_efforts.
+
+    None — нет данных (404, 403 и т.п.); RATE_LIMITED (пустой dict) — 429,
+    лимит Strava. Для вызовов вида `if not detail` разницы нет.
+    """
     headers = {"Authorization": f"Bearer {access_token}"}
     async with aiohttp.ClientSession() as session:
         async with session.get(
@@ -174,6 +192,8 @@ async def get_activity_detail(access_token: str, activity_id: int) -> dict | Non
             headers=headers
         ) as resp:
             _log_rate_limit(resp, f"activities/{activity_id}")
+            if resp.status == 429:
+                return RATE_LIMITED
             if resp.status != 200:
                 return None
             return await resp.json()
@@ -200,34 +220,62 @@ def _window_activities(db_user_id: int, days: int) -> list:
             if (a.get("start_date") or "")[:10] >= cutoff]
 
 
-async def _fill_window(access_token: str, db_user_id: int) -> int:
+# Порог 15-минутного счётчика чтения (лимит 200), после которого заполнение
+# окна останавливается и дозаполняется при следующем вызове.
+FILL_15MIN_STOP = 180
+
+
+async def _fill_window(access_token: str, db_user_id: int) -> tuple[int, bool]:
     """Заполняет окно: список за 90 дней + деталь по каждой тренировке → таблица.
 
     Грузятся типы из WINDOW_ACTIVITY_TYPES (бег, вело, лыжи, плавание и т.д.);
     дальнейший отбор делают потребители. Пропускает тренировки, уже лежащие в окне.
-    Возвращает число запрошенных деталей.
+    Останавливается, если 15-минутный счётчик Strava >= FILL_15MIN_STOP или пришёл 429;
+    тогда ставит маркер bot_settings 'strava_window_partial:<uid>', по которому
+    get_full_athlete_data дозаполнит окно при следующем вызове.
+    Возвращает (число запрошенных деталей, окно полное?).
     """
     import json as _json
-    from database import get_strava_activities, save_strava_activity
+    from database import get_strava_activities, save_strava_activity, get_connection
 
     have = {a.get("id") for a in get_strava_activities(db_user_id)}
     activities = await get_recent_activities(access_token, days=90)
+    todo = [a for a in activities
+            # type — старое поле (Run/Ride/...), sport_type — новое (TrailRun/GravelRide/...)
+            if (a.get("type") in WINDOW_ACTIVITY_TYPES
+                or a.get("sport_type") in WINDOW_ACTIVITY_TYPES)
+            and a.get("id") not in have]
     fetched = 0
-    for a in activities:
-        # type — старое поле (Run/Ride/...), sport_type — новое (TrailRun/GravelRide/...)
-        if (a.get("type") not in WINDOW_ACTIVITY_TYPES
-                and a.get("sport_type") not in WINDOW_ACTIVITY_TYPES):
-            continue
-        if a.get("id") in have:
-            continue
+    complete = True
+    for i, a in enumerate(todo):
         detail = await get_activity_detail(access_token, a["id"])
-        if not detail:
-            continue
-        save_strava_activity(db_user_id, detail["id"], detail.get("start_date") or "",
-                             _json.dumps(detail, ensure_ascii=False))
-        fetched += 1
-    print(f"Strava window fill uid={db_user_id}: list={len(activities)} details={fetched}")
-    return fetched
+        if detail is RATE_LIMITED:
+            complete = False
+            break
+        if detail:
+            save_strava_activity(db_user_id, detail["id"], detail.get("start_date") or "",
+                                 _json.dumps(detail, ensure_ascii=False))
+            fetched += 1
+        # Порог проверяем ПОСЛЕ ответа: счётчик известен только из заголовков,
+        # проверка до первого запроса могла бы навсегда заблокировать цикл.
+        if i + 1 < len(todo) and _last_read_usage[0] >= FILL_15MIN_STOP:
+            complete = False
+            break
+
+    marker = f"strava_window_partial:{db_user_id}"
+    with get_connection() as conn:
+        if complete:
+            conn.execute("DELETE FROM bot_settings WHERE key = ?", (marker,))
+        else:
+            conn.execute("INSERT OR REPLACE INTO bot_settings (key, value) VALUES (?, ?)",
+                         (marker, datetime.now().isoformat(timespec="seconds")))
+    if complete:
+        print(f"Strava window fill uid={db_user_id}: list={len(activities)} details={fetched}")
+    else:
+        print(f"Strava window fill uid={db_user_id}: окно заполнено частично: "
+              f"{fetched} из {len(todo)}, лимит 15 мин "
+              f"(usage={_last_read_usage[0]}/200), дозаполню при следующем вызове")
+    return fetched, complete
 
 
 # ── Лэпы в Garmin-формате для разбора тренировки (/ai) ───────────
@@ -654,6 +702,16 @@ async def get_full_athlete_data(access_token: str, db_user_id: int | None = None
     db_user_id не задан → старое поведение (всё из API).
     """
     import asyncio
+
+    if db_user_id is not None and not fill_window:
+        # Прошлое заполнение упёрлось в лимит — дозаполняем при любом вызове
+        from database import get_connection
+        with get_connection() as conn:
+            row = conn.execute("SELECT value FROM bot_settings WHERE key = ?",
+                               (f"strava_window_partial:{db_user_id}",)).fetchone()
+        if row:
+            print(f"Strava window uid={db_user_id}: неполное окно с {row[0]} — дозаполняю")
+            fill_window = True
 
     if db_user_id is not None and fill_window:
         await _fill_window(access_token, db_user_id)

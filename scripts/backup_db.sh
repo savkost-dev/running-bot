@@ -11,6 +11,11 @@ LOG="$DIR/backup.log"
 
 mkdir -p "$DIR"
 DATE=$(date +%F)
+# Пустая дата дала бы bot_.sqlite, а ротация посчитала бы его за копию
+if [[ ! "$DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+    echo "$(date '+%F %T') ERROR bad date '$DATE' — копия не создана" >> "$LOG"
+    exit 1
+fi
 DST="$DIR/bot_$DATE.sqlite"
 
 sqlite3 "$DB" ".backup '$DST'"

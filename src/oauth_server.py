@@ -498,23 +498,28 @@ async def _strava_webhook_event(request: web.Request) -> web.Response:
         if (event.get("object_type") == "athlete"
                 and str((event.get("updates") or {}).get("authorized")).lower() == "false"):
             from database import get_user_by_strava_athlete_id, purge_strava_data
-            uid = get_user_by_strava_athlete_id(event.get("owner_id"))
+            athlete = event.get("owner_id")
+            uid = get_user_by_strava_athlete_id(athlete)
             if uid:
                 purge_strava_data(uid)
                 logger.info(f"strava webhook: deauth uid={uid} "
-                            f"(athlete {event.get('owner_id')}) — токен удалён")
-                if _telegram_app:
-                    try:
-                        await _telegram_app.bot.send_message(
-                            273726778,
-                            f"🔌 Strava: uid={uid} отозвал доступ — токен удалён, "
-                            f"слот освобождён",
-                        )
-                    except Exception:
-                        pass
+                            f"(athlete {athlete}) — токен и данные Strava удалены")
+                text = (f"🔌 Strava: uid={uid} (athlete {athlete}) отозвал доступ — "
+                        f"токен и данные удалены, слот освобождён")
             else:
-                logger.warning(
-                    f"strava webhook: deauth неизвестного athlete {event.get('owner_id')}")
+                # athlete не привязан к user_id (strava_athlete_id пуст у старых
+                # подключений) — чистить некого, но админ должен узнать.
+                logger.warning(f"strava webhook: deauth неизвестного athlete {athlete}")
+                text = (f"🔌 Strava: athlete {athlete} отозвал доступ, но в базе не найден "
+                        f"(strava_athlete_id пуст) — токен НЕ удалён, проверь "
+                        f"scripts/backfill_strava_athlete.py")
+            if _telegram_app:
+                try:
+                    await _telegram_app.bot.send_message(273726778, text)
+                except Exception as e:
+                    logger.warning(f"strava webhook: не смог уведомить админа о deauth: {e}")
+            else:
+                logger.warning("strava webhook: deauth — _telegram_app не задан, админ не уведомлён")
         elif (event.get("object_type") == "activity"
                 and event.get("aspect_type") == "create"):
             from database import get_user_by_strava_athlete_id
