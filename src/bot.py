@@ -1069,6 +1069,7 @@ def _build_profile_keyboard(profile: dict | None = None) -> InlineKeyboardMarkup
          InlineKeyboardButton("🎯 Специализация", callback_data="profile_set_specialization")],
         [InlineKeyboardButton("📊 Указать VO2max",   callback_data="profile_set_vo2max"),
          InlineKeyboardButton("🏃 Лактатный порог", callback_data="profile_set_lactate")],
+        [InlineKeyboardButton("🏁 Пороги из результатов забега", callback_data="profile_set_race")],
     ]
     lock_row = []
     if p.get("vo2max") is not None:
@@ -2600,6 +2601,29 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML"
         )
 
+    elif query.data == "profile_set_race":
+        await query.edit_message_text(
+            "🏁 <b>Пороги из результатов забега</b> — недавний старт «на полную». По нему по формуле "
+            "Дэниелса считается VDOT и пересчитывается VO2max, от которого строятся зоны.\n"
+            "Хранится только последний результат.\n\n"
+            "Выбери дистанцию:",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("5 км",    callback_data="profile_race_5000"),
+                InlineKeyboardButton("10 км",   callback_data="profile_race_10000"),
+                InlineKeyboardButton("21,1 км", callback_data="profile_race_21097"),
+            ]])
+        )
+
+    elif query.data.startswith("profile_race_"):
+        dist_m = int(query.data.rsplit("_", 1)[1])
+        context.user_data["awaiting_profile"] = "set_race_time"
+        context.user_data["race_dist_m"] = dist_m
+        label = {5000: "5 км", 10000: "10 км", 21097: "21,1 км"}.get(dist_m, f"{dist_m} м")
+        await query.edit_message_text(
+            f"Дистанция: {label}.\n\nВведи время (ч:мм:сс или мм:сс), например: 1:52:30"
+        )
+
     elif query.data == "profile_set_lactate":
         context.user_data["awaiting_profile"] = "set_lactate_pace"
         await query.edit_message_text(
@@ -3260,12 +3284,28 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # Ввод данных профиля
-    elif context.user_data.get("awaiting_profile") == "set_vo2max":
+    elif context.user_data.get("awaiting_profile") in ("set_vo2max", "set_race_time"):
         import re
-        if not re.match(r'^\d+(?:[.,]\d+)?$', text):
-            await update.message.reply_text("Введи число, например: 53")
-            return
-        vo2max = float(text.replace(',', '.'))
+        if context.user_data["awaiting_profile"] == "set_race_time":
+            from data_normalizer import _vdot_from_race
+            t_sec = zones._parse_race_time(text)
+            if not t_sec or t_sec <= 0:
+                await update.message.reply_text("Не распознал время. Формат: 1:52:30 или 24:15")
+                return
+            dist_m = int(context.user_data.get("race_dist_m") or 0)
+            vdot = _vdot_from_race(dist_m, int(t_sec))
+            if not vdot:
+                await update.message.reply_text("Не удалось посчитать. Нажми «🏁 Пороги из результатов забега» ещё раз.")
+                return
+            vo2max = round(vdot / zones.K_VO2MAX, 1)
+            context.user_data.pop("race_dist_m", None)
+            saved_note = f"✅ Забег учтён: VDOT {vdot} → VO2max {vo2max} мл/кг/мин"
+        else:
+            if not re.match(r'^\d+(?:[.,]\d+)?$', text):
+                await update.message.reply_text("Введи число, например: 53")
+                return
+            vo2max = float(text.replace(',', '.'))
+            saved_note = f"✅ VO2max сохранён: {vo2max} мл/кг/мин"
         db_user_id = get_or_create_user(user.id, user.full_name, user.username)
         save_user_profile(db_user_id, vo2max=vo2max, vo2max_source="manual")
         save_vo2max_manual(db_user_id, vo2max)
@@ -3276,7 +3316,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop("awaiting_profile")
         profile = get_user_profile(db_user_id)
         await update.message.reply_text(
-            f"✅ VO2max сохранён: {vo2max} мл/кг/мин\n\n{_build_profile_text(profile, db_user_id)}",
+            f"{saved_note}\n\n{_build_profile_text(profile, db_user_id)}",
             reply_markup=_build_profile_keyboard(profile)
         )
 
