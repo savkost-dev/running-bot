@@ -2701,6 +2701,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 note = ("📌 ЛП: используется значение, введённое вручную." if new_prio == "manual"
                         else "📡 ЛП: используется значение из систем (Garmin).")
+        try:
+            zones.recalculate_and_save(db_user_id)
+        except Exception as e:
+            logger.warning(f"Zones recalc error (priority toggle) for {user.id}: {e}")
         profile = get_user_profile(db_user_id)
         await query.edit_message_text(
             f"{note}\n\n{_build_profile_text(profile, db_user_id)}",
