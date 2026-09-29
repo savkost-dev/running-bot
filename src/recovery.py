@@ -173,7 +173,22 @@ async def _get_recovery_data(db_user_id: int, force_fresh: bool = False) -> dict
         if garmin_result:
             return garmin_result
 
-    # COROS — третий приоритет
+    # COROS новый — третий приоритет
+    if get_token(db_user_id, "coros_mcp"):
+        try:
+            import coros_mcp as _cm
+            result = await _cm.get_recovery_for_prompt(db_user_id)
+            if result:
+                # расчётная готовность (coros-calc) — как у старого COROS
+                if not result.get("training_readiness"):
+                    _tr = _unified_calc_tr(db_user_id)
+                    if _tr:
+                        result["training_readiness"] = _tr
+                return result
+        except Exception as e:
+            logger.error(f"COROS (новый) recovery error for user {db_user_id}: {e}")
+
+    # COROS старый
     if get_token(db_user_id, "coros"):
         try:
             import coros as _coros

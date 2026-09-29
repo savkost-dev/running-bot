@@ -668,3 +668,90 @@ def parse_raw(raw: dict) -> dict:
     out.update(parse_sleep(raw.get("querySleepData")))
     out.update(parse_activities(raw.get("querySportRecords")))
     return out
+
+
+# ── Для рекомендации: тот же вид данных, что у остальных сервисов ──
+
+async def _parsed(db_user_id: int, max_age_min: int = 30) -> dict:
+    """Разобранные данные с часов: сохранённые, если им меньше max_age_min минут, иначе свежий запрос.
+    Рекомендация зовёт нагрузку и восстановление подряд — второй вызов не ходит в сеть."""
+    import database as db
+    from datetime import datetime, timedelta
+
+    row = db.get_raw_service_data(db_user_id, SERVICE)
+    raw = None
+    if row:
+        try:
+            age = datetime.utcnow() - datetime.fromisoformat(str(row["fetched_at"]))
+            if age < timedelta(minutes=max_age_min):
+                raw = json.loads(row["raw_json"])
+        except Exception:
+            raw = None
+    if raw is None:
+        raw = await fetch_raw(db_user_id)
+    return parse_raw(raw) if raw else {}
+
+
+def _recovery_dict(p: dict) -> dict | None:
+    """Восстановление в том же виде, что отдают остальные сервисы."""
+    out = {"source": "coros"}
+    for src, dst in (("recovery_pct", "recovery_score"), ("recovery_level", "recovery_state"),
+                     ("full_recovery", "full_recovery_hours"), ("hrv", "hrv"),
+                     ("hrv_baseline", "hrv_baseline"), ("rhr", "rhr"),
+                     ("sleep_hours", "sleep_hours"), ("sleep_score", "sleep_score")):
+        if p.get(src) is not None:
+            out[dst] = p[src]
+    return out if len(out) > 1 else None
+
+
+async def get_recovery_for_prompt(db_user_id: int) -> dict | None:
+    """Восстановление для рекомендации. None — COROS не подключён или данных нет."""
+    import database as db
+    if not db.get_token(db_user_id, SERVICE):
+        return None
+    return _recovery_dict(await _parsed(db_user_id))
+
+
+async def get_full_data(db_user_id: int) -> dict | None:
+    """Нагрузка и форма для рекомендации — в том же виде, что у старого COROS."""
+    import database as db
+    if not db.get_token(db_user_id, SERVICE):
+        return None
+    p = await _parsed(db_user_id)
+    if not p:
+        return None
+    fitness = {"source": "coros", "summary": "", "total_km": 0, "run_count": 0,
+               "avg_pace": "—", "avg_hr": None, "fatigue_level": "unknown"}
+    if p.get("vo2max"):
+        fitness["vo2max"] = p["vo2max"]
+        fitness["vo2max_source"] = "COROS"
+    if p.get("threshold_pace_sec"):
+        sec = int(p["threshold_pace_sec"])
+        fitness["lactate_threshold_pace"] = f"{sec // 60}:{sec % 60:02d}"
+    rec = _recovery_dict(p)
+    if rec:
+        fitness["recovery"] = rec
+        score = rec.get("recovery_score")
+        if score is not None:
+            fitness["fatigue_level"] = "fresh" if score >= 70 else "tired" if score < 40 else "normal"
+    ctl, atl = p.get("ctl"), p.get("atl")
+    if ctl is not None or atl is not None:
+        tsb = round(ctl - atl, 1) if ctl is not None and atl is not None else None
+        form = "свежий" if (tsb or 0) > 5 else "перегрузка" if (tsb or 0) < -20 else "небольшая усталость"
+        fitness["training_load"] = {
+            "source": "coros", "ctl": ctl, "atl": atl, "tsb": tsb, "form_text": form, "trend_text": "",
+            "summary": f"CTL={ctl}, ATL={atl}, TSB={tsb} ({form}) [COROS]"}
+        if tsb is not None and fitness["fatigue_level"] == "unknown":
+            fitness["fatigue_level"] = "fresh" if tsb > 5 else "tired" if tsb < -15 else "normal"
+    if p.get("sessions_48h"):
+        fitness["load_48h"] = {k: p.get(k) for k in
+                               ("sessions_48h", "total_km_48h", "last_activity_hours_ago")}
+    parts = []
+    if fitness.get("vo2max"):
+        parts.append(f"VO2max {fitness['vo2max']}")
+    if fitness.get("lactate_threshold_pace"):
+        parts.append(f"ЛП {fitness['lactate_threshold_pace']} мин/км")
+    if fitness.get("training_load"):
+        parts.append(fitness["training_load"]["summary"])
+    fitness["summary"] = " | ".join(parts) if parts else "COROS данные получены"
+    return fitness

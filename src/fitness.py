@@ -159,6 +159,14 @@ async def get_coros_fitness_data(db_user_id: int) -> dict | None:
     Получает данные атлета из COROS — аналог get_garmin_fitness_data().
     Возвращает dict, совместимый со структурой fitness для промта.
     """
+    if get_token(db_user_id, "coros_mcp"):
+        try:
+            import coros_mcp as _cm
+            data = await _cm.get_full_data(db_user_id)
+            if data:
+                return data
+        except Exception as e:
+            logger.error(f"COROS (новый) fitness data error for {db_user_id}: {e}")
     import coros as _coros
     if not get_token(db_user_id, "coros"):
         return None
