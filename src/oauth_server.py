@@ -603,7 +603,7 @@ async def _coros_callback(request: web.Request) -> web.Response:
     logger.info(f"COROS OAuth OK: telegram_id={telegram_id} db_user_id={db_user_id}")
 
     if _telegram_app:
-        asyncio.create_task(_notify_coros(telegram_id))
+        asyncio.create_task(_notify_coros(telegram_id, db_user_id))
 
     return _ok(
         "⌚",
@@ -612,15 +612,58 @@ async def _coros_callback(request: web.Request) -> web.Response:
     )
 
 
-async def _notify_coros(telegram_id: int) -> None:
-    """Сообщение пользователю и админу после успешного подключения COROS."""
+async def _notify_coros(telegram_id: int, db_user_id: int) -> None:
+    """Сообщение пользователю и админу после успешного подключения COROS.
+
+    29.09.2026: данные с часов тянем сразу, не дожидаясь ночного опроса — иначе человек
+    видит в профиле прежние числа, решает, что подключение не сработало, и вводит их руками
+    (а ручной ввод возвращает приоритет «вручную»). Якорь — как в ночной ветке: VO2max."""
+    head = "✅ COROS подключён по новой схеме — пароль больше не нужен."
+    msg = None
     try:
-        await _telegram_app.bot.send_message(
-            telegram_id,
-            "✅ COROS подключён по новой схеме — пароль больше не нужен.",
-        )
+        msg = await _telegram_app.bot.send_message(
+            telegram_id, f"{head}\n\n⏳ Загружаю данные с часов...")
     except Exception as e:
         logger.error(f"COROS notify error for {telegram_id}: {e}")
+
+    lines = [head, ""]
+    try:
+        import coros_mcp
+        from database import save_vo2max_device, save_user_profile, get_user_profile
+
+        raw = await coros_mcp.fetch_raw(db_user_id)
+        vo2max = await coros_mcp.get_vo2max(db_user_id) if raw else None
+        if vo2max is not None:
+            save_vo2max_device(db_user_id, float(vo2max), "coros_mcp")
+            if not (get_user_profile(db_user_id) or {}).get("vo2max_locked"):
+                save_user_profile(db_user_id, vo2max=vo2max, vo2max_source="auto")
+            try:
+                import zones as _zones
+                _zones.recalculate_and_save(db_user_id)
+            except Exception as _e:
+                logger.warning(f"Zones recalc error (coros connect) for {telegram_id}: {_e}")
+            lines += ["Загружено с часов:", f"📊 VO2max: {vo2max:g} мл/кг/мин",
+                      "", "Профиль обновлён — посмотри /profile"]
+        elif raw:
+            lines.append("📊 VO2max на часах не найден — укажи вручную в /profile")
+        else:
+            lines.append("Данные с часов пока не пришли — загружу при ночном обновлении.")
+        if raw:
+            try:
+                from data_normalizer import run_normalization
+                run_normalization(db_user_id)
+            except Exception as _e:
+                logger.warning(f"Normalization error (coros connect) for {telegram_id}: {_e}")
+        logger.info(f"COROS post-connect: user_id={db_user_id} raw={'да' if raw else 'нет'} vo2max={vo2max}")
+    except Exception as e:
+        logger.error(f"COROS post-connect load error for {telegram_id}: {e}")
+        lines.append("Данные с часов пока не пришли — загружу при ночном обновлении.")
+
+    if msg:
+        try:
+            await msg.edit_text("\n".join(lines))
+        except Exception as e:
+            logger.error(f"COROS notify edit error for {telegram_id}: {e}")
 
     try:
         from database import get_user_display, count_service_tokens
