@@ -605,7 +605,7 @@ def get_inactive_users() -> list:
 
 def get_all_users_with_status(notify_key: str = "") -> list:
     """Активные пользователи с флагом has_data.
-    has_data=1 если есть vo2max в профиле ИЛИ хотя бы один токен трекера (strava/garmin/coros/polar).
+    has_data=1 если есть vo2max в профиле ИЛИ хотя бы один токен трекера (strava/garmin/coros/coros_mcp/polar).
     Если указан notify_key — дополнительно фильтрует по настройке уведомлений.
     Возвращает список кортежей (telegram_id, name, username, has_data).
     """
@@ -620,7 +620,7 @@ def get_all_users_with_status(notify_key: str = "") -> list:
                        OR EXISTS (
                            SELECT 1 FROM user_tokens t
                            WHERE t.user_id = u.id
-                             AND t.service IN ('strava', 'garmin', 'coros', 'polar')
+                             AND t.service IN ('strava', 'garmin', 'coros', 'coros_mcp', 'polar')
                        )
                    ) THEN 1 ELSE 0 END AS has_data
             FROM users u

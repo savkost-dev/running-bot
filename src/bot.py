@@ -257,7 +257,7 @@ def _blocked_with_tokens() -> list:
             "WHERE p.is_active = 0 ORDER BY u.id").fetchall()
     out = []
     for uid, who, since in rows:
-        svcs = [s for s in ("strava", "polar", "garmin", "coros", "whoop") if get_token(uid, s)]
+        svcs = [s for s in ("strava", "polar", "garmin", "coros", "coros_mcp", "whoop") if get_token(uid, s)]
         if svcs:
             out.append((uid, who, svcs, (since or "")[:10]))
     return out
@@ -291,7 +291,7 @@ def _build_main_menu_content(user, db_user_id: int) -> tuple[str, InlineKeyboard
     strava  = get_token(db_user_id, "strava")
     whoop   = get_token(db_user_id, "whoop")
     garmin  = get_token(db_user_id, "garmin")
-    coros   = get_token(db_user_id, "coros")
+    coros   = get_token(db_user_id, "coros") or get_token(db_user_id, "coros_mcp")
     polar   = get_token(db_user_id, "polar")
     profile = get_user_profile(db_user_id)
     profile_ok   = bool(profile and profile.get("vo2max"))
@@ -2562,6 +2562,20 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.error(f"COROS refresh error (button) for {user.id}: {e}")
                 result_lines.append("🔴 COROS: ❌ ошибка")
 
+        # COROS новый (без пароля)
+        if get_token(db_user_id, "coros_mcp"):
+            try:
+                import coros_mcp as _cm
+                from data_normalizer import run_normalization
+                if await _cm.fetch_raw(db_user_id):
+                    run_normalization(db_user_id)
+                    result_lines.append("⌚ COROS: обновлено")
+                else:
+                    result_lines.append("⌚ COROS: данные не пришли")
+            except Exception as e:
+                logger.error(f"COROS (новый) refresh error (button) for {user.id}: {e}")
+                result_lines.append("⌚ COROS: ❌ ошибка")
+
         # Polar
         if get_token(db_user_id, "polar"):
             try:
@@ -3734,7 +3748,7 @@ def _user_has_data(db_user_id: int) -> bool:
     profile = get_user_profile(db_user_id)
     if profile and profile.get("vo2max"):
         return True
-    return any(get_token(db_user_id, s) for s in ("strava", "garmin", "coros", "polar"))
+    return any(get_token(db_user_id, s) for s in ("strava", "garmin", "coros", "coros_mcp", "polar"))
 
 
 async def _send_admin_data_block(
@@ -4116,7 +4130,7 @@ async def _send_recommendation(
         workout_dict.get("schedule", ""),
     )
     weather_line = format_weather_for_message(weather) if weather else ""
-    has_tracker = any(get_token(db_user_id, s) for s in ("garmin", "coros", "polar", "strava"))
+    has_tracker = any(get_token(db_user_id, s) for s in ("garmin", "coros", "coros_mcp", "polar", "strava"))
 
     # Числа/структура — формулами (детерминированно)
     if long:
@@ -4356,6 +4370,7 @@ async def _send_workout_recommendation(
     has_tracker = bool(
         get_token(db_user_id, "garmin") or
         get_token(db_user_id, "coros") or
+        get_token(db_user_id, "coros_mcp") or
         get_token(db_user_id, "polar") or
         get_token(db_user_id, "strava")
     )
@@ -4664,6 +4679,7 @@ async def _send_long_run_recommendation(
     has_tracker = bool(
         get_token(db_user_id, "garmin") or
         get_token(db_user_id, "coros") or
+        get_token(db_user_id, "coros_mcp") or
         get_token(db_user_id, "polar") or
         get_token(db_user_id, "strava")
     )
