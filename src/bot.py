@@ -4963,7 +4963,7 @@ async def scheduled_new_workout_check(context: ContextTypes.DEFAULT_TYPE):
 
 def _night_services(db_user_id: int) -> list[str]:
     """Ночные сервисы юзера (дают данные за сон). Strava не в счёт."""
-    return [s for s in ("garmin", "coros", "polar", "whoop") if get_token(db_user_id, s)]
+    return [s for s in ("garmin", "coros_mcp", "coros", "polar", "whoop") if get_token(db_user_id, s)]
 
 
 def _night_ready(db_user_id: int, today_msk: str) -> bool | None:
@@ -5010,6 +5010,11 @@ def _night_ready(db_user_id: int, today_msk: str) -> bool | None:
     #     hrv = (info.get("sleepHrvData") or {}).get("avgSleepHrv")
     #     if hrv and float(hrv) > 0:
     #         return True
+    if "coros_mcp" in svcs:
+        import coros_mcp as _cm
+        h = _cm.parse_hrv((_raw("coros_mcp") or {}).get("querySleepHrv"))
+        if h.get("hrv") and h.get("hrv_date") == today_msk:
+            return True
     if "coros" in svcs:
         dash = (_raw("coros") or {}).get("dashboard") or {}
         info = ((dash.get("data") or {}).get("summaryInfo")) or {}
@@ -5168,7 +5173,20 @@ def _collect_morning_snapshot(db_user_id: int) -> dict:
             if snap["wake_at"] is None and n.get("sleep_end_time"):
                 snap["wake_at"] = str(n["sleep_end_time"])
 
-    # ── COROS (суточное recoveryPct + HRV/RHR; времени пробуждения нет) ──
+    # ── COROS новый (восстановление, HRV, пульс покоя, сон; времени пробуждения нет) ──
+    if get_token(db_user_id, "coros_mcp"):
+        import coros_mcp as _cm
+        c = _cm.parse_raw(_raw("coros_mcp") or {})
+        if snap["bb"] is None and c.get("recovery_pct") is not None:
+            snap["bb"] = max(0, min(100, int(c["recovery_pct"])))
+        if snap["hrv"] is None and c.get("hrv"):
+            snap["hrv"] = float(c["hrv"])
+        if snap["rhr"] is None and c.get("rhr"):
+            snap["rhr"] = int(c["rhr"])
+        if snap["sleep_h"] is None and c.get("sleep_hours"):
+            snap["sleep_h"] = c["sleep_hours"]
+
+    # ── COROS старый (суточное recoveryPct + HRV/RHR; времени пробуждения нет) ──
     if get_token(db_user_id, "coros"):
         info = (((_raw("coros") or {}).get("dashboard") or {}).get("data") or {}).get("summaryInfo") or {}
         # Суточное восстановление — то же поле, что берёт нормализатор (recoveryPct)

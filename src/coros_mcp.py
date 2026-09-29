@@ -430,13 +430,17 @@ def parse_hrv(text) -> dict:
         return {}
     # Сводка идёт от свежей даты к старой — нужен первый блок с числом
     out = {}
+    day = None
     for line in text.split("\n"):
         line = line.strip()
-        if line.startswith("HRV Avg:") and "hrv" not in out:
+        if len(line) == 11 and line.endswith(":") and line[4] == "-" and line[7] == "-":
+            day = line[:10]                      # "2026-09-29:" — день пробуждения
+        elif line.startswith("HRV Avg:") and "hrv" not in out:
             out["hrv"] = _num(line.split(":", 1)[1].replace("ms", "").split("\u2014")[0])
+            out["hrv_date"] = day
         elif line.startswith("Baseline:") and "hrv_baseline" not in out:
             out["hrv_baseline"] = _num(line.split(":", 1)[1].replace("ms", ""))
-        if len(out) == 2:
+        if "hrv" in out and "hrv_baseline" in out:
             break
     return out
 
