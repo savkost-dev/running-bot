@@ -134,6 +134,10 @@ def _vdot_from_predictions(predictions: dict) -> float | None:
 # План: k(VO2max) по наблюдённым парам VO2max↔ЛП. См. PROCESS_MAP.md.
 K_VO2MAX = 0.93
 
+# Названия источников для показа пользователю (в базе лежат технические имена).
+SOURCE_LABELS = {"garmin": "Garmin", "coros": "COROS", "coros_mcp": "COROS", "polar": "Polar",
+                 "auto": "с часов", "запасной": "вручную, с часов данных нет"}
+
 
 def resolve_anchor(profile: dict | None) -> dict | None:
     """Точка отсчёта для зон по лесенке приоритетов (решение 05.08.2026):
@@ -160,15 +164,17 @@ def resolve_anchor(profile: dict | None) -> dict | None:
         except (TypeError, ValueError):
             vdot = None
         if vdot and vdot > 0:
+            _s = p.get("vo2max_source")
             src = (((p.get("vo2max_resolved") or {}).get("source") or "вручную")
-                   if vo2_manual else (p.get("vo2max_source") or "часы"))
+                   if vo2_manual else SOURCE_LABELS.get(_s, _s or "часы"))
             return {"kind": "vo2max_manual" if vo2_manual else "vo2max_device", "vdot": vdot,
                     "text": f"VO2max {vo2} ({src}) × {K_VO2MAX}"}
     if lt:
         vdot = _vdot_from_threshold_pace(lt)
         if vdot:
             return {"kind": "lt_device", "vdot": vdot,
-                    "text": f"лактатный порог {lt} ({p.get('lactate_source') or 'часы'})"}
+                    "text": f"лактатный порог {lt} "
+                            f"({SOURCE_LABELS.get(p.get('lactate_source'), p.get('lactate_source') or 'часы')})"}
     return None
 
 

@@ -937,15 +937,16 @@ def _vo2max_tag(profile: dict) -> str:
     source = profile.get("vo2max_source")
     updated = profile.get("vo2max_updated_at") or profile.get("updated_at") or ""
     date_str = updated[:10] if updated else ""
-    if source == "garmin":
+    if source in ("garmin", "coros", "coros_mcp", "polar"):
         from datetime import datetime as _dt
+        label = zones.SOURCE_LABELS[source]
         try:
             days = (_dt.now() - _dt.fromisoformat(updated)).days if updated else 999
         except Exception:
             days = 999
         if days > 30:
-            return f"Garmin · {date_str} · устарело"
-        return f"Garmin · {date_str}"
+            return f"{label} · {date_str} · устарело"
+        return f"{label} · {date_str}"
     if source == "manual":
         note = ((profile.get("vo2max_resolved") or {}).get("manual") or {}).get("note")
         return f"из забега · {note}" if note else "вручную"
@@ -1020,7 +1021,7 @@ def _build_profile_text(profile: dict | None, db_user_id: int | None = None) -> 
         lt_source = profile.get("lactate_source")
         lt_lock = " 🔒" if profile.get("lactate_locked") else ""
         if lt_source:
-            lt += f"  ({'вручную' if lt_source == 'manual' else 'из сервиса'}){lt_lock}"
+            lt += f"  ({'вручную' if lt_source in ('manual', 'запасной') else 'из сервиса'}){lt_lock}"
         elif lt_lock:
             lt += f"  {lt_lock.strip()}"
         # Если зоны считаются НЕ от этого ЛП — честно помечаем, что он справочный
