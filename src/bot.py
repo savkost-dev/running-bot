@@ -300,22 +300,24 @@ def _build_main_menu_content(user, db_user_id: int) -> tuple[str, InlineKeyboard
     all_set      = profile_ok and fitness_ok and recovery_ok
 
     if all_set:
+        # Строки «подключён» — по человеку: каждый его сервис. Старый и новый COROS — одна строка.
         status_lines = ["✅ Профиль заполнен"]
-        if strava:
-            status_lines.append("✅ Strava подключена")
         if garmin:
             status_lines.append("✅ Garmin подключён")
+        if coros:
+            status_lines.append("✅ COROS подключён")
+        if polar:
+            status_lines.append("✅ Polar подключён")
+        if strava:
+            status_lines.append("✅ Strava подключена")
         if whoop:
             status_lines.append("✅ Whoop подключён")
-
-        fitness_src   = "CTL/ATL/TSB (Strava)" if strava else "Training Load (Garmin)"
-        recovery_name = "Whoop" if whoop else "Garmin"
 
         text = (
             f"Привет, {user.first_name}! 👋\n\n"
             + "\n".join(status_lines) + "\n\n"
             "Что умею:\n"
-            f"🏃 Анализирую форму ({fitness_src}), восстановление и рекомендую группу "
+            "🏃 Анализирую форму и восстановление по данным Garmin, COROS, Polar, Strava и Whoop и рекомендую группу "
             "для тренировки вт/пт с процентной шкалой подходимости\n"
             "🕐 То же самое для воскресного Long Run с рекомендацией стратегии "
             "(ровный темп или прогрессия)\n"
