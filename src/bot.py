@@ -5201,8 +5201,13 @@ def _collect_morning_snapshot(db_user_id: int) -> dict:
             snap["hrv"] = float(c["hrv"])
         if snap["rhr"] is None and c.get("rhr"):
             snap["rhr"] = int(c["rhr"])
-        if snap["sleep_h"] is None and c.get("sleep_hours"):
-            snap["sleep_h"] = c["sleep_hours"]
+        # Сон и пробуждение — только если ночь сегодняшняя, иначе в показатели попал бы старый сон
+        _today = datetime.now(timezone(timedelta(hours=3))).strftime("%Y-%m-%d")
+        if str(c.get("wake_at") or "").startswith(_today):
+            if snap["sleep_h"] is None and c.get("sleep_hours"):
+                snap["sleep_h"] = c["sleep_hours"]
+            if snap["wake_at"] is None:
+                snap["wake_at"] = c["wake_at"]
 
     # ── COROS старый (суточное recoveryPct + HRV/RHR; времени пробуждения нет) ──
     if get_token(db_user_id, "coros"):

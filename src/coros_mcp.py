@@ -31,7 +31,7 @@ TOOLS = [
     ("queryRecoveryStatus", {}),
     ("querySleepHrv", {}),
     ("queryRestingHeartRate", {}),
-    ("querySleepData", {}),
+    ("querySleepOverview", {}),
     ("querySportRecords", "RECENT_ACTIVITIES"),
 ]
 
@@ -478,13 +478,16 @@ def parse_sleep(text) -> dict:
     text = _decode(text)
     if not text or "No sleep data" in text:
         return {}
-    blocks = [b for b in text.split("\n\n") if "Sleep Score" in b or "Main Sleep:" in b]
+    blocks = [b for b in text.split("\n\n") if "Sleep Score" in b or "Main Sleep" in b]
     if not blocks:
         return {}
     data = _kv(blocks[-1])
+    window = data.get("Main Sleep Window") or ""          # "2026-09-29 01:01 - 2026-09-29 08:00"
+    wake_at = window.split(" - ")[-1].strip() if " - " in window else None
     return {
         "sleep_score": int(_num(data.get("Sleep Score"))) if _num(data.get("Sleep Score")) else None,
-        "sleep_hours": _sleep_hours(data.get("Main Sleep")),
+        "sleep_hours": _sleep_hours(data.get("Main Sleep (asleep)") or data.get("Main Sleep")),
+        "wake_at": wake_at,                                # время пробуждения последней ночи
     }
 
 
@@ -665,7 +668,7 @@ def parse_raw(raw: dict) -> dict:
     out.update(parse_recovery(raw.get("queryRecoveryStatus")))
     out.update(parse_hrv(raw.get("querySleepHrv")))
     out.update(parse_rhr(raw.get("queryRestingHeartRate")))
-    out.update(parse_sleep(raw.get("querySleepData")))
+    out.update(parse_sleep(raw.get("querySleepOverview")))
     out.update(parse_activities(raw.get("querySportRecords")))
     return out
 
