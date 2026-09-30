@@ -278,20 +278,6 @@ async def _get_unified_recovery(db_user_id: int, force_fresh: bool = True) -> di
             or row.get("updated_at"))
         # Для Garmin конец наблюдения = wellnessEndTimeLocal; иначе синк
         _obs_end = _garmin_observation_end(db_user_id)
-        if not _obs_end and get_token(db_user_id, "coros_mcp"):
-            # У COROS — время сегодняшнего пробуждения; если ночи за сегодня нет, остаётся время загрузки
-            try:
-                import json as _json
-                from datetime import datetime as _dt, timezone as _tz, timedelta as _td
-                from database import get_raw_service_data
-                import coros_mcp as _cm
-                _row = get_raw_service_data(db_user_id, "coros_mcp")
-                _wake = _cm.parse_sleep(
-                    (_json.loads(_row["raw_json"]) if _row else {}).get("querySleepOverview")).get("wake_at")
-                if _wake and _wake.startswith(_dt.now(_tz(_td(hours=3))).strftime("%Y-%m-%d")):
-                    _obs_end = _wake
-            except Exception:
-                pass
         res = {
             "source":                  "unified_cache",
             "recovery_score":          u.s3_recovery_daily,
