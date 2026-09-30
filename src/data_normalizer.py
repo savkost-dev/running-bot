@@ -1046,6 +1046,8 @@ def run_normalization(user_id: int) -> "UnifiedUserData | None":
             u_coros_mcp = normalize_coros_mcp(parsed)
             if parsed.get("date"):
                 data_dates["coros_mcp_measured"] = parsed["date"]
+            if parsed.get("synced_at"):
+                data_dates["coros_mcp_synced_at"] = parsed["synced_at"]
         except Exception as e:
             logger.warning(f"normalize_coros_mcp error user={user_id}: {e}")
 

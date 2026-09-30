@@ -32,6 +32,7 @@ TOOLS = [
     ("querySleepHrv", {}),
     ("queryRestingHeartRate", {}),
     ("querySleepOverview", {}),
+    ("queryStressTimeSeries", {"days": 2}),
     ("querySportRecords", "RECENT_ACTIVITIES"),
 ]
 
@@ -659,6 +660,20 @@ async def get_vo2max(db_user_id: int) -> float | None:
     return float(value) if value else None
 
 
+def parse_stress(text) -> dict:
+    """Ряд стресса (точки каждые 5 минут). Берём только отметку последней точки —
+    до какого момента часы передали данные. Прямого «времени синхронизации» COROS не отдаёт,
+    это ближайшее к нему (см. ANCHORS.md, раздел 12)."""
+    text = _decode(text)
+    if not text:
+        return {}
+    stamps = [int(x) for x in re.findall(r"timestamp=(\d{9,11})", text)]
+    if not stamps:
+        return {}
+    from datetime import datetime, timezone
+    return {"synced_at": datetime.fromtimestamp(max(stamps), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+
+
 def parse_raw(raw: dict) -> dict:
     """Слой 2: сырьё из raw_service_data → плоский набор полей."""
     raw = raw or {}
@@ -669,6 +684,7 @@ def parse_raw(raw: dict) -> dict:
     out.update(parse_hrv(raw.get("querySleepHrv")))
     out.update(parse_rhr(raw.get("queryRestingHeartRate")))
     out.update(parse_sleep(raw.get("querySleepOverview")))
+    out.update(parse_stress(raw.get("queryStressTimeSeries")))
     out.update(parse_activities(raw.get("querySportRecords")))
     return out
 
@@ -715,7 +731,11 @@ def _recovery_dict(p: dict) -> dict | None:
                      ("sleep_hours", "sleep_hours"), ("sleep_score", "sleep_score")):
         if p.get(src) is not None:
             out[dst] = p[src]
-    return out if len(out) > 1 else None
+    if len(out) <= 1:
+        return None
+    if p.get("synced_at"):
+        out["synced_at"] = p["synced_at"]      # как у Garmin: до какого момента есть данные с часов
+    return out
 
 
 async def get_recovery_for_prompt(db_user_id: int) -> dict | None:

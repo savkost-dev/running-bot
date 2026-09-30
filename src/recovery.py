@@ -269,10 +269,12 @@ async def _get_unified_recovery(db_user_id: int, force_fresh: bool = True) -> di
             return await _get_recovery_data(db_user_id, force_fresh=False)
         u = UnifiedUserData.from_json(row["unified_json"])
         dd = u.data_dates or {}
-        # Новый COROS — перед старым; время загрузки хранится в UTC, помечаем Z для перевода в МСК
+        # Новый COROS — перед старым. Сначала время синхронизации (последняя точка ряда стресса),
+        # если его нет — время загрузки (хранится в UTC, помечаем Z для перевода в МСК).
         _cm_fetched = dd.get("coros_mcp_fetched")
         _data_fetched = (dd.get("garmin_synced_at")
-            or dd.get("garmin_fetched") or (f"{_cm_fetched}Z" if _cm_fetched else None)
+            or dd.get("garmin_fetched") or dd.get("coros_mcp_synced_at")
+            or (f"{_cm_fetched}Z" if _cm_fetched else None)
             or dd.get("coros_fetched")
             or dd.get("polar_fetched") or dd.get("strava_fetched")
             or row.get("updated_at"))
