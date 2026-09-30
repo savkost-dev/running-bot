@@ -689,6 +689,17 @@ async def _parsed(db_user_id: int, max_age_min: int = 30) -> dict:
             raw = None
     if raw is None:
         raw = await fetch_raw(db_user_id)
+    if raw:
+        # Сводка не должна быть старше ответа часов: расчётная готовность (coros-calc)
+        # считается при сборке сводки, а в дни без тренировки она сама не пересобирается.
+        try:
+            row = db.get_raw_service_data(db_user_id, SERVICE)
+            uni = db.get_unified_data(db_user_id, max_age_hours=10 ** 6)
+            if row and (not uni or str(uni["updated_at"]) < str(row["fetched_at"])):
+                from data_normalizer import run_normalization
+                run_normalization(db_user_id)
+        except Exception as e:
+            logger.warning(f"COROS MCP: пересборка сводки не удалась user_id={db_user_id}: {e}")
     return parse_raw(raw) if raw else {}
 
 
