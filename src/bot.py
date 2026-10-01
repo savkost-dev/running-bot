@@ -28,7 +28,7 @@ from database import (
     user_exists, log_activity, get_bot_stats, count_users_with_service,
     get_activity_daily, get_activity_top, get_activity_users, get_activity_report,
     get_report_users,
-    delete_token, purge_coros_data,
+    purge_service_data,
     get_all_users_with_details, get_users_with_service_full, get_users_with_profile_full,
     save_feedback, save_rating, get_recent_ratings, get_recent_feedbacks,
     save_workout_analysis, get_workout_analysis, get_latest_workout_analysis,
@@ -2440,16 +2440,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         svc = query.data[len("disc_yes_"):]
         db_user_id = get_or_create_user(user.id, user.full_name, user.username)
         revoked = await _revoke_service(db_user_id, svc)
-        if svc in ("coros", "coros_mcp"):
-            # COROS: вычищаем всё, что пришло из сервиса, и пересобираем сводку
-            purge_coros_data(db_user_id, svc)
-            try:
-                from data_normalizer import run_normalization
-                run_normalization(db_user_id)
-            except Exception as e:
-                logger.warning(f"Пересборка сводки после отключения COROS user {db_user_id}: {e}")
-        else:
-            delete_token(db_user_id, svc)
+        # Вычищаем всё, что пришло из сервиса, и пересобираем сводку из оставшихся
+        purge_service_data(db_user_id, svc)
+        try:
+            from data_normalizer import run_normalization
+            run_normalization(db_user_id)
+        except Exception as e:
+            logger.warning(f"Пересборка сводки после отключения {svc} user {db_user_id}: {e}")
         done_msg = _svc_done_msg(svc)
         logger.info(f"Сервис {svc} отключён для user {db_user_id} "
                     f"(отзыв у сервиса: {'да' if revoked else 'нет'})")
@@ -2471,17 +2468,22 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for uid, who, svcs, _since in items:
             for s in svcs:
                 if s not in ("strava", "polar"):
-                    delete_token(uid, s)
+                    purge_service_data(uid, s)
                     ok += 1
-                    report.append(f"✅ @{who} — {s}: ключ удалён")
+                    report.append(f"✅ @{who} — {s}: подключение и данные сервиса удалены")
                     continue
                 if await _revoke_service(uid, s):
-                    delete_token(uid, s)
+                    purge_service_data(uid, s)
                     ok += 1
-                    report.append(f"✅ @{who} — {s}: отозвано, ключ удалён")
+                    report.append(f"✅ @{who} — {s}: отозвано, подключение и данные сервиса удалены")
                 else:
                     fail += 1
                     report.append(f"⚠️ @{who} — {s}: не вышло, ключ оставлен")
+            try:
+                from data_normalizer import run_normalization
+                run_normalization(uid)
+            except Exception as e:
+                logger.warning(f"cleanup: пересборка сводки user {uid}: {e}")
         report.append(f"\nИтого: отозвано {ok}, не вышло {fail}")
         logger.info(f"cleanup: отозвано {ok}, ошибок {fail}")
         await query.edit_message_text("\n".join(report)[:4000])

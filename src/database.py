@@ -619,6 +619,46 @@ def purge_coros_data(user_id: int, service: str = "coros") -> None:
         conn.execute("DELETE FROM unified_cache WHERE user_id = ?", (user_id,))
 
 
+def purge_service_data(user_id: int, service: str) -> None:
+    """Полная очистка сервиса при отключении — единая точка для кнопки отключения у пользователя
+    и кнопки очистки у админа. Правило (админ, 01.10.2026): удаляется всё, что пришло из сервиса
+    и относится к подключению; тренировки, зоны и ручные значения пользователя остаются.
+
+    strava      → purge_strava_data (политика Strava, вместе с athlete_cache).
+    coros, coros_mcp → purge_coros_data.
+    garmin      → токен, email/пароль, ответ часов, garmin_recovery_cache, значения с часов с источником garmin,
+                  отметка «пароль устарел».
+    polar       → токен, polar_user_id, ответ, значения с часов с источником polar.
+    whoop       → токен, ответ.
+    Строка unified_cache удаляется, вызывающий пересобирает её из оставшихся сервисов."""
+    if service == "strava":
+        purge_strava_data(user_id)
+        return
+    if service in ("coros", "coros_mcp"):
+        purge_coros_data(user_id, service)
+        return
+    with get_connection() as conn:
+        conn.execute("DELETE FROM user_tokens WHERE user_id = ? AND service = ?", (user_id, service))
+        conn.execute("DELETE FROM raw_service_data WHERE user_id = ? AND service = ?", (user_id, service))
+        conn.execute(
+            "UPDATE user_profile SET vo2max = CASE WHEN vo2max_manual IS NULL THEN NULL ELSE vo2max END, "
+            "vo2max_source = CASE WHEN vo2max_manual IS NULL THEN NULL ELSE vo2max_source END, "
+            "vo2max_device = NULL, vo2max_device_source = NULL, vo2max_device_at = NULL "
+            "WHERE user_id = ? AND vo2max_device_source = ?", (user_id, service))
+        conn.execute(
+            "UPDATE user_profile SET lt_pace_device = NULL, lt_hr_device = NULL, "
+            "lt_device_source = NULL, lt_device_at = NULL "
+            "WHERE user_id = ? AND lt_device_source = ?", (user_id, service))
+        if service == "garmin":
+            conn.execute("UPDATE user_profile SET garmin_email = NULL, garmin_password = NULL WHERE user_id = ?",
+                         (user_id,))
+            conn.execute("DELETE FROM garmin_recovery_cache WHERE user_id = ?", (user_id,))
+            conn.execute("DELETE FROM bot_settings WHERE key = ?", (f"stale_notice_{user_id}_garmin",))
+        elif service == "polar":
+            conn.execute("UPDATE user_profile SET polar_user_id = NULL WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM unified_cache WHERE user_id = ?", (user_id,))
+
+
 def get_inactive_users() -> list:
     """Пользователи с is_active=0 (заблокировали бота)."""
     with get_connection() as conn:
