@@ -592,6 +592,21 @@ def purge_strava_data(user_id: int) -> None:
         conn.execute("DELETE FROM unified_cache WHERE user_id = ?", (user_id,))
 
 
+def purge_coros_data(user_id: int) -> None:
+    """Полная очистка старого COROS (подключение по паролю) при отключении.
+    Правило (админ, 01.10.2026): после отключения не должно оставаться ничего,
+    что относится к подключению. Удаляет: токен; email, пароль и регион из профиля;
+    raw_service_data('coros'); отметку «пароль устарел» в bot_settings; строку
+    unified_cache (вызывающий пересобирает её из оставшихся сервисов)."""
+    with get_connection() as conn:
+        conn.execute("DELETE FROM user_tokens WHERE user_id = ? AND service = 'coros'", (user_id,))
+        conn.execute("DELETE FROM raw_service_data WHERE user_id = ? AND service = 'coros'", (user_id,))
+        conn.execute("UPDATE user_profile SET coros_email = NULL, coros_password = NULL, "
+                     "coros_region = NULL WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM bot_settings WHERE key = ?", (f"stale_notice_{user_id}_coros",))
+        conn.execute("DELETE FROM unified_cache WHERE user_id = ?", (user_id,))
+
+
 def get_inactive_users() -> list:
     """Пользователи с is_active=0 (заблокировали бота)."""
     with get_connection() as conn:

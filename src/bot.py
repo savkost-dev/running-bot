@@ -28,7 +28,7 @@ from database import (
     user_exists, log_activity, get_bot_stats, count_users_with_service,
     get_activity_daily, get_activity_top, get_activity_users, get_activity_report,
     get_report_users,
-    delete_token,
+    delete_token, purge_coros_data,
     get_all_users_with_details, get_users_with_service_full, get_users_with_profile_full,
     save_feedback, save_rating, get_recent_ratings, get_recent_feedbacks,
     save_workout_analysis, get_workout_analysis, get_latest_workout_analysis,
@@ -2440,7 +2440,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         svc = query.data[len("disc_yes_"):]
         db_user_id = get_or_create_user(user.id, user.full_name, user.username)
         revoked = await _revoke_service(db_user_id, svc)
-        delete_token(db_user_id, svc)
+        if svc == "coros":
+            # Старый COROS: вычищаем всё, что относится к подключению, и пересобираем сводку
+            purge_coros_data(db_user_id)
+            try:
+                from data_normalizer import run_normalization
+                run_normalization(db_user_id)
+            except Exception as e:
+                logger.warning(f"Пересборка сводки после отключения COROS user {db_user_id}: {e}")
+        else:
+            delete_token(db_user_id, svc)
         done_msg = _svc_done_msg(svc)
         logger.info(f"Сервис {svc} отключён для user {db_user_id} "
                     f"(отзыв у сервиса: {'да' if revoked else 'нет'})")
@@ -5676,12 +5685,13 @@ async def _check_stale_credentials(context: ContextTypes.DEFAULT_TYPE) -> None:
                        r.fetched_at
                 FROM users u
                 JOIN user_profile p ON p.user_id = u.id AND p.{col} IS NOT NULL
+                JOIN user_tokens t ON t.user_id = u.id AND t.service = ?
                 LEFT JOIN user_preferences pref ON pref.user_id = u.id
                 LEFT JOIN raw_service_data r ON r.user_id = u.id AND r.service = ?
                 WHERE (pref.is_active IS NULL OR pref.is_active = 1)
                   AND (r.fetched_at IS NULL
                        OR r.fetched_at < datetime('now', '-72 hours'))
-            """, (svc,)).fetchall()
+            """, (svc, svc)).fetchall()
             for uid, tid, uname, fat in rows:
                 admin_lines.append(
                     f"  {_svc_name(svc)}: @{uname or uid} — сырьё от {fat or 'никогда'}")
