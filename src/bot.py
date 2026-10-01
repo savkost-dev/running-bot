@@ -2440,9 +2440,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         svc = query.data[len("disc_yes_"):]
         db_user_id = get_or_create_user(user.id, user.full_name, user.username)
         revoked = await _revoke_service(db_user_id, svc)
-        if svc == "coros":
-            # Старый COROS: вычищаем всё, что относится к подключению, и пересобираем сводку
-            purge_coros_data(db_user_id)
+        if svc in ("coros", "coros_mcp"):
+            # COROS: вычищаем всё, что пришло из сервиса, и пересобираем сводку
+            purge_coros_data(db_user_id, svc)
             try:
                 from data_normalizer import run_normalization
                 run_normalization(db_user_id)

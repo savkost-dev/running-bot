@@ -592,18 +592,30 @@ def purge_strava_data(user_id: int) -> None:
         conn.execute("DELETE FROM unified_cache WHERE user_id = ?", (user_id,))
 
 
-def purge_coros_data(user_id: int) -> None:
-    """Полная очистка старого COROS (подключение по паролю) при отключении.
-    Правило (админ, 01.10.2026): после отключения не должно оставаться ничего,
-    что относится к подключению. Удаляет: токен; email, пароль и регион из профиля;
-    raw_service_data('coros'); отметку «пароль устарел» в bot_settings; строку
-    unified_cache (вызывающий пересобирает её из оставшихся сервисов)."""
+def purge_coros_data(user_id: int, service: str = "coros") -> None:
+    """Полная очистка COROS при отключении: service = 'coros' (по паролю) или 'coros_mcp' (без пароля).
+    Правило (админ, 01.10.2026): после отключения не должно оставаться ничего, что пришло из сервиса.
+    Удаляет: токен; ответ часов raw_service_data; VO2max и порог с часов, если их источник — этот сервис
+    (ручные значения и зоны остаются); строку unified_cache (вызывающий пересобирает её из оставшихся
+    сервисов). Для старого COROS дополнительно: email, пароль, регион, отметку «пароль устарел»."""
     with get_connection() as conn:
-        conn.execute("DELETE FROM user_tokens WHERE user_id = ? AND service = 'coros'", (user_id,))
-        conn.execute("DELETE FROM raw_service_data WHERE user_id = ? AND service = 'coros'", (user_id,))
-        conn.execute("UPDATE user_profile SET coros_email = NULL, coros_password = NULL, "
-                     "coros_region = NULL WHERE user_id = ?", (user_id,))
-        conn.execute("DELETE FROM bot_settings WHERE key = ?", (f"stale_notice_{user_id}_coros",))
+        conn.execute("DELETE FROM user_tokens WHERE user_id = ? AND service = ?", (user_id, service))
+        conn.execute("DELETE FROM raw_service_data WHERE user_id = ? AND service = ?", (user_id, service))
+        # Значения с часов этого сервиса. Поле старой схемы vo2max чистим только если ручного значения нет:
+        # иначе при чтении оно и так перекрывается ручным.
+        conn.execute(
+            "UPDATE user_profile SET vo2max = CASE WHEN vo2max_manual IS NULL THEN NULL ELSE vo2max END, "
+            "vo2max_source = CASE WHEN vo2max_manual IS NULL THEN NULL ELSE vo2max_source END, "
+            "vo2max_device = NULL, vo2max_device_source = NULL, vo2max_device_at = NULL "
+            "WHERE user_id = ? AND vo2max_device_source = ?", (user_id, service))
+        conn.execute(
+            "UPDATE user_profile SET lt_pace_device = NULL, lt_hr_device = NULL, "
+            "lt_device_source = NULL, lt_device_at = NULL "
+            "WHERE user_id = ? AND lt_device_source = ?", (user_id, service))
+        if service == "coros":
+            conn.execute("UPDATE user_profile SET coros_email = NULL, coros_password = NULL, "
+                         "coros_region = NULL WHERE user_id = ?", (user_id,))
+            conn.execute("DELETE FROM bot_settings WHERE key = ?", (f"stale_notice_{user_id}_coros",))
         conn.execute("DELETE FROM unified_cache WHERE user_id = ?", (user_id,))
 
 
