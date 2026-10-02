@@ -2941,12 +2941,18 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
             data["wu_msg_id"] = None
         if data["warmup"]:
+            # 02.10.2026: у COROS после последнего отрезка остаётся отдых блока (Garmin его пропускает) —
+            # предупреждаем, чтобы не ждали заминку сразу.
+            _has_coros = bool(get_token(get_or_create_user(user.id, user.full_name, user.username), "coros_mcp"))
+            _coros_note = ("• На COROS после последнего отрезка часы покажут ещё один отдых — "
+                           "это уже заминка, просто беги дальше.\n") if _has_coros else ""
             _wu_msg = await context.bot.send_message(
                 user.id,
                 "Разминка и заминка будут добавлены в тренировку как шаги без темпа и длины.\n\n"
                 "• Во время разминки можно ставить часы на паузу.\n"
-                "• Перед работой сними с паузы и нажми Lap — часы перейдут к рабочим отрезкам.\n"
+                "• Перед работой сними с паузы и нажми кнопку круга (Lap) — часы перейдут к рабочим отрезкам.\n"
                 "• Дальше ничего не нажимай: когда работа закончится, часы сами перейдут в заминку.\n"
+                + _coros_note +
                 "• По окончании заминки нажми Stop.\n\n"
                 "Теперь выбери группу для загрузки.")
             data["wu_msg_id"] = _wu_msg.message_id
@@ -2984,16 +2990,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # 17.08.2026: грузим СРАЗУ при выборе группы — промежуточная кнопка убрана
             # (нажатие номера группы = решение, второе подтверждение излишне).
             db_user_id = get_or_create_user(user.id, user.full_name, user.username)
-            if not get_token(db_user_id, "garmin"):
+            _targets = _upload_targets(db_user_id, long=(data.get("type") == "long"))
+            if not _targets:
                 await context.bot.send_message(
                     user.id,
-                    f"⌚ <b>{fname}</b> готова, но Garmin не подключён.\n"
-                    "Используй /connect_garmin и выбери группу заново.",
+                    f"⌚ <b>{fname}</b> готова, но часы не подключены.\n"
+                    "Используй /connect_garmin или /connect_coros и выбери группу заново.",
                     parse_mode="HTML",
                     reply_markup=_add_main_menu_btn(None))
                 return
-            from garmin import upload_workout as garmin_upload_workout
-            # 13.09.2026: в календарь Garmin — только тренировки с разминкой/заминкой и только на сегодня или будущее.
+            # 13.09.2026: в календарь — только на сегодня или будущее.
             _sched = None
             if data.get("calendar", True) and wdate:
                 try:
@@ -3001,19 +3007,44 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         _sched = wdate
                 except ValueError:
                     _sched = None
-            ok = await garmin_upload_workout(db_user_id, wkt, schedule_date=_sched)
-            if ok:
+            _wname = fname.removesuffix('.json')
+            _lines: list[str] = []
+            _failed: list[str] = []
+            if "Garmin" in _targets:
+                from garmin import upload_workout as garmin_upload_workout
+                if await garmin_upload_workout(db_user_id, wkt, schedule_date=_sched):
+                    _lines.append("Garmin: отправлена" + (f", в календаре на {_sched[8:]}.{_sched[5:7]}" if _sched else ""))
+                else:
+                    _failed.append("Garmin")
+            if "COROS" in _targets:
+                # 02.10.2026: COROS без пароля — тот же Garmin JSON переводится в course COROS
+                # (fit_generator.coros_course_from_garmin): внутри блоков один в один, в конце остаётся
+                # отдых, который Garmin пропускает. На дату — createScheduledWorkout, иначе в библиотеку.
+                import coros_mcp as _cm_up
+                from fit_generator import coros_course_from_garmin
+                _course = coros_course_from_garmin(wkt, (data.get("analysis") or {}).get("summary"))
+                _res = await _cm_up.upload_workout(db_user_id, _course, schedule_date=_sched)
+                if _res == _cm_up.UPLOAD_SCHEDULED:
+                    _lines.append(f"COROS: поставлена в расписание на {_sched[8:]}.{_sched[5:7]}")
+                elif _res == _cm_up.UPLOAD_EXISTS:
+                    _lines.append(f"COROS: уже стоит в расписании на {_sched[8:]}.{_sched[5:7]}, вторую не ставлю")
+                elif _res == _cm_up.UPLOAD_LIBRARY:
+                    _lines.append("COROS: сохранена в библиотеку тренировок")
+                else:
+                    _failed.append("COROS")
+            if _lines:
                 await context.bot.send_message(
                     user.id,
                     f"✅ <b>Тренировка отправлена в часы!</b>\n\n"
-                    f"⌚ {fname.removesuffix('.json')}\n\n"
-                    f"Синхронизируй часы — тренировка появится в списке тренировок.",
+                    f"⌚ {_wname}\n" + "\n".join(f"• {l}" for l in _lines) +
+                    (f"\n\n❌ Не удалось загрузить в {', '.join(_failed)} — попробуй ещё раз через минуту." if _failed else "") +
+                    "\n\nСинхронизируй часы — тренировка появится в списке тренировок.",
                     parse_mode="HTML",
                     reply_markup=_add_main_menu_btn(None))
             else:
                 await context.bot.send_message(
                     user.id,
-                    f"❌ Не удалось загрузить {fname} в Garmin — попробуй ещё раз через минуту.",
+                    f"❌ Не удалось загрузить {fname} в {', '.join(_failed)} — попробуй ещё раз через минуту.",
                     reply_markup=InlineKeyboardMarkup([[
                         InlineKeyboardButton("🔁 Повторить", callback_data="fit_up"),
                     ]]))
@@ -3769,8 +3800,10 @@ async def _send_admin_data_block(
     db_user_id: int,
     recovery: dict | None,
     context: ContextTypes.DEFAULT_TYPE,
+    workout_date: str | None = None,
 ) -> None:
-    """Админу — отдельным сообщением: снимок на утро (из базы) + текущие данные (на лету).
+    """Админу — отдельным сообщением: снимок на утро (из базы) + текущие данные (на лету)
+    + последняя пробежка и дни простоя до даты тренировки (02.10.2026, шаг 1 простоя).
     Вызывается в конце каждой рекомендации (A и B). Только для админа.
     """
     if telegram_id not in ADMIN_TELEGRAM_IDS:
@@ -3818,6 +3851,21 @@ async def _send_admin_data_block(
             f"\n<b>Последняя синхронизация</b> ({_dt_cur or '—'}):\n"
             f"TR {_tr_cur} | BB {_bb_cur}"
         )
+        # 02.10.2026: последняя пробежка по всем источникам (из сырья, без запросов) и простой до даты тренировки
+        try:
+            import fitness as _fit
+            _lr = _fit.get_last_run(db_user_id)
+            if _lr:
+                _idle = _fit.idle_days(_lr["date"], workout_date)
+                _srcs = ", ".join(f"{k} {v}" for k, v in sorted(_lr["all"].items(), key=lambda kv: kv[1], reverse=True))
+                _lines.append(
+                    f"\n<b>Последняя пробежка</b>: {_lr['date']} ({_srcs})\n"
+                    f"Простой до {workout_date or 'сегодня'}: {_idle} дн."
+                )
+            else:
+                _lines.append("\n<b>Последняя пробежка</b>: нет данных (фактор простоя выключен)")
+        except Exception as _e2:
+            logger.warning(f"admin block last run: {_e2}")
         await context.bot.send_message(telegram_id, "\n".join(_lines), parse_mode="HTML")
     except Exception as _e:
         logger.warning(f"admin snapshot block: {_e}")
@@ -3917,7 +3965,8 @@ async def _send_ai_variant_b(
             except Exception as _e:
                 logger.error(f"save_last_recommendation (B): {_e}")
         # Админу — снимок на утро (из базы) + текущие данные (на лету), отдельным сообщением
-        await _send_admin_data_block(telegram_id, db_user_id, user_data.get("recovery"), context)
+        await _send_admin_data_block(telegram_id, db_user_id, user_data.get("recovery"), context,
+                                     workout_date=((workout_dict or {}).get("workout_date") or analysis.get("workout_date")))
         if msg:
             try:
                 await msg.edit_text(msg_text, parse_mode="HTML", reply_markup=final_b_markup)
@@ -3935,8 +3984,9 @@ async def _send_ai_variant_b(
             key=lambda x: x.get("percentage", 0),
             reverse=True,
         )[:3]
-        # Отдельное сообщение с выгрузкой в Garmin — только если Garmin подключён.
-        if _top3 and get_token(db_user_id, "garmin"):
+        # Отдельное сообщение с выгрузкой в часы — только если подключён Garmin или COROS без пароля (02.10.2026).
+        _targets = _upload_targets(db_user_id)
+        if _top3 and _targets:
             _fit_data[telegram_id] = {
                 "type": "b_interval",
                 "analysis": analysis,
@@ -3947,7 +3997,7 @@ async def _send_ai_variant_b(
             }
             await context.bot.send_message(
                 telegram_id,
-                "🏃 Загрузить тренировку в Garmin — выбери группу:",
+                f"🏃 Загрузить тренировку в {' и '.join(_targets)} — выбери группу:",
                 reply_markup=_garmin_upload_markup(_fit_data[telegram_id]),
             )
 
@@ -4227,7 +4277,7 @@ async def _send_recommendation(
         except Exception as _e:
             logger.error(f"save_last_recommendation (A): {_e}")
     # Админу — снимок на утро (из базы) + текущие данные (на лету), отдельным сообщением
-    await _send_admin_data_block(telegram_id, db_user_id, user_data.get("recovery"), context)
+    await _send_admin_data_block(telegram_id, db_user_id, user_data.get("recovery"), context, workout_date=_wd)
     scenario_header = scenario_ctx["user_text"] + "\n\n" if scenario_ctx.get("user_text") else ""
     await _out(scenario_header + banner + body, final_markup, parse_mode="HTML")
     # 13.09.2026: лонг — отдельное окно «Загрузить в Garmin» (эталоны DDLong-N / N+), только с подключённым Garmin
@@ -6589,6 +6639,17 @@ def _fit_calendar_date(data: dict):
     except ValueError:
         return None
     return d if d >= (datetime.now() + timedelta(hours=3)).date() else None
+
+
+def _upload_targets(db_user_id: int, long: bool = False) -> list[str]:
+    """Куда грузить эталон: ['Garmin', 'COROS'] по подключённым сервисам (02.10.2026).
+    COROS — только новый (coros_mcp) и пока только интервальные: переводчик лонга не написан."""
+    out = []
+    if get_token(db_user_id, "garmin"):
+        out.append("Garmin")
+    if not long and get_token(db_user_id, "coros_mcp"):
+        out.append("COROS")
+    return out
 
 
 def _garmin_upload_markup(data: dict) -> InlineKeyboardMarkup:
