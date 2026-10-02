@@ -6819,13 +6819,18 @@ async def cmd_shadow_run(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
                      target_db_user_id: int | None = None,
-                     selector_override: str | None = None) -> None:
+                     selector_override: str | None = None,
+                     cut_by_plan: bool = False, cand_cache: dict | None = None,
+                     simple_override: bool | None = None) -> None:
     """/report — ИИ-анализ тренировки: собирает пакет данных (профиль,
     план, факт по отрезкам, утренний снимок) и шлёт в ИИ, возвращает разбор тренера.
     Read-only, рабочие ветки не трогает.
     /report — последняя DD; /report DD_20260612 | /report 23219097987 — выбор тренировки;
     /report simple|s [селектор] — только графики, без вызова ИИ;
-    /report data [селектор] — сырой пакет данных + промпт (без вызова ИИ)."""
+    /report data [селектор] — сырой пакет данных + промпт (без вызова ИИ).
+    cut_by_plan / cand_cache / simple_override — 02.10.2026: кнопка «без отсечек» (report_cut_callback):
+    тот же разбор, но отрезки нарезаются по плану из посекундного ряда; кандидат берётся из кэша
+    прошлого разбора, чтобы не ходить в сервисы заново."""
     chat_id = update.effective_user.id
     db_user_id = target_db_user_id or get_or_create_user(update.effective_user.id, update.effective_user.full_name)
     # /report доступен любому, у кого подключён Garmin или Strava (источник разбора).
@@ -6852,6 +6857,8 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
     simple_mode = bool(args) and args[0].lower() in ("simple", "s")
     if simple_mode:
         args = args[1:]
+    if simple_override is not None:
+        simple_mode = simple_override
     # 20.09.2026: /report_long <дата> — дата любого формата через _parse_cmd_date → 'YYYY-MM-DD' (лонг ищется по дате старта)
     if long_mode and args and _parse_cmd_date(args[0]):
         args[0] = _parse_cmd_date(args[0])
@@ -6897,7 +6904,10 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
     try:
         from ai_package import build_package, PROMPT
         from ai_package_long import build_long_package, PROMPT_LONG
-        res = await (build_long_package if long_mode else build_package)(db_user_id, selector)
+        if long_mode:
+            res = await build_long_package(db_user_id, selector)
+        else:
+            res = await build_package(db_user_id, selector, cut_by_plan=cut_by_plan, cand=cand_cache)
     except Exception as e:
         logger.error(f"/report error for {update.effective_user.id}: {e}", exc_info=True)
         await msg.edit_text(f"❌ Ошибка сборки: {type(e).__name__}: {e}")
@@ -6905,6 +6915,14 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
     if not res.get("ok"):
         await msg.edit_text(f"⚠️ {res.get('msg')}")
         return
+    if cut_by_plan and not res.get("cut_by_plan"):
+        await msg.edit_text("⚠️ Нарезать по плану не получилось: нет посекундного ряда или план не по дистанции.")
+        return
+    # 02.10.2026: кандидат (круги, план, посекундный ряд) — в кэш, чтобы кнопка «без отсечек»
+    # не ходила в сервисы заново (у COROS дневной лимит FIT, у Strava — квота streams)
+    if not long_mode and res.get("cand"):
+        context.user_data["report_cand"] = {"db_user_id": db_user_id, "act_id": str(res.get("act_id")),
+                                            "cand": res["cand"]}
 
     # Картинки: карточка разбора + графики одной вертикальной PNG.
     # Фолбэк на старые 3 PNG, если карточка не построилась.
@@ -6921,7 +6939,7 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
             res.get("s4"), "/tmp", str(db_user_id), dark=False,
             splits400=res.get("splits400"),
             no_gps=bool(res.get("no_gps")), by_watch_plan=bool(res.get("by_watch_plan")),
-            by_stryd=bool(res.get("by_stryd")))
+            by_stryd=bool(res.get("by_stryd")), cut_by_plan=bool(res.get("cut_by_plan")))
         if card:
             stacked = await build_charts_stacked(
                 res.get("splits"), res.get("plan_steps"), res["name"],
@@ -6998,6 +7016,15 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
         menu_btn = InlineKeyboardMarkup([
             [InlineKeyboardButton("⭐ Оценить разбор", callback_data=_rate_cb)],
             [InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu_new")]])
+    # 02.10.2026: «✂️ Без отсечек» — перестроить разбор, нарезав запись по плану (только если есть
+    # посекундный ряд и план по дистанции; после нарезки кнопка не повторяется).
+    # В кнопке: режим (s/f), пользователь разбора, activityId — чтобы найти кэш кандидата.
+    if res.get("can_cut") and not res.get("cut_by_plan"):
+        _cut_cb = f"report_cut:{'s' if simple_mode else 'f'}:{db_user_id}:{res.get('act_id')}"
+        if len(_cut_cb.encode()) <= 64:
+            menu_btn = InlineKeyboardMarkup(
+                [[InlineKeyboardButton("✂️ Без отсечек — нарезать по плану", callback_data=_cut_cb)]]
+                + list(menu_btn.inline_keyboard))
     btn_on_last_photo = not ai_chunks
     menu_sent = False
     for idx, (png, cap) in enumerate(chart_items):
@@ -7064,6 +7091,28 @@ async def report_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     query = update.callback_query
     await query.answer()
     await cmd_report(update, context)
+
+
+async def report_cut_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """02.10.2026: кнопка «✂️ Без отсечек» под разбором → тот же разбор, но отрезки нарезаны
+    по плану из посекундного ряда (отсечки часов не учитываются).
+    report_cut:<s|f>:<db_user_id>:<act_id>. Кандидат — из кэша прошлого разбора (user_data),
+    если кэш потерян (перезапуск бота) — тренировка добывается заново по activityId.
+    Чужой разбор (db_user_id ≠ свой) — только админу."""
+    query = update.callback_query
+    await query.answer()
+    try:
+        _, mode, uid_s, act_id = (query.data or "").split(":", 3)
+        uid = int(uid_s)
+    except ValueError:
+        return
+    own = get_or_create_user(update.effective_user.id, update.effective_user.full_name)
+    if uid != own and update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+        return
+    cache = context.user_data.get("report_cand") or {}
+    cand = cache.get("cand") if (cache.get("db_user_id") == uid and cache.get("act_id") == act_id) else None
+    await cmd_report(update, context, target_db_user_id=uid, selector_override=act_id,
+                     cut_by_plan=True, cand_cache=cand, simple_override=(mode == "s"))
 
 
 def main():
@@ -7147,6 +7196,7 @@ def main():
     app.add_handler(CallbackQueryHandler(pa_user_callback,  pattern=r"^pa_user_\d+$"))
     app.add_handler(CallbackQueryHandler(panalyze_callback, pattern=r"^panalyze_(interval|long)$"))
     app.add_handler(CallbackQueryHandler(report_callback,   pattern=r"^get_report$"))
+    app.add_handler(CallbackQueryHandler(report_cut_callback, pattern=r"^report_cut:"))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     app.add_error_handler(global_error_handler)

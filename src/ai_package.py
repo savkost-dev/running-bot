@@ -488,6 +488,134 @@ def _drop_extra_first_lap(splits, plan_steps) -> bool:
     return False
 
 
+def _all_steps_by_distance(plan_steps) -> bool:
+    """Все шаги плана заданы расстоянием (шаг по времени резать по дистанции нельзя)."""
+    return bool(plan_steps) and all(s.get("dist") for s in plan_steps)
+
+
+def _can_cut_by_plan(cand) -> bool:
+    """Можно ли предложить нарезку по плану без отсечек: есть посекундный ряд с дистанцией,
+    у первого круга известно время старта, все шаги плана — по расстоянию, дистанция в ряду
+    достоверна (не «без GPS без Stryd»), круги не размечены самими часами."""
+    if not cand or not cand.get("pts") or cand.get("no_gps") or cand.get("by_watch_plan"):
+        return False
+    if not _all_steps_by_distance(cand.get("plan_steps")):
+        return False
+    laps = ((cand.get("splits") or {}).get("lapDTOs") or [])
+    laps = [l for l in laps if isinstance(l, dict)]
+    return bool(laps) and _gmt_ms(laps[0].get("startTimeGMT")) is not None
+
+
+def _cut_by_plan(splits, plan_wkt, plan_steps, pts):
+    """02.10.2026 (Антон): нарезка записи по плану БЕЗ отсечек часов.
+
+    От старта первого рабочего круга (после сброса лишних первых кругов) посекундный ряд
+    режется по длинам шагов плана в порядке исполнения (strava._expand_plan_roles): граница
+    шага — интерполяция между соседними точками по накопленной дистанции. Отдых по расстоянию
+    режется как обычный шаг. Если ряд кончился раньше плана — последний шаг берётся
+    по фактически пройденному (не короче 100 м), остальные шаги не создаются.
+
+    Зачем: при слитной работе (1 км + 3 км + 1 км) с автокругами по 1 км разметка
+    «один круг = один шаг» делает из 3 км один километр, а финальный километр теряет.
+
+    Поля круга (ЧСС, каденс, мощность, GCT и т.д.) — средневзвешенные по перекрытию во времени
+    с исходными кругами, максимум ЧСС — максимум по перекрывающимся кругам.
+    Возвращает новый dict {"lapDTOs": [...]} или None, если резать нечем."""
+    import strava as _sv
+    laps = ((splits or {}).get("lapDTOs") or []) if isinstance(splits, dict) else []
+    laps = [l for l in laps if isinstance(l, dict)]
+    if not laps or not pts or not plan_wkt or not _all_steps_by_distance(plan_steps):
+        return None
+    start_ms = _gmt_ms(laps[0].get("startTimeGMT"))
+    if start_ms is None:
+        return None
+    seq = _sv._expand_plan_roles(plan_wkt)
+    dist_of = {p["idx"]: float(p["dist"]) for p in plan_steps}
+    seg = [p for p in pts if p[0] is not None and p[1] is not None and p[0] >= start_ms]
+    if len(seg) < 4:
+        return None
+
+    # Исходные круги как окна времени — для средневзвешенных полей
+    lap_wins = []
+    for n, l in enumerate(laps):
+        s = _gmt_ms(l.get("startTimeGMT"))
+        if s is None:
+            continue
+        t = l.get("duration") or l.get("movingDuration")
+        e = _gmt_ms(laps[n + 1].get("startTimeGMT")) if n + 1 < len(laps) else None
+        if e is None and t:
+            e = s + int(float(t) * 1000)
+        if e and e > s:
+            lap_wins.append((s, e, l))
+    AVG_FIELDS = ("averageHR", "averageRunCadence", "averagePower", "normalizedPower",
+                  "groundContactTime", "verticalOscillation", "groundContactBalanceLeft",
+                  "avgRespirationRate")
+
+    def fields_for(a, b):
+        out = {k: None for k in AVG_FIELDS}
+        out["maxHR"] = None
+        acc = {k: [0.0, 0.0] for k in AVG_FIELDS}
+        for s, e, l in lap_wins:
+            w = min(b, e) - max(a, s)
+            if w <= 0:
+                continue
+            for k in AVG_FIELDS:
+                v = l.get(k)
+                if v is not None:
+                    acc[k][0] += float(v) * w
+                    acc[k][1] += w
+            if l.get("maxHR") is not None:
+                out["maxHR"] = max(out["maxHR"] or 0, l["maxHR"])
+        for k in AVG_FIELDS:
+            if acc[k][1] > 0:
+                out[k] = acc[k][0] / acc[k][1]
+        return out
+
+    def gmt_str(ms):
+        return datetime.fromtimestamp(ms / 1000.0, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.0")
+
+    new_laps = []
+    d0 = seg[0][1]
+    t_start = seg[0][0]
+    i = 1
+    prev_t, prev_d = seg[0][0], seg[0][1]
+    for idx, stype in seq:
+        step_d = dist_of.get(idx)
+        if not step_d:
+            break
+        target = d0 + step_d
+        t_cross = None
+        while i < len(seg):
+            t, d = seg[i][0], seg[i][1]
+            if d >= target and d > prev_d:
+                frac = (target - prev_d) / (d - prev_d)
+                t_cross = prev_t + frac * (t - prev_t)
+                break
+            prev_t, prev_d = t, d
+            i += 1
+        if t_cross is None:   # ряд кончился — остаток как есть
+            covered = prev_d - d0
+            if covered >= 100 and prev_t > t_start:
+                lap = {"wktStepIndex": idx, "distance": round(covered, 1),
+                       "duration": round((prev_t - t_start) / 1000.0, 3),
+                       "intensityType": "REST" if stype in ("recovery", "rest") else "INTERVAL",
+                       "startTimeGMT": gmt_str(t_start), "cutByPlan": True, "partial": True}
+                lap.update(fields_for(t_start, prev_t))
+                new_laps.append(lap)
+            break
+        lap = {"wktStepIndex": idx, "distance": step_d,
+               "duration": round((t_cross - t_start) / 1000.0, 3),
+               "intensityType": "REST" if stype in ("recovery", "rest") else "INTERVAL",
+               "startTimeGMT": gmt_str(t_start), "cutByPlan": True}
+        lap.update(fields_for(t_start, t_cross))
+        new_laps.append(lap)
+        t_start, d0 = t_cross, target
+        prev_t, prev_d = t_cross, target
+    if not new_laps:
+        return None
+    return {"lapDTOs": new_laps}
+
+
 async def _garmin_candidate(db_user_id, selector, kind=None):
     """Кандидат из Garmin (последняя DD-активность) или None.
     План: Garmin workout по workoutId, иначе фолбэк на workout_templates."""
@@ -540,7 +668,7 @@ async def _garmin_candidate(db_user_id, selector, kind=None):
             "display_date": act.get("startTimeLocal"), "wdate": wdate, "wgroup": wgroup,
             "wtype_key": (act.get("activityType") or {}).get("typeKey"),
             "no_gps": no_gps, "stryd": stryd, "by_watch_plan": by_watch_plan,
-            "by_stryd": no_gps_raw and bool(stryd),
+            "by_stryd": no_gps_raw and bool(stryd), "plan_wkt": plan_wkt,
             "splits": splits, "plan_steps": plan_steps, "pts": _parse_details(details)}
 
 
@@ -594,7 +722,7 @@ async def _strava_candidate(db_user_id, selector, kind=None):
             print(f"/report: Strava streams недоступны: {type(e).__name__}: {e}")
     return {"source": "strava", "name": name, "act_id": act.get("id"),
             "display_date": act.get("start_date_local"), "wdate": wdate, "wgroup": wgroup,
-            "no_gps": _no_gps(act, "strava"), "by_watch_plan": False,
+            "no_gps": _no_gps(act, "strava"), "by_watch_plan": False, "plan_wkt": plan_wkt,
             "wtype_key": "running", "splits": splits, "plan_steps": plan_steps, "pts": pts}
 
 
@@ -644,7 +772,7 @@ async def _coros_candidate(db_user_id, selector, kind=None):
     _assign_button_laps(splits, plan_wkt, plan_steps)
     return {"source": "coros", "name": name, "act_id": rec["label_id"],
             "display_date": wdate, "wdate": wdate, "wgroup": wgroup,
-            "no_gps": False, "by_watch_plan": False,
+            "no_gps": False, "by_watch_plan": False, "plan_wkt": plan_wkt,
             "wtype_key": "running", "splits": splits, "plan_steps": plan_steps, "pts": pts}
 
 
@@ -676,15 +804,20 @@ def _choose_candidate(*cands):
     return best
 
 
-async def build_package(db_user_id: int, selector=None) -> dict:
+async def build_package(db_user_id: int, selector=None, cut_by_plan: bool = False,
+                        cand: dict | None = None) -> dict:
     """Собирает пакет данных для ИИ по DD-активности.
     selector: None → последняя DD; маска 'DD_YYYYMMDD'; либо activityId.
-    Возвращает {ok, msg, name, text}. text — пакет без промпта (PROMPT добавляет вызывающий)."""
+    cut_by_plan: 02.10.2026 — резать запись по плану без отсечек часов (_cut_by_plan);
+    cand: готовый кандидат из прошлого разбора (кнопка «без отсечек» не ходит в сервисы заново).
+    Возвращает {ok, msg, name, text, ..., can_cut, cut_by_plan, cand}.
+    text — пакет без промпта (PROMPT добавляет вызывающий)."""
     selector = _expand_selector(selector)
-    g = await _safe_candidate("garmin", _garmin_candidate(db_user_id, selector, "interval"))
-    c = await _safe_candidate("coros", _coros_candidate(db_user_id, selector, "interval"))
-    s = await _safe_candidate("strava", _strava_candidate(db_user_id, selector, "interval"))
-    cand = _choose_candidate(g, c, s)
+    if cand is None:
+        g = await _safe_candidate("garmin", _garmin_candidate(db_user_id, selector, "interval"))
+        c = await _safe_candidate("coros", _coros_candidate(db_user_id, selector, "interval"))
+        s = await _safe_candidate("strava", _strava_candidate(db_user_id, selector, "interval"))
+        cand = _choose_candidate(g, c, s)
     if not cand:
         sel = f" по «{selector}»" if selector else ""
         return {"ok": False, "msg": f"DD-активность{sel} не найдена (Garmin/COROS/Strava).\n"
@@ -697,6 +830,13 @@ async def build_package(db_user_id: int, selector=None) -> dict:
     splits = cand["splits"]
     plan_steps = cand["plan_steps"]
     pts = cand["pts"]
+    can_cut = _can_cut_by_plan(cand)
+    cut_done = False
+    if cut_by_plan and can_cut:
+        cut = _cut_by_plan(splits, cand.get("plan_wkt"), plan_steps, pts)
+        if cut:
+            splits, cut_done = cut, True
+            print(f"/report: нарезка по плану без отсечек — {len(cut['lapDTOs'])} отрезков")
 
     prof = db.get_user_profile(db_user_id) or {}
     snap = db.get_morning_caught(db_user_id, wdate)  # 19.09: утро дня тренировки из истории mornings
@@ -712,6 +852,9 @@ async def build_package(db_user_id: int, selector=None) -> dict:
     A(f"Дата: {cand['display_date']}   activityId: {act_id}   источник: {cand['source']}")
     _st = cand.get("stryd")
     A(f"Датчик Stryd: {'да' if _st else ('нет' if _st is False else 'нет данных')}")
+    if cut_done:
+        A("Разметка отрезков: по плану от старта первого рабочего круга по посекундному ряду, "
+          "отсечки часов не учитывались (режим «без отсечек»)")
 
     A("\n[СПОРТСМЕН]")
     A(f"  Пол: {prof.get('gender') or '—'}   Возраст: {_age(prof.get('birthdate')) or '—'}")
@@ -824,7 +967,8 @@ async def build_package(db_user_id: int, selector=None) -> dict:
             "splits100": [r.get("splits100") for r in rows],
             "splits400": [r.get("splits400") for r in rows],
             "wdate": wdate, "wgroup": cand["wgroup"], "source": cand["source"],
-            "act_id": act_id, "s4": s4}
+            "act_id": act_id, "s4": s4,
+            "can_cut": can_cut, "cut_by_plan": cut_done, "cand": cand}
 
 
 
@@ -1231,7 +1375,7 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
                             s4: dict | None, out_dir: str, tag: str,
                             dark: bool = False, splits400=None,
                             no_gps: bool = False, by_watch_plan: bool = False,
-                            by_stryd: bool = False) -> str | None:
+                            by_stryd: bool = False, cut_by_plan: bool = False) -> str | None:
     """Вертикальная карточка разбора под телефон (портрет, три зоны сверху вниз):
     1) шапка — заголовок, название/дата/группа, суть, структура плана;
     2) факт — таблица повторов (зебра, заливка отклонений, строка «ср.»);
@@ -1359,6 +1503,8 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
         meta_bits.append("без GPS — дистанции из плана")
     if by_stryd:   # 20.09.2026: дорожка без спутников, но со Stryd
         meta_bits.append("без GPS — дистанции по шагомеру Stryd")
+    if cut_by_plan:   # 02.10.2026: нарезка по плану, отсечки часов не учтены
+        meta_bits.append("без отсечек")
     meta_line = "  ·  ".join(meta_bits)
 
     def _rcs_wrap(label, text, style):
