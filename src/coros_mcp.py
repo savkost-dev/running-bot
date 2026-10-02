@@ -610,7 +610,8 @@ async def fetch_sport_records(db_user_id: int, days: int = 30) -> str | None:
 
 
 def parse_sport_records(text) -> list:
-    """Список тренировок → [{name, label_id, sport_type}] в порядке ответа.
+    """Список тренировок → [{name, label_id, sport_type, date, start_ts}] в порядке ответа.
+    date — 'YYYY-MM-DD' из заголовка записи, start_ts — epoch старта (UTC) или None.
 
     Имя тренировки COROS кладёт в поле Location; если имени нет, там оказывается
     место («Москва Бег по стадиону») — отбор по маске DD_… делает вызывающий.
@@ -624,10 +625,20 @@ def parse_sport_records(text) -> list:
     for block in text.split("\n\n"):
         if "LabelId" not in block:
             continue
-        name = label_id = sport_type = None
+        name = label_id = sport_type = rec_date = start_ts = None
         for line in block.split("\n"):
             line = line.strip()
-            if line.startswith("Location:"):
+            # 01.10.2026: дата старта — из заголовка записи «1. Indoor Run — 2026-09-13»,
+            # время старта (epoch, UTC) — из «Time Window: startTimestamp=… | endTimestamp=…».
+            # Нужно лонгу: в имени DDLong-… даты нет, искать тренировку по дате больше нечем.
+            m = re.match(r"\d+\.\s.*?—\s*(\d{4}-\d{2}-\d{2})\s*$", line)
+            if m:
+                rec_date = m.group(1)
+            elif line.startswith("Time Window:"):
+                m = re.search(r"startTimestamp=(\d+)", line)
+                if m:
+                    start_ts = int(m.group(1))
+            elif line.startswith("Location:"):
                 name = line.split(":", 1)[1].strip()
             elif line.startswith("LabelId:"):
                 for piece in line.split("|"):
@@ -638,7 +649,8 @@ def parse_sport_records(text) -> list:
                     elif key == "SportType":
                         sport_type = int(value) if value.isdigit() else None
         if label_id and sport_type is not None:
-            out.append({"name": name, "label_id": label_id, "sport_type": sport_type})
+            out.append({"name": name, "label_id": label_id, "sport_type": sport_type,
+                        "date": rec_date, "start_ts": start_ts})
     return out
 
 

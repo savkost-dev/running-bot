@@ -56,7 +56,7 @@ async def _garmin_candidate(db_user_id, selector, kind=None):
             plan_wkt, plan_steps = None, []
     by_watch_plan = bool(plan_steps)   # 18.09.2026: план взят из задания в часах, а не из шаблона
     if not plan_steps:
-        plan_wkt = _template_json(wdate, wgroup)
+        plan_wkt = _long_template_json(name)
         if plan_wkt:
             plan_steps = ar._flatten_plan_steps(plan_wkt)
     _drop_extra_first_lap(splits, plan_steps)
@@ -115,7 +115,7 @@ async def _strava_candidate(db_user_id, selector, kind=None):
         return None
     name = act.get("name")
     wdate, wgroup = _date_from_name(name)
-    plan_wkt = _template_json(wdate, wgroup)
+    plan_wkt = _long_template_json(name)
     if not plan_wkt:
         return None
     plan_steps = ar._flatten_plan_steps(plan_wkt)
@@ -153,10 +153,14 @@ async def _coros_candidate(db_user_id, selector, kind=None):
     records = coros_mcp.parse_sport_records(
         await coros_mcp.fetch_sport_records(db_user_id, days=30))
     runs = [r for r in records if _is_dd_name(r.get("name"), kind)]
-    # На порядок выдачи не полагаемся: самая свежая по дате-из-имени — первой.
-    runs.sort(key=lambda r: _date_from_name(r.get("name"))[0] or "", reverse=True)
+    # На порядок выдачи не полагаемся: самая свежая по дате старта из записи — первой
+    # (01.10.2026: дата из записи COROS; раньше — из имени, а у лонга её там нет).
+    runs.sort(key=lambda r: (r.get("date") or "", r.get("start_ts") or 0), reverse=True)
     if selector is None:
         rec = runs[0] if runs else None
+    elif re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(selector)):
+        # лонг по дате — по дате старта из записи (как у Garmin/Strava)
+        rec = next((r for r in runs if r.get("date") == selector), None)
     elif str(selector).isdigit():
         rec = next((r for r in records if str(r.get("label_id")) == str(selector)), None)
     else:
@@ -164,8 +168,9 @@ async def _coros_candidate(db_user_id, selector, kind=None):
     if not rec:
         return None
     name = rec.get("name")
-    wdate, wgroup = _date_from_name(name)
-    plan_wkt = _template_json(wdate, wgroup)
+    _, wgroup = _date_from_name(name)
+    wdate = rec.get("date")
+    plan_wkt = _long_template_json(name)
     if not plan_wkt:
         return None
     splits = coros_mcp.parse_lap_data(
@@ -185,8 +190,12 @@ async def _coros_candidate(db_user_id, selector, kind=None):
     plan_steps = ar._flatten_plan_steps(plan_wkt)
     _drop_extra_first_lap(splits, plan_steps)
     _assign_button_laps(splits, plan_wkt, plan_steps)
+    # display_date — дата и время старта по Москве (startTimestamp в UTC), как startTimeLocal у Garmin
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+    disp = (_dt.fromtimestamp(rec["start_ts"], _tz(_td(hours=3))).strftime("%Y-%m-%d %H:%M:%S")
+            if rec.get("start_ts") else wdate)
     return {"source": "coros", "name": name, "act_id": rec["label_id"],
-            "display_date": wdate, "wdate": wdate, "wgroup": wgroup,
+            "display_date": disp, "wdate": wdate, "wgroup": wgroup,
             "no_gps": False, "by_watch_plan": False,
             "wtype_key": "running", "splits": splits, "plan_steps": plan_steps, "pts": pts}
 
@@ -1345,12 +1354,19 @@ PROMPT_LONG = (
 )
 
 
-def _template_json(wdate, wgroup):
-    """Распарсенный JSON эталона из workout_templates или None."""
-    if not (wdate and wgroup):
+def _long_template_json(name):
+    """Эталон лонга из постоянной библиотеки workout_templates (scripts/build_long_templates.py):
+    дата 2999-12-31, wtype 'long', ключ '3' (ровно) / '3p' (с прогрессом) — группа и флаг из имени
+    DDLong-3 / DDLong-3p. Распарсенный JSON или None.
+    01.10.2026: раньше искался интервальный эталон по дате из имени — у лонга даты в имени нет,
+    поэтому COROS и Strava (и Garmin без задания в часах) до разбора не доходили."""
+    from fit_generator import LONG_TEMPLATE_DATE
+    p = parse_dd_name(name)
+    if not p or p.get("kind") != "long" or not p.get("group"):
         return None
+    key = f"{p['group']}p" if p.get("progressive") else str(p["group"])
     import json as _json
-    tmpl = db.get_workout_template(wdate, wgroup, "interval")
+    tmpl = db.get_workout_template(LONG_TEMPLATE_DATE, key, "long")
     if not tmpl:
         return None
     try:
