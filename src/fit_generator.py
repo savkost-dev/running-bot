@@ -639,3 +639,119 @@ def build_garmin_long_run_workout(workout: dict, recommended_group: str,
                                    second_half_pace: str | None) -> dict:
     return _build_long_run_json(workout, recommended_group, strategy,
                                  first_half_pace, second_half_pace)
+
+
+# ── COROS: перевод готового Garmin JSON в course для COROS MCP (02.10.2026) ──
+#
+# Источник — тот же Garmin JSON, что лежит в workout_templates и уходит в Garmin Connect:
+# составные отрезки, темп «на максимум», лёгкий бег между блоками собираются один раз,
+# COROS получает ровно то же. Внутри группы повторов всё один в один с Garmin;
+# единственное отличие — у COROS нет «пропустить последний отдых», поэтому финальный
+# отдых блока остаётся (решение админа 02.10.2026). Больше 20 повторов COROS не принимает —
+# группа делится на 20 + остаток с теми же шагами внутри.
+
+_COROS_SECTION = {'warmup': 1, 'interval': 2, 'recovery': 3, 'cooldown': 4}
+_COROS_MAX_REPEATS = 20
+_COROS_PACE_MIN, _COROS_PACE_MAX = 120, 1499
+
+
+def _ms_to_sec_per_km_int(v) -> int | None:
+    """м/с → целые сек/км в допустимых границах COROS; None — если скорости нет."""
+    try:
+        v = float(v or 0)
+    except (TypeError, ValueError):
+        return None
+    if v <= 0:
+        return None
+    return max(_COROS_PACE_MIN, min(_COROS_PACE_MAX, int(round(1000.0 / v))))
+
+
+def _coros_section(step: dict) -> dict:
+    """ExecutableStepDTO → плоская секция COROS."""
+    stype = (step.get('stepType') or {}).get('stepTypeKey') or 'interval'
+    sec = {'sectionType': _COROS_SECTION.get(stype, 2)}
+    cond = (step.get('endCondition') or {}).get('conditionTypeKey')
+    val = step.get('endConditionValue')
+    if cond == 'lap.button' or not val:
+        sec['targetType'] = 4
+    elif cond == 'time':
+        sec['targetType'] = 2
+        sec['targetValue'] = int(round(float(val)))
+    else:
+        sec['targetType'] = 1
+        sec['targetValue'] = int(round(float(val)))
+    if (step.get('targetType') or {}).get('workoutTargetTypeKey') == 'pace.zone':
+        fast = _ms_to_sec_per_km_int(step.get('targetValueOne'))
+        slow = _ms_to_sec_per_km_int(step.get('targetValueTwo'))
+        if fast and slow:
+            sec['intensityType'] = 2
+            sec['intensityValueStart'] = max(fast, slow)   # медленный край
+            sec['intensityValueEnd'] = min(fast, slow)     # быстрый край
+    return sec
+
+
+def coros_course_from_garmin(wkt: dict, description: str | None = None) -> dict:
+    """Garmin workout JSON → course для createSingleWorkout / createScheduledWorkout (COROS MCP).
+
+    courseName — то же имя, что у Garmin (DD_дата-группа[_wu]), чтобы разбор находил эталон.
+    courseDescription обязателен у COROS — берётся description, иначе имя тренировки.
+    """
+    sections: list[dict] = []
+    # Длина отдыха, который Garmin пропустил бы после последнего повтора (skipLastRestStep),
+    # а COROS побежит. Если следом идёт лёгкий отрезок по дистанции — укорачиваем его на эту
+    # длину, чтобы между блоками у всех было одинаково (пример 22.09: 7×400/200 + 400 легко —
+    # у COROS вышло бы 200 отдых + 400 легко = 600 м против 400 м у Garmin). Лёгкий отрезок,
+    # равный отдыху или короче, убирается совсем. В самом конце тренировки отдых просто остаётся.
+    pending_rest_m = 0
+    for seg in (wkt.get('workoutSegments') or []):
+        for st in (seg.get('workoutSteps') or []):
+            if not isinstance(st, dict):
+                continue
+            is_group = st.get('type') == 'RepeatGroupDTO' or \
+                (st.get('stepType') or {}).get('stepTypeKey') == 'repeat'
+            if not is_group:
+                sec = _coros_section(st)
+                if pending_rest_m and sec['sectionType'] == 3 and sec.get('targetType') == 1:
+                    rest_left = int(sec.get('targetValue') or 0) - pending_rest_m
+                    pending_rest_m = 0
+                    if rest_left <= 0:
+                        continue
+                    sec['targetValue'] = rest_left
+                pending_rest_m = 0
+                sections.append(sec)
+                continue
+            pending_rest_m = 0
+            sets = [_coros_section(s) for s in (st.get('workoutSteps') or []) if isinstance(s, dict)]
+            # внутри группы COROS допускает только работу (2) и отдых (3)
+            for s in sets:
+                if s['sectionType'] not in (2, 3):
+                    s['sectionType'] = 2
+            reps = int(st.get('numberOfIterations') or st.get('endConditionValue') or 1)
+            while reps > 0:
+                n = min(reps, _COROS_MAX_REPEATS)
+                sections.append({'intervalGroup': True, 'repeats': n,
+                                 'sets': [dict(s) for s in sets]})
+                reps -= n
+            if st.get('skipLastRestStep') and sets and sets[-1]['sectionType'] == 3 \
+                    and sets[-1].get('targetType') == 1:
+                pending_rest_m = int(sets[-1].get('targetValue') or 0)
+    name = (wkt.get('workoutName') or 'DD').strip()[:100]
+    return {
+        'sportType': 1,
+        'courseName': name,
+        'courseDescription': (description or '').strip() or name,
+        'sections': sections,
+    }
+
+
+def coros_total_distance_m(course: dict) -> int:
+    """Сумма дистанций всех секций course (повторы умножаются). Для сверки с Garmin."""
+    total = 0
+    for sec in (course.get('sections') or []):
+        if sec.get('intervalGroup'):
+            inner = sum(int(s.get('targetValue') or 0) for s in (sec.get('sets') or [])
+                        if s.get('targetType') == 1)
+            total += inner * int(sec.get('repeats') or 1)
+        elif sec.get('targetType') == 1:
+            total += int(sec.get('targetValue') or 0)
+    return total

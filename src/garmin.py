@@ -477,6 +477,27 @@ async def get_training_load(db_user_id: int) -> dict | None:
     }
 
 
+_RUN_TYPE_KEYS = ("running", "treadmill_running", "track_running", "trail_running",
+                  "indoor_running", "virtual_run", "street_running")
+
+
+def last_run_date_from_activities(acts) -> str | None:
+    """02.10.2026: список активностей (get_activities_by_date, 'running') → дата последней
+    пробежки 'YYYY-MM-DD' или None. Пробежка — fitness.is_run (от 3 км или от 20 минут)."""
+    import fitness as _fit
+    out = []
+    for a in acts or []:
+        if not isinstance(a, dict):
+            continue
+        tk = str((a.get("activityType") or {}).get("typeKey") or "")
+        if tk and "run" not in tk and not any(t in tk for t in _RUN_TYPE_KEYS):
+            continue
+        if not _fit.is_run(a.get("distance"), a.get("duration") or a.get("movingDuration")):
+            continue
+        out.append(str(a.get("startTimeLocal") or a.get("startTimeGMT") or "")[:10])
+    return _fit.latest_date(out)
+
+
 async def get_activities_48h(db_user_id: int) -> dict | None:
     """Возвращает сводку пробежек за последние 48 часов из Garmin."""
     client = await _client(db_user_id)
@@ -716,6 +737,10 @@ async def fetch_raw(db_user_id: int) -> dict | None:
     today = date.today().isoformat()
     start_48 = (date.today() - timedelta(days=2)).isoformat()
     start_ce = (date.today() - timedelta(days=42)).isoformat()  # для best efforts / chronic
+    # 02.10.2026: список беговых за 14 дней одним запросом — для даты последней пробежки
+    # (фактор простоя, fitness.get_last_run); activities_48h режется из него, запрос не добавляется.
+    import fitness as _fit
+    start_14 = (date.today() - timedelta(days=_fit.LAST_RUN_WINDOW_DAYS)).isoformat()
 
     def _fetch():
         raw = {}
@@ -728,7 +753,7 @@ async def fetch_raw(db_user_id: int) -> dict | None:
             "sleep_data":         lambda: client.get_sleep_data(today),
             "hrv_data":           lambda: client.get_hrv_data(today),
             "lactate_threshold":  lambda: client.get_lactate_threshold(),
-            "activities_48h":     lambda: client.get_activities_by_date(start_48, today, "running"),
+            "activities_14d":     lambda: client.get_activities_by_date(start_14, today, "running"),
             "user_profile":       lambda: client.get_user_profile(),
         }
         for key, fn in calls.items():
@@ -737,9 +762,18 @@ async def fetch_raw(db_user_id: int) -> dict | None:
             except Exception as e:
                 raw[key] = None
                 print(f"  Garmin [{key}] err: {str(e)[:60]}")
+        acts14 = raw.get("activities_14d")
+        raw["activities_48h"] = ([a for a in acts14 if isinstance(a, dict)
+                                  and str(a.get("startTimeLocal") or "")[:10] >= start_48]
+                                 if isinstance(acts14, list) else None)
         return raw
 
     raw = await asyncio.to_thread(_fetch)
+    if isinstance(raw.get("activities_14d"), list):
+        try:
+            db.save_last_run_date(db_user_id, "garmin", last_run_date_from_activities(raw["activities_14d"]))
+        except Exception as e:  # noqa: BLE001
+            print(f"Garmin fetch_raw: дата последней пробежки не сохранилась: {e}")
 
     if not any(v is not None for v in raw.values()):
         print(f"Garmin fetch_raw: нет данных для user_id={db_user_id}")

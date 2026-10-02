@@ -3775,7 +3775,7 @@ async def _send_admin_data_block(
     """
     if telegram_id not in ADMIN_TELEGRAM_IDS:
         return
-    return  # 15.09.2026 (Антон): сообщение «Данные для рекомендации» отключено; код ниже оставлен на случай возврата
+    # 15.09.2026 сообщение было отключено заглушкой return; 02.10.2026 (Антон) возвращено.
     try:
         _snap = get_morning_caught(db_user_id)
         _rec = recovery or {}

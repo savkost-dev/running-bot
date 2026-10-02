@@ -407,6 +407,21 @@ async def get_activity_streams(access_token: str, activity_id: int,
     return pts
 
 
+def last_run_date_from_window(db_user_id: int) -> str | None:
+    """02.10.2026: дата последней пробежки из окна strava_activities (вебхук), запросов нет.
+    Пробежка — тип Run и fitness.is_run (от 3 км или от 20 минут)."""
+    import fitness as _fit
+    from database import get_strava_activities
+    out = []
+    for a in get_strava_activities(db_user_id) or []:
+        if "run" not in str(a.get("type") or a.get("sport_type") or "").lower():
+            continue
+        if not _fit.is_run(a.get("distance"), a.get("moving_time") or a.get("elapsed_time")):
+            continue
+        out.append(str(a.get("start_date_local") or a.get("start_date") or "")[:10])
+    return _fit.latest_date(out)
+
+
 async def get_recent_48h_load(access_token: str, db_user_id: int | None = None) -> dict:
     """Острая нагрузка за последние 48 часов.
 

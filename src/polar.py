@@ -514,16 +514,25 @@ async def fetch_raw(db_user_id: int) -> dict | None:
     frm = (today - timedelta(days=7)).isoformat()
     to = today.isoformat()
 
-    profile, recharge, sleep = await asyncio.gather(
+    # 02.10.2026: /exercises — список тренировок (Polar отдаёт последние 30 дней),
+    # нужен для даты последней пробежки (фактор простоя, fitness.get_last_run).
+    profile, recharge, sleep, exercises = await asyncio.gather(
         _get(db_user_id, f"/users/{polar_user_id}"),
         _get(db_user_id, "/users/nightly-recharge", {"from": frm, "to": to}),
         _get(db_user_id, "/users/sleep", {"from": frm, "to": to}),
+        _get(db_user_id, "/exercises"),
         return_exceptions=True,
     )
 
     if isinstance(profile,  Exception): profile  = None
     if isinstance(recharge, Exception): recharge = None
     if isinstance(sleep,    Exception): sleep    = None
+    if isinstance(exercises, Exception) or not isinstance(exercises, list): exercises = None
+    if exercises is not None:
+        try:
+            db.save_last_run_date(db_user_id, _SERVICE, last_run_date_from_exercises(exercises))
+        except Exception as e:  # noqa: BLE001
+            print(f"Polar fetch_raw: дата последней пробежки не сохранилась: {e}")
 
     if not profile and not recharge and not sleep:
         print(f"Polar fetch_raw: нет данных для user_id={db_user_id}")
@@ -533,12 +542,39 @@ async def fetch_raw(db_user_id: int) -> dict | None:
         "profile": profile,
         "nightly_recharge": recharge,
         "sleep": sleep,
+        "exercises": exercises,
     }
 
     db.save_raw_service_data(db_user_id, _SERVICE, json.dumps(raw, ensure_ascii=False))
     print(f"Polar fetch_raw: сохранено для user_id={db_user_id} "
           f"(profile={bool(profile)}, recharge={bool(recharge)}, sleep={bool(sleep)})")
     return raw
+
+def _iso_duration_sec(value) -> float | None:
+    """'PT1H2M3.5S' (длительность у Polar) → секунды."""
+    import re
+    m = re.fullmatch(r"P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?", str(value or ""))
+    if not m:
+        return None
+    d, h, mi, s = m.groups()
+    return int(d or 0) * 86400 + int(h or 0) * 3600 + int(mi or 0) * 60 + float(s or 0)
+
+
+def last_run_date_from_exercises(exercises) -> str | None:
+    """02.10.2026: список /exercises → дата последней пробежки или None.
+    Беговые виды — в sport есть RUN; пробежка — fitness.is_run (от 3 км или от 20 минут)."""
+    import fitness as _fit
+    out = []
+    for e in exercises or []:
+        if not isinstance(e, dict):
+            continue
+        if "RUN" not in str(e.get("sport") or e.get("detailed_sport_info") or "").upper():
+            continue
+        if not _fit.is_run(e.get("distance"), _iso_duration_sec(e.get("duration"))):
+            continue
+        out.append(str(e.get("start_time") or "")[:10])
+    return _fit.latest_date(out)
+
 
 # ── Physical info: VO2max + пороги (через transaction-механику) ──
 

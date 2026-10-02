@@ -10,14 +10,87 @@ database/сервисов/strava, обратных импортов в bot.py н
 - get_coros_fitness_data     — fitness из COROS
 - get_polar_fitness_data     — fitness из Polar
 - _get_vo2max_from_tracker   — VO2max из первого доступного трекера
+- get_last_run / idle_days   — последняя пробежка по всем трекерам и дни простоя (02.10.2026)
 """
 import asyncio
 import logging
+from datetime import date
 
 from database import get_token, save_athlete_cache, get_athlete_cache, get_strava_activities
 from strava import get_full_athlete_data
 
 logger = logging.getLogger(__name__)
+
+
+# ── ПОСЛЕДНЯЯ ПРОБЕЖКА И ПРОСТОЙ (02.10.2026, Антон) ──────────
+# Зачем: рекомендация строится от VO2max и порога, которые за несколько дней не меняются,
+# а работа после 3–4 дней полного отдыха идёт заметно хуже («двигатель на холодную»:
+# падает объём плазмы, обмен уходит в углеводы). Первый из трёх уровней поправок
+# (простой → большая нагрузка → опорно-двигательный), остальные два — отдельными шагами.
+#
+# Откуда дата: ночная загрузка каждого трекера (garmin/coros_mcp/polar.fetch_raw) считает её
+# из своего списка тренировок за LAST_RUN_WINDOW_DAYS своим разборщиком
+# (garmin.last_run_date_from_activities, coros_mcp.last_run_date_from_records,
+# polar.last_run_date_from_exercises) и кладёт в last_run_dates. Strava считается на лету
+# из окна strava_activities (strava.last_run_date_from_window, запросов нет).
+# get_last_run берёт самую свежую по всем источникам: пробежка, записанная только
+# на одних часах, не должна давать ложный простой.
+
+LAST_RUN_WINDOW_DAYS = 14   # окно списка тренировок у трекеров
+RUN_MIN_M = 3000            # пробежка — от 3 км или от 20 минут (раскатка да, прогулка нет)
+RUN_MIN_S = 1200
+MAX_IDLE_DAYS = 30          # старше — «очень давно», не ошибка
+
+
+def is_run(dist_m, dur_s) -> bool:
+    """Запись тянет на пробежку: от RUN_MIN_M метров или от RUN_MIN_S секунд."""
+    try:
+        d = float(dist_m or 0)
+    except (TypeError, ValueError):
+        d = 0.0
+    try:
+        t = float(dur_s or 0)
+    except (TypeError, ValueError):
+        t = 0.0
+    return d >= RUN_MIN_M or t >= RUN_MIN_S
+
+
+def latest_date(dates) -> str | None:
+    """Самая свежая 'YYYY-MM-DD' из списка (пустые пропускаются) или None."""
+    dates = [d for d in dates if d]
+    return max(dates) if dates else None
+
+
+def get_last_run(db_user_id: int) -> dict | None:
+    """Самая свежая пробежка по всем источникам: {"date", "source", "all"}.
+    None — ни один источник ничего не знает (фактор простоя тогда выключен)."""
+    from database import get_last_run_dates
+    from strava import last_run_date_from_window
+    best = {src: d for src, d in (get_last_run_dates(db_user_id) or {}).items() if d}
+    s = last_run_date_from_window(db_user_id)
+    if s:
+        best["strava"] = s
+    if not best:
+        return None
+    src = max(best, key=lambda k: best[k])
+    return {"date": best[src], "source": src, "all": best}
+
+
+def idle_days(last_run_date: str | None, workout_date: str | None) -> int | None:
+    """Полные дни без бега между последней пробежкой и днём работы.
+    Последняя в воскресенье, работа в пятницу → пн, вт, ср, чт = 4.
+    Без даты пробежки — None (фактор выключен); старше MAX_IDLE_DAYS — MAX_IDLE_DAYS."""
+    if not last_run_date:
+        return None
+    try:
+        lr = date.fromisoformat(str(last_run_date)[:10])
+        wd = date.fromisoformat(str(workout_date)[:10]) if workout_date else date.today()
+    except ValueError:
+        return None
+    n = (wd - lr).days - 1
+    if n < 0:
+        return 0
+    return min(n, MAX_IDLE_DAYS)
 
 
 # ── КЭШ АТЛЕТА ───────────────────────────────────────────────

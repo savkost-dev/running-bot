@@ -79,11 +79,14 @@ def _tool_args(args):
     if args != "RECENT_ACTIVITIES":
         return args
     from datetime import date, timedelta
+    import fitness as _fit
     today = date.today()
+    # 02.10.2026: окно 14 дней — для даты последней пробежки (фактор простоя);
+    # parse_activities сам режет 48 часов, ему окно не мешает.
     return {
-        "startDate": (today - timedelta(days=3)).strftime("%Y%m%d"),
+        "startDate": (today - timedelta(days=_fit.LAST_RUN_WINDOW_DAYS)).strftime("%Y%m%d"),
         "endDate": today.strftime("%Y%m%d"),
-        "limit": 20,
+        "limit": 50,
     }
 
 
@@ -301,6 +304,14 @@ async def fetch_raw(db_user_id: int) -> dict | None:
     if not any(v for v in raw.values()):
         logger.info(f"COROS MCP fetch_raw: пусто для user_id={db_user_id}")
         return None
+
+    # 02.10.2026: дата последней пробежки из списка записей (фактор простоя, fitness.get_last_run)
+    if raw.get("querySportRecords"):
+        try:
+            db.save_last_run_date(db_user_id, SERVICE,
+                                  last_run_date_from_records(parse_sport_records(raw["querySportRecords"])))
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"COROS MCP fetch_raw: дата последней пробежки не сохранилась: {e}")
 
     db.save_raw_service_data(db_user_id, SERVICE,
                              json.dumps(raw, ensure_ascii=False, default=str))
@@ -610,8 +621,9 @@ async def fetch_sport_records(db_user_id: int, days: int = 30) -> str | None:
 
 
 def parse_sport_records(text) -> list:
-    """Список тренировок → [{name, label_id, sport_type, date, start_ts}] в порядке ответа.
-    date — 'YYYY-MM-DD' из заголовка записи, start_ts — epoch старта (UTC) или None.
+    """Список тренировок → [{name, label_id, sport_type, date, start_ts, distance_m, duration_s}]
+    в порядке ответа. date — 'YYYY-MM-DD' из заголовка записи, start_ts — epoch старта (UTC) или None.
+    02.10.2026: distance_m и duration_s — из строки «Duration: 19:45 | Distance: 5.01 km» (None, если нет).
 
     Имя тренировки COROS кладёт в поле Location; если имени нет, там оказывается
     место («Москва Бег по стадиону») — отбор по маске DD_… делает вызывающий.
@@ -626,8 +638,16 @@ def parse_sport_records(text) -> list:
         if "LabelId" not in block:
             continue
         name = label_id = sport_type = rec_date = start_ts = None
+        dist_m = dur_s = None
         for line in block.split("\n"):
             line = line.strip()
+            if line.startswith("Duration:"):
+                m_d = re.search(r"Duration:\s*([\d:]+)", line)
+                dur_s = _time_sec(m_d.group(1)) if m_d else None
+                m_k = re.search(r"Distance:\s*([\d.]+)\s*(km|m)\b", line)
+                if m_k:
+                    dist_m = float(m_k.group(1)) * (1000 if m_k.group(2) == "km" else 1)
+                continue
             # 01.10.2026: дата старта — из заголовка записи «1. Indoor Run — 2026-09-13»,
             # время старта (epoch, UTC) — из «Time Window: startTimestamp=… | endTimestamp=…».
             # Нужно лонгу: в имени DDLong-… даты нет, искать тренировку по дате больше нечем.
@@ -650,8 +670,30 @@ def parse_sport_records(text) -> list:
                         sport_type = int(value) if value.isdigit() else None
         if label_id and sport_type is not None:
             out.append({"name": name, "label_id": label_id, "sport_type": sport_type,
-                        "date": rec_date, "start_ts": start_ts})
+                        "date": rec_date, "start_ts": start_ts,
+                        "distance_m": dist_m, "duration_s": dur_s})
     return out
+
+
+RUN_SPORT_TYPES = {100, 101, 102, 103}   # outdoor / indoor / trail / track
+
+
+def last_run_date_from_records(records) -> str | None:
+    """02.10.2026: записи из parse_sport_records → дата последней пробежки или None.
+    Пробежка — беговой вид и fitness.is_run (от 3 км или от 20 минут)."""
+    import fitness as _fit
+    from datetime import datetime as _dt, timezone as _tz
+    out = []
+    for r in records or []:
+        if r.get("sport_type") not in RUN_SPORT_TYPES:
+            continue
+        if not _fit.is_run(r.get("distance_m"), r.get("duration_s")):
+            continue
+        d = r.get("date")
+        if not d and r.get("start_ts"):
+            d = _dt.fromtimestamp(int(r["start_ts"]), tz=_tz.utc).strftime("%Y-%m-%d")
+        out.append(d)
+    return _fit.latest_date(out)
 
 
 async def get_vo2max(db_user_id: int) -> float | None:
