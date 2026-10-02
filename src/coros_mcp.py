@@ -305,14 +305,6 @@ async def fetch_raw(db_user_id: int) -> dict | None:
         logger.info(f"COROS MCP fetch_raw: пусто для user_id={db_user_id}")
         return None
 
-    # 02.10.2026: дата последней пробежки из списка записей (фактор простоя, fitness.get_last_run)
-    if raw.get("querySportRecords"):
-        try:
-            db.save_last_run_date(db_user_id, SERVICE,
-                                  last_run_date_from_records(parse_sport_records(raw["querySportRecords"])))
-        except Exception as e:  # noqa: BLE001
-            logger.warning(f"COROS MCP fetch_raw: дата последней пробежки не сохранилась: {e}")
-
     db.save_raw_service_data(db_user_id, SERVICE,
                              json.dumps(raw, ensure_ascii=False, default=str))
     got = [k for k, v in raw.items() if v]
@@ -843,3 +835,60 @@ async def get_full_data(db_user_id: int) -> dict | None:
         parts.append(fitness["training_load"]["summary"])
     fitness["summary"] = " | ".join(parts) if parts else "COROS данные получены"
     return fitness
+
+
+# ── Загрузка тренировки в COROS (02.10.2026) ─────────────────────────────────
+#
+# Инструменты COROS MCP: createScheduledWorkout — сразу на дату (в библиотеку не пишется),
+# createSingleWorkout — в библиотеку без даты. Правки и удаления через MCP не делаем:
+# updateWorkoutDetails 02.10 вернул ошибку и тренировка пропала; удаление — только из приложения.
+# Поэтому перед постановкой на дату смотрим расписание: вторую копию с тем же именем не создаём.
+
+UPLOAD_SCHEDULED = "scheduled"   # поставлена на дату
+UPLOAD_LIBRARY = "library"       # сохранена в библиотеку (дата в прошлом или не задана)
+UPLOAD_EXISTS = "exists"         # на эту дату уже стоит тренировка с таким именем
+
+
+def _mcp_ok(text: str | None) -> bool:
+    """Ответ инструмента создания — текст; успех узнаём по слову created, ошибки — по error/anomal."""
+    low = (text or "").lower()
+    if not low or "anomal" in low or "error" in low or "failed" in low:
+        return False
+    return "created" in low or "workout id" in low
+
+
+async def upload_workout(db_user_id: int, course: dict, schedule_date: str | None = None) -> str | None:
+    """Грузит course (fit_generator.coros_course_from_garmin) в COROS пользователя.
+
+    schedule_date 'YYYY-MM-DD' (сегодня или позже) → createScheduledWorkout на дату;
+    иначе → createSingleWorkout в библиотеку. Возвращает UPLOAD_SCHEDULED / UPLOAD_LIBRARY /
+    UPLOAD_EXISTS, None — не вышло (нет доступа, связь, отказ COROS).
+    """
+    name = str(course.get("courseName") or "")
+    try:
+        async with _connect(db_user_id) as (session, token):
+            if not session:
+                return None
+            ymd = (schedule_date or "").replace("-", "")
+            if len(ymd) == 8:
+                sched = await _call_tool(session, token, "queryTrainingSchedule",
+                                         {"startDate": ymd, "endDate": ymd}, 2)
+                if name and name in (sched or ""):
+                    logger.info(f"COROS MCP upload: {name} уже стоит на {ymd}, user_id={db_user_id}")
+                    return UPLOAD_EXISTS
+                reply = await _call_tool(session, token, "createScheduledWorkout",
+                                         {"date": ymd, "course": course}, 3)
+                if _mcp_ok(reply):
+                    logger.info(f"COROS MCP upload: {name} поставлена на {ymd}, user_id={db_user_id}")
+                    return UPLOAD_SCHEDULED
+                logger.error(f"COROS MCP createScheduledWorkout user_id={db_user_id}: {(reply or '')[:300]}")
+                return None
+            reply = await _call_tool(session, token, "createSingleWorkout", {"course": course}, 3)
+            if _mcp_ok(reply):
+                logger.info(f"COROS MCP upload: {name} в библиотеку, user_id={db_user_id}")
+                return UPLOAD_LIBRARY
+            logger.error(f"COROS MCP createSingleWorkout user_id={db_user_id}: {(reply or '')[:300]}")
+            return None
+    except Exception as e:
+        logger.error(f"COROS MCP upload_workout error user_id={db_user_id}: {e}")
+        return None

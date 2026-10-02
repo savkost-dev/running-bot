@@ -528,11 +528,6 @@ async def fetch_raw(db_user_id: int) -> dict | None:
     if isinstance(recharge, Exception): recharge = None
     if isinstance(sleep,    Exception): sleep    = None
     if isinstance(exercises, Exception) or not isinstance(exercises, list): exercises = None
-    if exercises is not None:
-        try:
-            db.save_last_run_date(db_user_id, _SERVICE, last_run_date_from_exercises(exercises))
-        except Exception as e:  # noqa: BLE001
-            print(f"Polar fetch_raw: дата последней пробежки не сохранилась: {e}")
 
     if not profile and not recharge and not sleep:
         print(f"Polar fetch_raw: нет данных для user_id={db_user_id}")

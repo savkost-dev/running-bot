@@ -8,11 +8,11 @@
 ## [0.35.0] 2026-10-02 — Простой, шаг 1: дата последней пробежки; админский блок данных возвращён
 
 ### Добавлено
-- **`fitness.py`** (рядом с последним забегом) — константы окна и порога пробежки, `is_run` (≥3 км или ≥20 мин), `latest_date`, `get_last_run(db_user_id)` (самая свежая по всем источникам: Garmin, COROS новый, Polar из таблицы; Strava на лету из окна в базе), `idle_days(last_run_date, workout_date)` (полные дни между: вс → пт = 4; старше 30 дней = 30; нет даты = None, фактор выключен). Разбор списков — в модулях трекеров: `garmin.last_run_date_from_activities`, `coros_mcp.last_run_date_from_records`, `polar.last_run_date_from_exercises`, `strava.last_run_date_from_window`. Отдельного модуля нет (правило Антона: расширять существующие).
-- **`database.last_run_dates`** (`user_id, source, last_run_date, updated_at`), `save_last_run_date`, `get_last_run_dates`.
-- **`garmin.fetch_raw`** — `activities_14d` одним запросом (окно `fitness.LAST_RUN_WINDOW_DAYS`), `activities_48h` режется из него по дате старта (нормализатор нагрузки за 48 часов не меняется); дата последней пробежки сохраняется до проверки «ночь поймана», чтобы не теряться при раннем срезе.
-- **`coros_mcp`** — окно `querySportRecords` в ночной загрузке 3 → 14 дней (лимит 50; `parse_activities` сам режет 48 часов); `parse_sport_records` отдаёт `distance_m` и `duration_s` из строки «Duration: … | Distance: …»; дата последней пробежки сохраняется в `fetch_raw`.
-- **`polar.fetch_raw`** — запрос `/exercises` (Polar отдаёт последние 30 дней), поле `exercises` в сырье, дата последней пробежки по видам с RUN в `sport`.
+- **`fitness.py`** (рядом с последним забегом) — константы окна и порога пробежки, `is_run` (≥3 км или ≥20 мин), `latest_date`, `get_last_run(db_user_id)` (самая свежая по всем источникам из сырья ночной загрузки и окна Strava, без запросов к сервисам), `idle_days(last_run_date, workout_date)` (полные дни между: вс → пт = 4; старше 30 дней = 30; нет даты = None, фактор выключен). Разбор списков — в модулях трекеров: `garmin.last_run_date_from_activities`, `coros_mcp.last_run_date_from_records`, `polar.last_run_date_from_exercises`, `strava.last_run_date_from_window`. Отдельного модуля нет (правило Антона: расширять существующие).
+- **`garmin.fetch_raw`** — `activities_14d` одним запросом (окно `fitness.LAST_RUN_WINDOW_DAYS`), `activities_48h` режется из него по дате старта (нормализатор нагрузки за 48 часов не меняется).
+- **`coros_mcp`** — окно `querySportRecords` в ночной загрузке 3 → 14 дней (лимит 50; `parse_activities` сам режет 48 часов); `parse_sport_records` отдаёт `distance_m` и `duration_s` из строки «Duration: … | Distance: …».
+- **`polar.fetch_raw`** — запрос `/exercises` (Polar отдаёт последние 30 дней), поле `exercises` в сырье.
+- Отдельного хранения дат нет: `fitness.get_last_run` читает списки из `raw_service_data` (Garmin `activities_14d`, с фолбэком на `activities_48h` у старого сырья; COROS `querySportRecords`; Polar `exercises`) и окно Strava. Таблица `last_run_dates` из первой выкладки 0.35.0 убрана (правило Антона: не плодить таблицы, если данные уже лежат в сырье).
 
 ### Возвращено
 - **`bot._send_admin_data_block`** — сообщение админу «🔬 Данные для рекомендации» (снимок на утро + последняя синхронизация) после каждой рекомендации; с 15.09 было выключено заглушкой `return` в начале функции.

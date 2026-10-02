@@ -302,16 +302,6 @@ def init_db():
                 PRIMARY KEY (workout_date, group_number, wtype)
             );
 
-            -- 02.10.2026: дата последней пробежки по каждому трекеру (из ночной загрузки),
-            -- для фактора простоя в рекомендации (fitness.get_last_run берёт самую свежую).
-            CREATE TABLE IF NOT EXISTS last_run_dates (
-                user_id       INTEGER NOT NULL,
-                source        TEXT NOT NULL,
-                last_run_date TEXT,
-                updated_at    TEXT DEFAULT (datetime('now')),
-                PRIMARY KEY (user_id, source)
-            );
-
             CREATE TABLE IF NOT EXISTS raw_service_data (
                 user_id INTEGER NOT NULL,
                 service TEXT NOT NULL,
@@ -2224,28 +2214,6 @@ def set_preprocess_mode(mode: str) -> None:
             (mode,)
         )
     _db_logger.info(f"preprocess_mode установлен: {mode}")
-
-
-def save_last_run_date(user_id: int, source: str, last_run_date: str | None) -> None:
-    """02.10.2026: дата последней пробежки ('YYYY-MM-DD' или None — в окне пробежек нет)
-    по источнику. upsert по (user_id, source)."""
-    with get_connection() as conn:
-        conn.execute("""
-            INSERT INTO last_run_dates (user_id, source, last_run_date, updated_at)
-            VALUES (?, ?, ?, datetime('now'))
-            ON CONFLICT(user_id, source) DO UPDATE SET
-                last_run_date = excluded.last_run_date,
-                updated_at = excluded.updated_at
-        """, (user_id, source, last_run_date))
-
-
-def get_last_run_dates(user_id: int) -> dict:
-    """{source: 'YYYY-MM-DD' | None} по всем источникам пользователя."""
-    with get_connection() as conn:
-        rows = conn.execute(
-            "SELECT source, last_run_date FROM last_run_dates WHERE user_id = ?", (user_id,)
-        ).fetchall()
-    return {src: d for src, d in rows}
 
 
 def save_raw_service_data(user_id: int, service: str, raw_json: str) -> None:

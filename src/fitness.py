@@ -28,13 +28,13 @@ logger = logging.getLogger(__name__)
 # падает объём плазмы, обмен уходит в углеводы). Первый из трёх уровней поправок
 # (простой → большая нагрузка → опорно-двигательный), остальные два — отдельными шагами.
 #
-# Откуда дата: ночная загрузка каждого трекера (garmin/coros_mcp/polar.fetch_raw) считает её
-# из своего списка тренировок за LAST_RUN_WINDOW_DAYS своим разборщиком
-# (garmin.last_run_date_from_activities, coros_mcp.last_run_date_from_records,
-# polar.last_run_date_from_exercises) и кладёт в last_run_dates. Strava считается на лету
-# из окна strava_activities (strava.last_run_date_from_window, запросов нет).
-# get_last_run берёт самую свежую по всем источникам: пробежка, записанная только
-# на одних часах, не должна давать ложный простой.
+# Откуда дата: из сырья ночной загрузки каждого трекера (raw_service_data), где теперь лежит
+# список тренировок за LAST_RUN_WINDOW_DAYS — Garmin activities_14d, COROS querySportRecords,
+# Polar exercises; разбирают его модули трекеров (garmin.last_run_date_from_activities,
+# coros_mcp.last_run_date_from_records, polar.last_run_date_from_exercises). Strava — из окна
+# strava_activities (strava.last_run_date_from_window). Отдельного хранения дат нет,
+# запросов к сервисам при чтении нет. get_last_run берёт самую свежую по всем источникам:
+# пробежка, записанная только на одних часах, не должна давать ложный простой.
 
 LAST_RUN_WINDOW_DAYS = 14   # окно списка тренировок у трекеров
 RUN_MIN_M = 3000            # пробежка — от 3 км или от 20 минут (раскатка да, прогулка нет)
@@ -61,15 +61,50 @@ def latest_date(dates) -> str | None:
     return max(dates) if dates else None
 
 
+def _raw_of(db_user_id: int, service: str) -> dict | None:
+    """Сырьё ночной загрузки сервиса из raw_service_data как dict, или None."""
+    import json
+    from database import get_raw_service_data
+    row = get_raw_service_data(db_user_id, service)
+    if not row or not row.get("raw_json"):
+        return None
+    try:
+        raw = json.loads(row["raw_json"])
+    except (TypeError, ValueError):
+        return None
+    return raw if isinstance(raw, dict) else None
+
+
 def get_last_run(db_user_id: int) -> dict | None:
     """Самая свежая пробежка по всем источникам: {"date", "source", "all"}.
-    None — ни один источник ничего не знает (фактор простоя тогда выключен)."""
-    from database import get_last_run_dates
+    None — ни один источник ничего не знает (фактор простоя тогда выключен).
+    Читает только базу: сырьё трекеров и окно Strava."""
+    import garmin as _g
+    import coros_mcp as _cm
+    import polar as _p
     from strava import last_run_date_from_window
-    best = {src: d for src, d in (get_last_run_dates(db_user_id) or {}).items() if d}
-    s = last_run_date_from_window(db_user_id)
-    if s:
-        best["strava"] = s
+    best = {}
+    raw = _raw_of(db_user_id, "garmin")
+    if raw:
+        acts = raw.get("activities_14d")
+        if not isinstance(acts, list):
+            acts = raw.get("activities_48h")   # сырьё до 0.35.0 — только 48 часов
+        d = _g.last_run_date_from_activities(acts)
+        if d:
+            best["garmin"] = d
+    raw = _raw_of(db_user_id, _cm.SERVICE)
+    if raw and raw.get("querySportRecords"):
+        d = _cm.last_run_date_from_records(_cm.parse_sport_records(raw["querySportRecords"]))
+        if d:
+            best["coros_mcp"] = d
+    raw = _raw_of(db_user_id, "polar")
+    if raw and isinstance(raw.get("exercises"), list):
+        d = _p.last_run_date_from_exercises(raw["exercises"])
+        if d:
+            best["polar"] = d
+    d = last_run_date_from_window(db_user_id)
+    if d:
+        best["strava"] = d
     if not best:
         return None
     src = max(best, key=lambda k: best[k])

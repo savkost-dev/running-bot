@@ -769,11 +769,6 @@ async def fetch_raw(db_user_id: int) -> dict | None:
         return raw
 
     raw = await asyncio.to_thread(_fetch)
-    if isinstance(raw.get("activities_14d"), list):
-        try:
-            db.save_last_run_date(db_user_id, "garmin", last_run_date_from_activities(raw["activities_14d"]))
-        except Exception as e:  # noqa: BLE001
-            print(f"Garmin fetch_raw: дата последней пробежки не сохранилась: {e}")
 
     if not any(v is not None for v in raw.values()):
         print(f"Garmin fetch_raw: нет данных для user_id={db_user_id}")
