@@ -6821,16 +6821,18 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
                      target_db_user_id: int | None = None,
                      selector_override: str | None = None,
                      cut_by_plan: bool = False, cand_cache: dict | None = None,
-                     simple_override: bool | None = None) -> None:
+                     simple_override: bool | None = None,
+                     skip_laps: int | None = None) -> None:
     """/report — ИИ-анализ тренировки: собирает пакет данных (профиль,
     план, факт по отрезкам, утренний снимок) и шлёт в ИИ, возвращает разбор тренера.
     Read-only, рабочие ветки не трогает.
     /report — последняя DD; /report DD_20260612 | /report 23219097987 — выбор тренировки;
     /report simple|s [селектор] — только графики, без вызова ИИ;
     /report data [селектор] — сырой пакет данных + промпт (без вызова ИИ).
-    cut_by_plan / cand_cache / simple_override — 02.10.2026: кнопка «без отсечек» (report_cut_callback):
-    тот же разбор, но отрезки нарезаются по плану из посекундного ряда; кандидат берётся из кэша
-    прошлого разбора, чтобы не ходить в сервисы заново."""
+    cut_by_plan / cand_cache / simple_override / skip_laps — 02.10.2026: панель «⚙️ Настроить разбор»
+    (report_cfg_callback): тот же разбор, но отрезки нарезаются по плану из посекундного ряда и/или
+    отбрасываются первые N кругов; кандидат берётся из кэша прошлого разбора, чтобы не ходить
+    в сервисы заново."""
     chat_id = update.effective_user.id
     db_user_id = target_db_user_id or get_or_create_user(update.effective_user.id, update.effective_user.full_name)
     # /report доступен любому, у кого подключён Garmin или Strava (источник разбора).
@@ -6907,7 +6909,8 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
         if long_mode:
             res = await build_long_package(db_user_id, selector)
         else:
-            res = await build_package(db_user_id, selector, cut_by_plan=cut_by_plan, cand=cand_cache)
+            res = await build_package(db_user_id, selector, cut_by_plan=cut_by_plan, cand=cand_cache,
+                                      skip_laps=skip_laps)
     except Exception as e:
         logger.error(f"/report error for {update.effective_user.id}: {e}", exc_info=True)
         await msg.edit_text(f"❌ Ошибка сборки: {type(e).__name__}: {e}")
@@ -6939,7 +6942,8 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
             res.get("s4"), "/tmp", str(db_user_id), dark=False,
             splits400=res.get("splits400"),
             no_gps=bool(res.get("no_gps")), by_watch_plan=bool(res.get("by_watch_plan")),
-            by_stryd=bool(res.get("by_stryd")), cut_by_plan=bool(res.get("cut_by_plan")))
+            by_stryd=bool(res.get("by_stryd")), cut_by_plan=bool(res.get("cut_by_plan")),
+            skip_laps=int(res.get("skip_laps") or 0) if skip_laps is not None else 0)
         if card:
             stacked = await build_charts_stacked(
                 res.get("splits"), res.get("plan_steps"), res["name"],
@@ -7016,14 +7020,15 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
         menu_btn = InlineKeyboardMarkup([
             [InlineKeyboardButton("⭐ Оценить разбор", callback_data=_rate_cb)],
             [InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu_new")]])
-    # 02.10.2026: «✂️ Без отсечек» — перестроить разбор, нарезав запись по плану (только если есть
-    # посекундный ряд и план по дистанции; после нарезки кнопка не повторяется).
-    # В кнопке: режим (s/f), пользователь разбора, activityId — чтобы найти кэш кандидата.
-    if res.get("can_cut") and not res.get("cut_by_plan"):
-        _cut_cb = f"report_cut:{'s' if simple_mode else 'f'}:{db_user_id}:{res.get('act_id')}"
-        if len(_cut_cb.encode()) <= 64:
+    # 02.10.2026: «⚙️ Настроить разбор» — панель с двумя настройками (нарезка по расстоянию без
+    # отсечек, пропуск первых N кругов) и кнопкой «Пересобрать». Текущее состояние зашито в кнопку:
+    # rcfg:<db_user_id>:<act_id>:open:<cut 0/1>:<skip N>:<simple 0/1>
+    if (res.get("can_cut") or res.get("can_skip")) and not long_mode:
+        _cfg_cb = (f"rcfg:{db_user_id}:{res.get('act_id')}:open:{1 if res.get('cut_by_plan') else 0}:"
+                   f"{int(res.get('skip_laps') or 0)}:{1 if simple_mode else 0}")
+        if len(_cfg_cb.encode()) <= 64:
             menu_btn = InlineKeyboardMarkup(
-                [[InlineKeyboardButton("✂️ По расстоянию, без отсечек с часов", callback_data=_cut_cb)]]
+                [[InlineKeyboardButton("⚙️ Настроить разбор", callback_data=_cfg_cb)]]
                 + list(menu_btn.inline_keyboard))
     btn_on_last_photo = not ai_chunks
     menu_sent = False
@@ -7091,6 +7096,94 @@ async def report_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     query = update.callback_query
     await query.answer()
     await cmd_report(update, context)
+
+
+def _rcfg_panel(uid: int, act_id: str, cut: int, skip: int, simple: int, cache: dict | None):
+    """02.10.2026: текст и клавиатура панели «⚙️ Настроить разбор».
+    Каждая кнопка несёт ПОЛНОЕ новое состояние — панель не зависит от памяти бота;
+    кэш нужен только для списка кругов и проверки «можно ли резать»."""
+    import ai_package as _ap
+    cand = (cache or {}).get("cand") if cache else None
+    name = (cand or {}).get("name") or act_id
+    can_cut = _ap._can_cut_by_plan(cand) if cand else True
+    can_skip = bool((cand or {}).get("can_skip")) if cand else True
+    laps = _ap._raw_laps_brief(cand) if cand else []
+    n_raw = len(((cand or {}).get("splits_raw") or {}).get("lapDTOs") or []) if cand else 0
+
+    lines = [f"⚙️ Настройка разбора: {name}", ""]
+    if cand is None:
+        lines.append("Список кругов недоступен после перезапуска бота — «Пересобрать» заново "
+                     "загрузит тренировку с настройками ниже.")
+    elif not can_skip:
+        lines.append("Круги размечены самими часами по заданию — пропускать нечего.")
+    elif laps:
+        lines.append(f"Круги с часов{' (первые 10 из ' + str(n_raw) + ')' if n_raw > len(laps) else ''}:")
+        for i, d, pace in laps:
+            lines.append(f"{i}. {int(round(d)) if d else '—'} м · {_ap._fmt_pace(pace) if pace else '—'}")
+    lines.append("")
+    if not can_cut:
+        lines.append("Нарезка по расстоянию недоступна: нет посекундного ряда.")
+    if can_skip:
+        lines.append(f"Пропустить первых кругов: {skip}")
+
+    def cb(verb, c=cut, k=skip):
+        return f"rcfg:{uid}:{act_id}:{verb}:{c}:{k}:{simple}"
+
+    rows = []
+    if can_cut:
+        rows.append([InlineKeyboardButton(("☑" if cut else "☐") + " По расстоянию, без отсечек с часов",
+                                          callback_data=cb("set", c=0 if cut else 1))])
+    else:
+        rows.append([InlineKeyboardButton("☐ По расстоянию — нет посекундного ряда", callback_data=cb("noop"))])
+    if can_skip:
+        max_n = max(1, min(5, (len(laps) - 1) if laps else 5))
+        rows.append([InlineKeyboardButton(f"✓ {n}" if n == skip else str(n), callback_data=cb("set", k=n))
+                     for n in range(0, max_n + 1)])
+    rows.append([InlineKeyboardButton("🔁 Пересобрать", callback_data=cb("go"))])
+    rows.append([InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu_new")])
+    return "\n".join(lines), InlineKeyboardMarkup(rows)
+
+
+async def report_cfg_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """02.10.2026: панель «⚙️ Настроить разбор» под разбором.
+    rcfg:<db_user_id>:<act_id>:<open|set|go|noop>:<cut 0/1>:<skip N>:<simple 0/1>
+    open — показать панель; set — переключить настройку (правится само сообщение панели);
+    go — пересобрать разбор с обеими настройками; noop — подсказка, почему кнопка неактивна.
+    Кандидат — из кэша прошлого разбора (user_data), иначе тренировка добывается заново по id.
+    Чужой разбор (db_user_id ≠ свой) — только админу."""
+    query = update.callback_query
+    try:
+        _, uid_s, act_id, verb, cut_s, skip_s, simple_s = (query.data or "").split(":", 6)
+        uid, cut, skip, simple = int(uid_s), int(cut_s), int(skip_s), int(simple_s)
+    except ValueError:
+        await query.answer()
+        return
+    own = get_or_create_user(update.effective_user.id, update.effective_user.full_name)
+    if uid != own and update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+        await query.answer()
+        return
+    if verb == "noop":
+        await query.answer("Нет посекундного ряда — резать по расстоянию нечем.", show_alert=True)
+        return
+    await query.answer()
+    cache = context.user_data.get("report_cand") or {}
+    if not (cache.get("db_user_id") == uid and cache.get("act_id") == str(act_id)):
+        cache = None
+    if verb == "go":
+        cand = cache.get("cand") if cache else None
+        await cmd_report(update, context, target_db_user_id=uid, selector_override=act_id,
+                         cut_by_plan=bool(cut), cand_cache=cand, simple_override=bool(simple),
+                         skip_laps=skip)
+        return
+    text, markup = _rcfg_panel(uid, act_id, cut, skip, simple, cache)
+    if verb == "open":
+        await context.bot.send_message(update.effective_user.id, text, reply_markup=markup)
+        return
+    try:
+        await query.edit_message_text(text, reply_markup=markup)
+    except BadRequest as e:
+        if "not modified" not in str(e).lower():
+            raise
 
 
 async def report_cut_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -7197,6 +7290,7 @@ def main():
     app.add_handler(CallbackQueryHandler(panalyze_callback, pattern=r"^panalyze_(interval|long)$"))
     app.add_handler(CallbackQueryHandler(report_callback,   pattern=r"^get_report$"))
     app.add_handler(CallbackQueryHandler(report_cut_callback, pattern=r"^report_cut:"))
+    app.add_handler(CallbackQueryHandler(report_cfg_callback, pattern=r"^rcfg:"))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     app.add_error_handler(global_error_handler)
