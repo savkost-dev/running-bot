@@ -7023,7 +7023,7 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
         _cut_cb = f"report_cut:{'s' if simple_mode else 'f'}:{db_user_id}:{res.get('act_id')}"
         if len(_cut_cb.encode()) <= 64:
             menu_btn = InlineKeyboardMarkup(
-                [[InlineKeyboardButton("✂️ Без отсечек — нарезать по плану", callback_data=_cut_cb)]]
+                [[InlineKeyboardButton("✂️ По расстоянию, без отсечек с часов", callback_data=_cut_cb)]]
                 + list(menu_btn.inline_keyboard))
     btn_on_last_photo = not ai_chunks
     menu_sent = False
