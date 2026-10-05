@@ -343,43 +343,31 @@ async def get_polar_fitness_data(db_user_id: int) -> dict | None:
 
 
 async def _get_vo2max_from_tracker(db_user_id: int) -> tuple:
-    """Получает VO2max из первого доступного трекера (Garmin → COROS → Polar).
+    """VO2max из ГЛАВНОГО трекера человека (database.primary_vo2max_tracker: первый подключённый
+    из Garmin → COROS новый → COROS старый → Polar).
     Возвращает (vo2max: float, tracker_key: str, tracker_name: str) или (None, None, None).
-    """
-    if get_token(db_user_id, "garmin"):
-        try:
-            from garmin import get_vo2max as _garmin_vo2max
-            val = await _garmin_vo2max(db_user_id)
-            if val is not None:
-                return float(val), "garmin", "Garmin"
-        except Exception as e:
-            logger.warning(f"VO2max Garmin fetch error for uid={db_user_id}: {e}")
-
-    if get_token(db_user_id, "coros_mcp"):
-        try:
-            import coros_mcp as _cm
-            val = await _cm.get_vo2max(db_user_id)
-            if val is not None:
-                return float(val), "coros_mcp", "COROS"
-        except Exception as e:
-            logger.warning(f"VO2max COROS MCP fetch error for uid={db_user_id}: {e}")
-
-    if get_token(db_user_id, "coros"):
-        try:
-            import coros as _coros
-            val = await _coros.get_vo2max(db_user_id)
-            if val is not None:
-                return float(val), "coros", "COROS"
-        except Exception as e:
-            logger.warning(f"VO2max COROS fetch error for uid={db_user_id}: {e}")
-
-    if get_token(db_user_id, "polar"):
-        try:
-            import polar as _polar
-            val = await _polar.get_vo2max(db_user_id)
-            if val is not None:
-                return float(val), "polar", "Polar"
-        except Exception as e:
-            logger.warning(f"VO2max Polar fetch error for uid={db_user_id}: {e}")
-
+    05.10.2026 (Антон): к следующему трекеру НЕ переходим, если главный ничего не дал — тогда
+    в профиле остаётся его прежнее значение. Раньше пустой ответ Garmin перетирался запасным COROS."""
+    from database import primary_vo2max_tracker
+    primary = primary_vo2max_tracker(db_user_id)
+    if not primary:
+        return None, None, None
+    try:
+        if primary == "garmin":
+            from garmin import get_vo2max as _get
+            name = "Garmin"
+        elif primary == "coros_mcp":
+            from coros_mcp import get_vo2max as _get
+            name = "COROS"
+        elif primary == "coros":
+            from coros import get_vo2max as _get
+            name = "COROS"
+        else:
+            from polar import get_vo2max as _get
+            name = "Polar"
+        val = await _get(db_user_id)
+        if val is not None:
+            return float(val), primary, name
+    except Exception as e:
+        logger.warning(f"VO2max {primary} fetch error for uid={db_user_id}: {e}")
     return None, None, None

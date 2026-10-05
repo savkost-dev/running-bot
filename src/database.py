@@ -1876,15 +1876,37 @@ def get_recent_ratings(limit: int = 20) -> list:
 # Новая схема хранения (пока никем не вызывается, боевые ветки не тронуты):
 # значение из систем и ручное живут в разных полях, приоритет решает чтение.
 
-def save_vo2max_device(user_id: int, value: float, source: str) -> None:
-    """Запись VO2max из трекера (garmin/coros/polar). Всегда, без порогов и lock —
-    приоритет решается при чтении, а не при записи."""
+# 05.10.2026 (Антон): VO2max с часов пишет только ГЛАВНЫЙ трекер человека — первый подключённый
+# в этом порядке. Остальные подключённые трекеры VO2max не пишут никогда (ни ночью, ни при
+# подключении, ни по кнопке «обновить»). Причина: у админа 04.10 Garmin неделю не обновлял VO2max
+# (дорожка, пауза), ночной опрос ушёл к запасному COROS и перетёр 54.4 старым 53.0.
+VO2MAX_TRACKER_ORDER = ("garmin", "coros_mcp", "coros", "polar")
+
+
+def primary_vo2max_tracker(user_id: int) -> str | None:
+    """Главный трекер для VO2max: первый подключённый из VO2MAX_TRACKER_ORDER, или None."""
+    for service in VO2MAX_TRACKER_ORDER:
+        if get_token(user_id, service):
+            return service
+    return None
+
+
+def save_vo2max_device(user_id: int, value: float, source: str) -> bool:
+    """Запись VO2max из трекера (garmin/coros_mcp/coros/polar). Без порогов и lock — приоритет
+    «вручную / из систем» решается при чтении. Единственное условие (05.10.2026): пишет только
+    главный трекер (primary_vo2max_tracker); значение неглавного пропускается, возвращается False."""
+    primary = primary_vo2max_tracker(user_id)
+    if source in VO2MAX_TRACKER_ORDER and primary and source != primary:
+        _db_logger.info(f"save_vo2max_device: пропущено user={user_id} source={source} "
+                        f"value={value} — главный трекер {primary}")
+        return False
     now = datetime.now().isoformat()
     with get_connection() as conn:
         conn.execute(
             "UPDATE user_profile SET vo2max_device = ?, vo2max_device_source = ?, "
             "vo2max_device_at = ? WHERE user_id = ?",
             (float(value), source, now, user_id))
+    return True
 
 
 def save_vo2max_manual(user_id: int, value: float, note: str | None = None) -> None:

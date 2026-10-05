@@ -174,7 +174,26 @@ async def get_vo2max(db_user_id: int) -> float | None:
         return None
 
     def _fetch():
-        # Garmin обновляет метрику не каждый день — ищем последнее доступное значение
+        # 05.10.2026: Garmin обновляет метрику только после уличной пробежки — после дорожки или
+        # паузы значения нет неделями. Берём последнее за 30 дней ОДНИМ запросом диапазоном
+        # (тот же адрес, что у get_max_metrics, с разными датами); если он не сработал —
+        # прежний перебор по дням за неделю.
+        try:
+            end = date.today().isoformat()
+            start = (date.today() - timedelta(days=30)).isoformat()
+            fn = getattr(client, "connectapi", None) or client.garth.connectapi
+            data = fn(f"/metrics-service/metrics/maxmet/daily/{start}/{end}")
+            best = None
+            for item in (data or []) if isinstance(data, list) else []:
+                generic = (item or {}).get("generic") or {}
+                val = generic.get("vo2MaxPreciseValue") or generic.get("vo2MaxValue")
+                day = str(generic.get("calendarDate") or "")
+                if val and (best is None or day > best[0]):
+                    best = (day, float(val))
+            if best:
+                return best[1]
+        except Exception as e:
+            print(f"Garmin get_vo2max: запрос диапазоном не сработал: {str(e)[:80]}")
         for days_back in range(7):
             d = (date.today() - timedelta(days=days_back)).isoformat()
             try:

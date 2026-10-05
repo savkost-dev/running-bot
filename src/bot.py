@@ -7340,9 +7340,28 @@ async def cmd_long_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     except Exception:
         activities = []
 
+    # Анонс из канала и погода — как у боевого лонга: нужны шапке сообщения и блоку [ПОГОДА].
+    live = None
+    try:
+        live = await find_next_long_run()
+    except Exception as e:
+        logger.warning(f"/long_ai find_next_long_run error: {e}")
+    workout_dict = dict(live) if live else {"workout_date": analysis.get("workout_date", "")}
+    workout_dict["workout_type"] = "long"
+    workout_dict["even_pace_available"] = analysis.get("even_pace_available")
+    weather_line = weather_prompt = ""
+    try:
+        _w = await get_weather_for_workout(
+            workout_dict.get("location", ""), workout_dict.get("workout_date", ""),
+            workout_dict.get("schedule", ""))
+        if _w:
+            weather_line, weather_prompt = format_weather_for_message(_w), format_weather_for_prompt(_w)
+    except Exception as e:
+        logger.warning(f"/long_ai weather error: {e}")
+
     pkg = long_ai.build_long_ai_package(
         profile=profile, zinfo=zinfo, recovery=recovery, fitness=fitness, analysis=analysis,
-        activities=activities, age=_age(profile.get("birthdate")))
+        activities=activities, age=_age(profile.get("birthdate")), weather_prompt=weather_prompt)
     if not pkg.get("ok"):
         await msg.edit_text(f"⚠️ {pkg.get('msg')}")
         return
@@ -7374,18 +7393,27 @@ async def cmd_long_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     await msg.edit_text(header + f"\n🤖 Спрашиваю ИИ ({_MODE_INFO.get(mode, ('', mode))[1]})…")
-    answer, stats = await asyncio.to_thread(claude_advisor.ask_text, full_prompt, mode, 0.4, True)
-    if not answer:
-        await msg.edit_text(header + "\n⚠️ ИИ не ответил.")
+    # Вызов и вид сообщения — от прежней ИИ-ветки лонга: ask_groq (JSON) + format_long_run_message,
+    # то есть админ видит рекомендацию так же, как её увидел бы пользователь.
+    result = await asyncio.to_thread(claude_advisor.ask_groq, full_prompt, mode)
+    advice = (result or {}).get("advice")
+    stats = (result or {}).get("stats")
+    if not advice:
+        await msg.edit_text(header + ("\n⏱ ИИ не уложился во время." if (result or {}).get("timeout")
+                                      else "\n⚠️ ИИ не ответил или вернул не JSON."))
         return
-    import re as _re_md
-    answer = _re_md.sub(r"\*\*(.+?)\*\*", r"\1", answer)
-    answer = "\n".join(_re_md.sub(r"^#{1,6}\s*", "", ln) for ln in answer.split("\n")).strip()
-    plaque = (f"⏱ {stats.get('time_sec', '?')}с | {claude_advisor._MODE_LABELS.get(stats.get('mode'), mode)} | "
-              f"📥 {stats.get('input_tokens', '?')} / 📤 {stats.get('output_tokens', '?')} | "
-              f"v{VERSION} · тест /long_ai")
     await msg.edit_text(header)
-    for ch in _report_text_chunks(answer + "\n\n" + plaque):
+    try:
+        body = claude_advisor.format_long_run_message(
+            advice, workout_dict, stats=stats, weather_line=weather_line, has_tracker=True)
+        await context.bot.send_message(chat_id, body, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"/long_ai format error: {e}", exc_info=True)
+        await context.bot.send_message(
+            chat_id, "⚠️ Боевой вид сообщения не собрался, сырой ответ ИИ:\n"
+            + _json.dumps(advice, ensure_ascii=False, indent=1)[:3500])
+    extras = long_ai.format_extras(advice)
+    for ch in _report_text_chunks((extras + "\n\n" if extras else "") + "— тестовая ветка /long_ai, пользователям не уходит"):
         await context.bot.send_message(chat_id, ch)
 
 
