@@ -1351,6 +1351,7 @@ def build_ai_b_prompt_reco_champion(analysis: dict, user_data: dict, zones_map: 
         "ДАННЫЕ БЕГУНА:\n"
         "Зоны темпа:\n"
         f"{zones_text}\n"
+        + _idle_prompt_text(user_data) +
         f"Специализация: {spec_label}\n"
         f"Восстановление: {rec_text}\n"
         # 03.09 ВРЕМЕННО отключена сводка по группам: минуты по зонам ломают интервалы с отдыхом (гр.4 optimal на 8×500).
@@ -1773,6 +1774,7 @@ def build_ai_b_prompt_reco_challenger(analysis: dict, user_data: dict, zones_map
         "ДАННЫЕ БЕГУНА:\n"
         "Зоны темпа:\n"
         f"{zones_text}\n"
+        + _idle_prompt_text(user_data) +
         f"Специализация: {spec_label}\n"
         f"Восстановление: {rec_text}\n"
         # 03.09 ВРЕМЕННО отключена сводка по группам: минуты по зонам ломают интервалы с отдыхом (гр.4 optimal на 8×500).
@@ -2047,6 +2049,45 @@ def _quality_label(pace_s: float, peak_pace_s: float, ttt: float,
     return None                              # у максимума — оптимум работы
 
 
+def _days_word(n: int) -> str:
+    """3 дня, 5 дней, 21 день."""
+    n = abs(int(n))
+    if n % 10 == 1 and n % 100 != 11:
+        return "день"
+    if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14):
+        return "дня"
+    return "дней"
+
+
+def idle_note(idle: dict | None) -> str:
+    """05.10.2026: строка «⏸ Пауза…» под рекомендованной группой. Пусто, если правило простоя
+    не действует (нет данных или простой меньше 3 дней). Ставится кодом, а не ИИ."""
+    if not idle or not idle.get("shift"):
+        return ""
+    days = int(idle.get("days") or 0)
+    head = (f"Пауза {days} {_days_word(days)} без бега" if idle.get("last_run")
+            else "Пауза больше двух недель без бега")
+    text = (f"{head} — после перерыва интервальная работа даётся тяжелее, поэтому рекомендация "
+            f"сдвинута к более спокойному темпу. Первый отрезок начни по нижней границе, не забегай.")
+    if days > 7:
+        text += " Перед работой лучше сделать лёгкую пробежку с несколькими ускорениями."
+    return text
+
+
+def _idle_prompt_text(user_data: dict | None) -> str:
+    """05.10.2026: пояснение для ИИ в блоке «ДАННЫЕ БЕГУНА», когда зоны сдвинуты из-за простоя."""
+    idle = (user_data or {}).get("idle") or {}
+    if not idle.get("shift"):
+        return ""
+    days = int(idle.get("days") or 0)
+    return (f"Пауза в беге: {days} {_days_word(days)} без пробежек перед этой тренировкой. "
+            f"Зоны выше УЖЕ сдвинуты на {idle['shift']} с/км медленнее обычных: после перерыва та же работа "
+            f"даётся тяжелее. Оценивай группы по этим зонам как есть, отдельно паузу не учитывай. "
+            f"В текстовых полях (reason, if_feeling_good, if_tired) НЕ называй числа зон и не пиши "
+            f"«твой порог X:XX» — они временно сдвинуты и не совпадают с профилем бегуна; говори "
+            f"«с поправкой на паузу». Совет про первый отрезок не пиши — он будет отдельной строкой.\n")
+
+
 def recommend_group(analysis_json: dict, user_data: dict) -> dict | None:
     """Шаг 2: рекомендация группы на основе готового анализа Шага 1 + данных юзера.
 
@@ -2075,6 +2116,10 @@ def recommend_group(analysis_json: dict, user_data: dict) -> dict | None:
         return {"ok": False, "note": "Нет персональных зон — заполни профиль (VO2max или лактатный порог)."}
     zones_map = zinfo["zones"]
     zones_source = zinfo.get("source")
+    # 05.10.2026: простой — зоны на эту рекомендацию сдвигаются медленнее (zones.idle_shift_sec)
+    _idle_shift = int(((user_data.get("idle") or {}).get("shift")) or 0)
+    if _idle_shift:
+        zones_map = _zones.shift_zones(zones_map, _idle_shift)
     zone_secs = {z: _pace_sec(p) for z, p in zones_map.items()}
 
     # ── Восстановление (0..1; нейтральное 0.7 если нет данных) ─
@@ -3414,6 +3459,10 @@ def format_evening_message(advice: dict, workout: dict, stats: dict | None = Non
         lines.append(f"📈 <i>{_html.escape(_ath)}</i>")
     if reason:
         lines.append(f"<i>{reason}</i>")
+    # 05.10.2026: простой — строка ставится кодом (advice["idle_note"]), всегда с точным числом дней
+    _idle_note = advice.get("idle_note")
+    if _idle_note:
+        lines.append(f"\n⏸ <i>{_html.escape(_idle_note)}</i>")
 
     # Классифицируем warning: "восстановл" / "300м" / "темп ~" → сразу после группы, остальные → внизу
     warning_str = str(warning).strip() if warning and str(warning).lower() not in ("null", "none", "") else ""

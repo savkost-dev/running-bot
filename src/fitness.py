@@ -10,7 +10,7 @@ database/сервисов/strava, обратных импортов в bot.py н
 - get_coros_fitness_data     — fitness из COROS
 - get_polar_fitness_data     — fitness из Polar
 - _get_vo2max_from_tracker   — VO2max из первого доступного трекера
-- get_last_run / idle_days   — последняя пробежка по всем трекерам и дни простоя (02.10.2026)
+- get_last_run / idle_days / get_idle — последняя пробежка, дни простоя, сдвиг зон (02–05.10.2026)
 """
 import asyncio
 import logging
@@ -61,12 +61,26 @@ def latest_date(dates) -> str | None:
     return max(dates) if dates else None
 
 
+RAW_FRESH_DAYS = 3          # сырьё старше — подключение считаем мёртвым, источник не учитываем
+
+
 def _raw_of(db_user_id: int, service: str) -> dict | None:
-    """Сырьё ночной загрузки сервиса из raw_service_data как dict, или None."""
+    """Сырьё ночной загрузки сервиса из raw_service_data как dict, или None.
+    05.10.2026: только если подключение живое (есть токен) и сырьё свежее RAW_FRESH_DAYS —
+    иначе у отключившихся и заблокировавших бота старое сырьё давало ложный простой «30 дней»."""
     import json
+    from datetime import datetime, timedelta
     from database import get_raw_service_data
+    if not get_token(db_user_id, service):
+        return None
     row = get_raw_service_data(db_user_id, service)
     if not row or not row.get("raw_json"):
+        return None
+    try:
+        fetched = datetime.strptime(str(row.get("fetched_at"))[:19], "%Y-%m-%d %H:%M:%S")
+        if datetime.utcnow() - fetched > timedelta(days=RAW_FRESH_DAYS):
+            return None
+    except (TypeError, ValueError):
         return None
     try:
         raw = json.loads(row["raw_json"])
@@ -76,39 +90,65 @@ def _raw_of(db_user_id: int, service: str) -> dict | None:
 
 
 def get_last_run(db_user_id: int) -> dict | None:
-    """Самая свежая пробежка по всем источникам: {"date", "source", "all"}.
-    None — ни один источник ничего не знает (фактор простоя тогда выключен).
+    """Самая свежая пробежка по всем живым источникам:
+    {"date": 'YYYY-MM-DD' | None, "source": str | None, "all": {источник: дата}, "empty": [источники]}.
+    "empty" — живые источники со свежим списком тренировок, в котором нет ни одной пробежки
+    за LAST_RUN_WINDOW_DAYS. date=None при непустом "empty" значит «не бегал всё окно».
+    None — ни один живой источник ничего не знает (фактор простоя выключен).
     Читает только базу: сырьё трекеров и окно Strava."""
     import garmin as _g
     import coros_mcp as _cm
     import polar as _p
     from strava import last_run_date_from_window
-    best = {}
+    best, empty = {}, []
     raw = _raw_of(db_user_id, "garmin")
     if raw:
         acts = raw.get("activities_14d")
-        if not isinstance(acts, list):
+        full = isinstance(acts, list)
+        if not full:
             acts = raw.get("activities_48h")   # сырьё до 0.35.0 — только 48 часов
         d = _g.last_run_date_from_activities(acts)
         if d:
             best["garmin"] = d
+        elif full:
+            empty.append("garmin")
     raw = _raw_of(db_user_id, _cm.SERVICE)
     if raw and raw.get("querySportRecords"):
         d = _cm.last_run_date_from_records(_cm.parse_sport_records(raw["querySportRecords"]))
         if d:
             best["coros_mcp"] = d
+        else:
+            empty.append("coros_mcp")
     raw = _raw_of(db_user_id, "polar")
     if raw and isinstance(raw.get("exercises"), list):
         d = _p.last_run_date_from_exercises(raw["exercises"])
         if d:
             best["polar"] = d
-    d = last_run_date_from_window(db_user_id)
-    if d:
-        best["strava"] = d
-    if not best:
+        else:
+            empty.append("polar")
+    if get_token(db_user_id, "strava"):
+        d = last_run_date_from_window(db_user_id)
+        if d:
+            best["strava"] = d
+    if not best and not empty:
         return None
-    src = max(best, key=lambda k: best[k])
-    return {"date": best[src], "source": src, "all": best}
+    src = max(best, key=lambda k: best[k]) if best else None
+    return {"date": best[src] if src else None, "source": src, "all": best, "empty": empty}
+
+
+def get_idle(db_user_id: int, workout_date: str | None) -> dict | None:
+    """05.10.2026: простой перед тренировкой — {"days", "shift", "last_run", "source"}.
+    days — полные дни без бега до workout_date (нет пробежек во всём окне → LAST_RUN_WINDOW_DAYS),
+    shift — сдвиг зон в с/км по zones.idle_shift_sec (0 — правило не действует).
+    None — данных нет, правило выключено."""
+    import zones as _z
+    lr = get_last_run(db_user_id)
+    if not lr:
+        return None
+    days = idle_days(lr["date"], workout_date) if lr["date"] else LAST_RUN_WINDOW_DAYS
+    if days is None:
+        return None
+    return {"days": days, "shift": _z.idle_shift_sec(days), "last_run": lr["date"], "source": lr["source"]}
 
 
 def idle_days(last_run_date: str | None, workout_date: str | None) -> int | None:

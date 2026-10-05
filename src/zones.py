@@ -280,3 +280,33 @@ def get_pace_zones(db_user_id: int) -> dict | None:
     if cached:
         cached["runner_type"] = runner_type(cached.get("zones") or {})
     return cached
+
+
+# ── Простой: сдвиг зон на день тренировки (05.10.2026, Антон) ─────────────
+# После 3+ полных дней без бега интервальная работа даётся тяжелее («двигатель на холодную»:
+# падает объём плазмы, обмен уходит в углеводы), хотя VO2max и порог ещё не изменились.
+# Поэтому зоны НА ОДНУ РЕКОМЕНДАЦИЮ сдвигаются медленнее; в профиле и в базе они не меняются.
+# Числа — таблица DeepSeek от 02.10.2026, 2 дня без поправки (решение Антона): между группами
+# обычно ~10 с/км, значит 4 дня ≈ одна группа, 3 дня ≈ полгруппы.
+# (дней от, дней до, сдвиг с/км)
+IDLE_SHIFT_SEC = ((3, 3, 5), (4, 4, 10), (5, 7, 12), (8, 10 ** 6, 15))
+
+
+def idle_shift_sec(days) -> int:
+    """Сдвиг зон в секундах на км по дням простоя; 0 — правило не действует."""
+    if days is None:
+        return 0
+    for lo, hi, sec in IDLE_SHIFT_SEC:
+        if lo <= int(days) <= hi:
+            return sec
+    return 0
+
+
+def shift_zones(zones_map: dict | None, sec: int) -> dict:
+    """Копия зон {'threshold': '4:18', …} со сдвигом на sec секунд медленнее.
+    Значения, которые не разбираются как темп, остаются как есть."""
+    out = {}
+    for z, p in (zones_map or {}).items():
+        v = _pace_to_sec_per_km(p) if isinstance(p, str) else None
+        out[z] = _sec_per_km_to_pace(v + sec) if (v is not None and sec) else p
+    return out

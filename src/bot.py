@@ -3856,11 +3856,15 @@ async def _send_admin_data_block(
             import fitness as _fit
             _lr = _fit.get_last_run(db_user_id)
             if _lr:
-                _idle = _fit.idle_days(_lr["date"], workout_date)
+                _gi = _fit.get_idle(db_user_id, workout_date) or {}
+                _idle = _gi.get("days")
                 _srcs = ", ".join(f"{k} {v}" for k, v in sorted(_lr["all"].items(), key=lambda kv: kv[1], reverse=True))
+                _empty = (" | без пробежек за 14 дней: " + ", ".join(_lr["empty"])) if _lr.get("empty") else ""
+                _shift = _gi.get("shift") or 0
                 _lines.append(
-                    f"\n<b>Последняя пробежка</b>: {_lr['date']} ({_srcs})\n"
+                    f"\n<b>Последняя пробежка</b>: {_lr['date'] or 'нет в окне'} ({_srcs or '—'}){_empty}\n"
                     f"Простой до {workout_date or 'сегодня'}: {_idle} дн."
+                    + (f" → зоны +{_shift} с/км (только интервальная)" if _shift else " → без поправки")
                 )
             else:
                 _lines.append("\n<b>Последняя пробежка</b>: нет данных (фактор простоя выключен)")
@@ -3935,6 +3939,10 @@ async def _send_ai_variant_b(
                 "work_text": analysis.get("work_text", ""),
             }
         advice["low_recovery"] = bool(scenario_ctx.get("low_recovery"))
+        # 05.10.2026: простой — строка «⏸ Пауза…» и запись в историю (advice_json)
+        if (user_data.get("idle") or {}).get("shift"):
+            advice["idle"] = user_data["idle"]
+            advice["idle_note"] = claude_advisor.idle_note(user_data["idle"])
         msg_text = claude_advisor.format_evening_message(
             advice | {"athlete_line": _athlete_line(db_user_id)}, workout_for_render, stats, weather_line=weather_line
         )
@@ -4111,6 +4119,14 @@ async def _send_recommendation(
         "recovery": await _get_unified_recovery(
             db_user_id, force_fresh=(not _is_past_rt) and (not is_broadcast)),
     }
+    # 05.10.2026: простой перед интервальной — дни без бега и сдвиг зон (fitness.get_idle,
+    # только база, без запросов к трекерам). Для лонга правило не применяется.
+    if not long:
+        try:
+            import fitness as _fit_idle
+            user_data["idle"] = _fit_idle.get_idle(db_user_id, _wd)
+        except Exception as _e_idle:
+            logger.warning(f"idle factor error for {telegram_id}: {_e_idle}")
 
     rec_mode = force_mode or (get_preferences(db_user_id) or {}).get("ai_mode", "smart")
     if is_broadcast and not force_mode:
@@ -4200,6 +4216,10 @@ async def _send_recommendation(
         advice = claude_advisor.recommendation_to_long_advice(rec, analysis, user_data["recovery"])
     else:
         advice = claude_advisor.recommendation_to_advice(rec, analysis, user_data["recovery"])
+        # 05.10.2026: простой — строка «⏸ Пауза…» и запись в историю (advice_json)
+        if (user_data.get("idle") or {}).get("shift"):
+            advice["idle"] = user_data["idle"]
+            advice["idle_note"] = claude_advisor.idle_note(user_data["idle"])
 
     # Поля прогрессии рекомендованной группы — для заголовка и промпта
     _adv_grp_num = str(advice.get("recommended_group") or "")
@@ -4791,6 +4811,11 @@ async def _build_variant_b_prompt(
 
     zinfo = _z.get_pace_zones(db_user_id) if db_user_id else None
     zones_map = (zinfo or {}).get("zones") or {}
+    # 05.10.2026: простой — зоны на эту рекомендацию сдвигаются медленнее; ориентир скорости
+    # на коротких отрезках считается ниже от уже сдвинутой повторной зоны.
+    _idle_shift = int((((user_data or {}).get("idle") or {}).get("shift")) or 0)
+    if _idle_shift:
+        zones_map = _z.shift_zones(zones_map, _idle_shift)
 
     # is_past по реальному времени (cutoff 09:00 МСК) — ДО запроса recovery
     _is_past = _workout_is_past(
