@@ -519,7 +519,10 @@ def get_or_create_user(telegram_id: int, name: str, username: str = None) -> int
             (telegram_id, name, username)
         )
         conn.execute(
-            "INSERT INTO user_preferences (user_id) VALUES (?)",
+            # 05.10.2026: режим ИИ пишем явно. На сервере таблица создана давно, и у поля ai_mode
+            # там осталось значение по умолчанию 'deep' (в коде выше — 'smart', но CREATE TABLE
+            # IF NOT EXISTS существующую таблицу не меняет): все новые с 17.09 получали «глубокий».
+            "INSERT INTO user_preferences (user_id, ai_mode) VALUES (?, 'smart')",
             (cursor.lastrowid,)
         )
         print(f"✅ Новый пользователь: {name} ({telegram_id})")
