@@ -7088,10 +7088,13 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
     После правок интервального разбора проверять /report_long s."""
     chat_id = update.effective_user.id
     db_user_id = target_db_user_id or get_or_create_user(update.effective_user.id, update.effective_user.full_name)
-    # /report доступен любому, у кого подключён Garmin или Strava (источник разбора).
-    if not (get_token(db_user_id, "garmin") or get_token(db_user_id, "strava")):
+    # /report доступен любому, у кого подключён Garmin, COROS без пароля или Strava (источник разбора).
+    # 05.10.2026: COROS без пароля тоже источник разбора (ai_package._coros_candidate) — раньше проверка
+    # пропускала только Garmin и Strava, и пользователь с одним COROS получал отказ.
+    if not (get_token(db_user_id, "garmin") or get_token(db_user_id, "coros_mcp")
+            or get_token(db_user_id, "strava")):
         await context.bot.send_message(
-            chat_id, "Для разбора тренировки нужен подключённый Garmin или Strava.")
+            chat_id, "Для разбора тренировки нужен подключённый Garmin, COROS без пароля или Strava.")
         return
     args = list(context.args or [])
     # /report_p <дата> = /report data <дата> (промт + пакет, ИИ не зовётся), обе — только admin; дата — через _parse_cmd_date
@@ -7234,9 +7237,12 @@ async def cmd_report_long(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     кругов у лонга нет. Общее — лишь отправка (_report_text_chunks, _report_ai_chunks, _report_send)."""
     chat_id = update.effective_user.id
     db_user_id = get_or_create_user(update.effective_user.id, update.effective_user.full_name)
-    if not (get_token(db_user_id, "garmin") or get_token(db_user_id, "strava")):
+    # 05.10.2026: COROS без пароля тоже источник разбора (ai_package._coros_candidate) — раньше проверка
+    # пропускала только Garmin и Strava, и пользователь с одним COROS получал отказ.
+    if not (get_token(db_user_id, "garmin") or get_token(db_user_id, "coros_mcp")
+            or get_token(db_user_id, "strava")):
         await context.bot.send_message(
-            chat_id, "Для разбора тренировки нужен подключённый Garmin или Strava.")
+            chat_id, "Для разбора тренировки нужен подключённый Garmin, COROS без пароля или Strava.")
         return
     if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
         await update.message.reply_text("Нет доступа.")
