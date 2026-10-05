@@ -1256,7 +1256,7 @@ def _build_help_text(is_admin: bool) -> str:
         "/status — статус подключённых сервисов\n"
         "/refresh — обновить данные из Strava\n"
         "/profile — профиль (VO2max, лактатный порог)\n"
-        "/mode — режим ИИ (быстрый / глубокий)\n"
+        "/mode — режим ИИ\n"
         "/notifications — настройки уведомлений\n"
         "/connect_strava — подключить Strava\n"
         "/connect_garmin — подключить Garmin Connect\n"
@@ -1278,14 +1278,12 @@ def _build_help_text(is_admin: bool) -> str:
             "/cleanup — убрать за теми, кто заблокировал бота: отзыв Strava/Polar\n"
             "/prompt — последний промпт к модели\n"
             "/debug — разбор последней тренировки\n"
-            "/debug_long — разбор последнего Long Run\n"
             "/ratings — последние оценки рекомендаций\n"
             "/feedbacks — последние сообщения обратной связи\n"
             "/analyze_test — тестовый разбор анонса (без записи в базу)\n"
-            "/brief — анализ с режимами (без даты — последний, или /brief 20260804)\n"
             "/preprocess_mode — режим анализа тренировок (deep/smart)\n"
             "/test_workout — тест Шага 2 (рекомендация группы) на твоих данных\n"
-            "/test_long — тест Шага 2 для длительной на твоих данных\n"
+            "/test_long — тест лонга через ИИ (тестовая ветка, в базу не пишет): p — промт и данные без ИИ, u — выбрать пользователя, 39 — по id, smart|fast — режим\n"
             "/reanalyze — боевой переразбор анонса (запись в базу + эталоны + бриф)\n"
             "/show_analyze — показать последний Шаг 1 из базы\n"
             "/b — вариант B для себя\n"
@@ -1310,9 +1308,11 @@ def _build_help_text(is_admin: bool) -> str:
             "\n/msg_list @user 128 … — написать по списку (текст — следующим сообщением)"
             "\n/msg_service — написать всем, у кого подключён выбранный сервис"
             "\n/profile_user — посмотреть профиль выбранного пользователя"
-            "\n/last — разбор последней выполненной тренировки (графики факт vs план; /last dark — тёмная тема)"
             "\n/report — ИИ-анализ последней тренировки (/report DD_20260612 — выбрать)"
             "\n/report_p — промт разбора целиком (/report_p 0918 — за дату; то же /report data), ИИ не зовётся"
+            "\n/report_long — разбор лонга (/report_long 0920 — за дату старта; s — без ИИ; data — промт и данные)"
+            "\n/shadow_run <дата> [smart|fast] — теневой прогон Шага 2 по всем с зонами, только в историю, никому не шлёт"
+            "\n/shadow_caps — теневое сравнение с потолком скорости и без, результат в файл и сводкой"
         )
     return text
 
@@ -1582,41 +1582,6 @@ async def cmd_debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines += ["", f"Доп. группы из комментариев: {nums}"]
         for raw in w.get('extra_groups_raw', []):
             lines.append(f"---\n{raw[:300]}")
-
-    text = '\n'.join(lines)
-    for i in range(0, len(text), 4096):
-        await update.message.reply_text(text[i:i + 4096])
-
-
-async def cmd_debug_long(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показывает распарсенные данные последнего Long Run (только для админов)."""
-    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
-        await update.message.reply_text("Нет доступа.")
-        return
-    if not last_long_run:
-        await update.message.reply_text("Long Run ещё не загружался. Сначала /long.")
-        return
-
-    w = last_long_run
-    lines = [
-        f"📅 {w.get('weekday', '').capitalize()} {w.get('workout_date', '')}",
-        f"Тип: {w.get('workout_type', '—')}",
-        f"📍 {w.get('location', '—')}",
-        f"⏰ {w.get('schedule', '—')}",
-        f"📏 Объём: {w.get('total_volume_km', '—')}",
-        f"even_pace_available: {w.get('even_pace_available', False)}",
-        f"is_past: {w.get('is_past', False)}",
-        "",
-        "ГРУППЫ (распарсенные):",
-    ]
-    for g in (w.get("groups") or []):
-        label = g.get("label") or f"Группа {g.get('number', '?')}"
-        pace_start = g.get("pace_start", "—")
-        pace_end = g.get("pace_end", "—")
-        prog = "прогрессия" if g.get("progression") else "ровный"
-        lines.append(f"  {label}: {pace_start} → {pace_end} ({prog})")
-
-    lines += ["", "RAW ТЕКСТ (первые 2000 симв.):", (w.get("groups_raw") or "")[:2000]]
 
     text = '\n'.join(lines)
     for i in range(0, len(text), 4096):
@@ -1943,11 +1908,6 @@ async def _run_test_step2(update, context, *, long: bool):
 async def cmd_test_workout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Тест Шага 2 для интервальной: анализ + recommend_group на данных админа (админ)."""
     await _run_test_step2(update, context, long=False)
-
-
-async def cmd_test_long(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Тест Шага 2 для длительной: анализ + recommend_long на данных админа (админ)."""
-    await _run_test_step2(update, context, long=True)
 
 
 async def _reanalyze_one(workout: dict, mode: str, context=None) -> str:
@@ -7266,18 +7226,55 @@ async def cmd_report_long(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await _report_send(context, chat_id, msg, res, chart_items, ai_chunks, _ai_stats, title=_long_title(res))
 
 
-async def cmd_long_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/long_ai (admin) — ТЕСТОВАЯ рекомендация длительной через ИИ (05.10.2026).
+async def cmd_test_long(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/test_long (admin) — ТЕСТОВАЯ рекомендация длительной через ИИ (с 05.10.2026; до этого команда
+    считала лонг формулами — это делает /long и /l_user).
     Изолированная ветка: боевую формульную (/long, рассылка, recommend_long) не трогает,
     в базу ничего не пишет, другим пользователям ничего не шлёт — ответ уходит только админу.
-    Промт и сборка пакета данных — src/long_ai.py (PROMPT_LONG_AI, build_long_ai_package).
-    /long_ai — на данных админа, режим ИИ из /mode;
-    /long_ai p — только промт и пакет данных, без вызова ИИ;
-    /long_ai 39 — на данных пользователя с id 39 (id — из /users);
-    /long_ai deep|smart|fast — режим ИИ на этот прогон. Аргументы можно сочетать: /long_ai 39 p."""
+    Промт и сборка пакета данных — src/test_long.py (PROMPT_LONG_AI, build_long_ai_package).
+    /test_long — на данных админа, режим ИИ из /mode;
+    /test_long p — только промт и пакет данных, без вызова ИИ;
+    /test_long u — выбрать пользователя кнопками (как /l_user); /test_long 39 — по id из /users;
+    /test_long smart|fast — режим ИИ на этот прогон. Аргументы можно сочетать: /test_long u p."""
     if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
         await update.message.reply_text("Нет доступа.")
         return
+    args = [a.lower() for a in (context.args or [])]
+    opts = {"prompt_only": any(a in ("p", "data", "prompt") for a in args),
+            "mode": next((a for a in args if a in ("smart", "fast")), None)}
+    if any(a in ("u", "user") for a in args):
+        users = get_users_list_for_b()
+        if not users:
+            await update.message.reply_text("Нет пользователей в базе.")
+            return
+        context.user_data["test_long_opts"] = opts
+        keyboard = [[InlineKeyboardButton(
+            u["name"] + (f" (@{u['username']})" if u.get("username") else ""),
+            callback_data=f"tlong_{u['db_user_id']}")] for u in users]
+        await update.message.reply_text(
+            "🧪 Лонг через ИИ — выбери пользователя" + (" (только промт и данные):" if opts["prompt_only"] else ":"),
+            reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+    target = next((int(a) for a in args if a.isdigit()), None)
+    await _run_long_ai(update, context, target, **opts)
+
+
+async def test_long_user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Кнопка с пользователем из /test_long u → тестовый лонг через ИИ на его данных (ответ админу)."""
+    query = update.callback_query
+    if query.from_user.id not in ADMIN_TELEGRAM_IDS:
+        await query.answer("Нет доступа.")
+        return
+    await query.answer()
+    target = int(query.data.rsplit("_", 1)[1])
+    opts = context.user_data.pop("test_long_opts", None) or {"prompt_only": False, "mode": None}
+    await _run_long_ai(update, context, target, **opts)
+
+
+async def _run_long_ai(update: Update, context: ContextTypes.DEFAULT_TYPE, target: int | None,
+                       prompt_only: bool = False, mode: str | None = None) -> None:
+    """Прогон тестовой рекомендации лонга через ИИ (общая часть /test_long и кнопок выбора пользователя).
+    target — id пользователя в базе или None (тогда на данных админа). Только админ, в базу не пишет."""
     import html
     import json as _json
     import long_ai
@@ -7286,16 +7283,12 @@ async def cmd_long_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     chat_id = update.effective_user.id
     admin_db_id = get_or_create_user(update.effective_user.id, update.effective_user.full_name)
-    args = [a.lower() for a in (context.args or [])]
-    prompt_only = any(a in ("p", "data", "prompt") for a in args)
-    mode = next((a for a in args if a in ("deep", "smart", "fast")), None)
-    target = next((int(a) for a in args if a.isdigit()), None)
     db_user_id = target or admin_db_id
     who = "админ"
     if target and target != admin_db_id:
         u = next((x for x in get_users_list_for_b(all_users=True) if x.get("db_user_id") == target), None)
         if not u:
-            await update.message.reply_text(f"Пользователя с id {target} нет.")
+            await context.bot.send_message(chat_id, f"Пользователя с id {target} нет.")
             return
         who = f"{u.get('name')} (id {target})"
 
@@ -7318,14 +7311,14 @@ async def cmd_long_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     try:
         recovery = await _get_unified_recovery(db_user_id, force_fresh=False)
     except Exception as e:
-        logger.warning(f"/long_ai recovery error for {db_user_id}: {e}")
+        logger.warning(f"/test_long recovery error for {db_user_id}: {e}")
     # Нагрузка за 48 ч и последний старт — тем же порядком источников, что у боевого /long.
     fitness = None
     for getter in (get_garmin_fitness_data, get_coros_fitness_data, get_polar_fitness_data):
         try:
             fitness = await getter(db_user_id)
         except Exception as e:
-            logger.warning(f"/long_ai fitness error for {db_user_id}: {e}")
+            logger.warning(f"/test_long fitness error for {db_user_id}: {e}")
         if fitness:
             break
     if not fitness:
@@ -7334,7 +7327,7 @@ async def cmd_long_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             if _tok:
                 fitness = await get_fitness_data(db_user_id, _tok)
         except Exception as e:
-            logger.warning(f"/long_ai strava fitness error for {db_user_id}: {e}")
+            logger.warning(f"/test_long strava fitness error for {db_user_id}: {e}")
     try:
         activities = _db.get_strava_activities(db_user_id)
     except Exception:
@@ -7345,7 +7338,7 @@ async def cmd_long_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     try:
         live = await find_next_long_run()
     except Exception as e:
-        logger.warning(f"/long_ai find_next_long_run error: {e}")
+        logger.warning(f"/test_long find_next_long_run error: {e}")
     workout_dict = dict(live) if live else {"workout_date": analysis.get("workout_date", "")}
     workout_dict["workout_type"] = "long"
     workout_dict["even_pace_available"] = analysis.get("even_pace_available")
@@ -7357,7 +7350,7 @@ async def cmd_long_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         if _w:
             weather_line, weather_prompt = format_weather_for_message(_w), format_weather_for_prompt(_w)
     except Exception as e:
-        logger.warning(f"/long_ai weather error: {e}")
+        logger.warning(f"/test_long weather error: {e}")
 
     pkg = long_ai.build_long_ai_package(
         profile=profile, zinfo=zinfo, recovery=recovery, fitness=fitness, analysis=analysis,
@@ -7377,11 +7370,11 @@ async def cmd_long_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             _strat = {"progressive": "прогресс", "even": "ровно"}.get(_adv.get("run_strategy"), "")
             formula = f"гр.{_rec['main_group'].get('number')} {_strat}".strip()
     except Exception as e:
-        logger.warning(f"/long_ai formula error for {db_user_id}: {e}")
+        logger.warning(f"/test_long formula error for {db_user_id}: {e}")
 
     if not mode:
         mode = (get_preferences(admin_db_id) or {}).get("ai_mode", "smart")
-        mode = {"calc": "fast"}.get(mode, mode)
+        mode = {"calc": "fast", "deep": "smart"}.get(mode, mode)
     header = (f"🧪 Лонг через ИИ (тест) · {who}\n"
               f"Анонс: {analysis.get('workout_date') or '—'} ({status}) · формулы сейчас: {formula}")
     full_prompt = long_ai.PROMPT_LONG_AI + "\n\n" + pkg["text"]
@@ -7408,12 +7401,12 @@ async def cmd_long_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             advice, workout_dict, stats=stats, weather_line=weather_line, has_tracker=True)
         await context.bot.send_message(chat_id, body, parse_mode="HTML")
     except Exception as e:
-        logger.error(f"/long_ai format error: {e}", exc_info=True)
+        logger.error(f"/test_long format error: {e}", exc_info=True)
         await context.bot.send_message(
             chat_id, "⚠️ Боевой вид сообщения не собрался, сырой ответ ИИ:\n"
             + _json.dumps(advice, ensure_ascii=False, indent=1)[:3500])
     extras = long_ai.format_extras(advice)
-    for ch in _report_text_chunks((extras + "\n\n" if extras else "") + "— тестовая ветка /long_ai, пользователям не уходит"):
+    for ch in _report_text_chunks((extras + "\n\n" if extras else "") + "— тестовая ветка /test_long, пользователям не уходит"):
         await context.bot.send_message(chat_id, ch)
 
 
@@ -7599,7 +7592,6 @@ def main():
     app.add_handler(CommandHandler("profile", cmd_profile))
     app.add_handler(CommandHandler("mode", cmd_mode))
     app.add_handler(CommandHandler("debug", cmd_debug))
-    app.add_handler(CommandHandler("debug_long", cmd_debug_long))
     app.add_handler(CommandHandler("notifications", cmd_notifications))
     app.add_handler(CommandHandler("mailing", cmd_mailing))
     app.add_handler(MessageHandler(filters.VIDEO, admin_video_handler))
@@ -7639,7 +7631,6 @@ def main():
     app.add_handler(CommandHandler("report",    cmd_report))
     app.add_handler(CommandHandler("report_p",  cmd_report))
     app.add_handler(CommandHandler("report_long", cmd_report_long))
-    app.add_handler(CommandHandler("long_ai",   cmd_long_ai))
     app.add_handler(CommandHandler("report_user", report_user_command))
     app.add_handler(CallbackQueryHandler(msg_user_callback,  pattern=r"^msgu_\d+$"))
     app.add_handler(CallbackQueryHandler(msg_service_callback, pattern=r"^msgsvc_\w+$"))
@@ -7650,6 +7641,7 @@ def main():
     app.add_handler(CallbackQueryHandler(w_user_light_callback, pattern=r"^wul_\d+$"))
     app.add_handler(CallbackQueryHandler(report_user_callback, pattern=r"^report_user_\d+$"))
     app.add_handler(CallbackQueryHandler(l_user_callback,   pattern=r"^l_user_\d+$"))
+    app.add_handler(CallbackQueryHandler(test_long_user_callback, pattern=r"^tlong_\d+$"))
     app.add_handler(CallbackQueryHandler(pb_user_callback,  pattern=r"^pb_user_\d+(_\d{8})?$"))
     app.add_handler(CallbackQueryHandler(pa_user_callback,  pattern=r"^pa_user_\d+$"))
     app.add_handler(CallbackQueryHandler(panalyze_callback, pattern=r"^panalyze_(interval|long)$"))
