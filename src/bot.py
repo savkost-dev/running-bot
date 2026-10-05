@@ -6878,13 +6878,108 @@ async def cmd_shadow_run(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await msg.edit_text(text[:4000], parse_mode="HTML")
 
 
+def _report_text_chunks(text: str) -> list:
+    """Режет длинный текст разбора на сообщения до ~3800 знаков по границам строк.
+    Общая для /report и /report_long (только отправка, не разбор)."""
+    chunks, chunk, size = [], [], 0
+    for line in text.split("\n"):
+        if size + len(line) + 1 > 3800 and chunk:
+            chunks.append("\n".join(chunk))
+            chunk, size = [], 0
+        chunk.append(line)
+        size += len(line) + 1
+    if chunk:
+        chunks.append("\n".join(chunk))
+    return chunks
+
+
+async def _report_ai_chunks(msg, res: dict, prompt: str, db_user_id: int):
+    """Текст разбора от ИИ, готовый к отправке: (список сообщений, статистика вызова).
+    Общая для /report и /report_long: режим пользователя, чистка Markdown, плашка, ссылка Strava.
+    Промт передаёт вызывающий — у интервалов PROMPT, у лонга PROMPT_LONG."""
+    # 17.08.2026: разбор в РЕЖИМЕ ПОЛЬЗОВАТЕЛЯ (был всегда deep); calc → fast —
+    # текстовый разбор нужен всем, у формульного режима своего ИИ-пути нет.
+    _rmode = (get_preferences(db_user_id) or {}).get("ai_mode", "smart")
+    _rmode = {"calc": "fast"}.get(_rmode, _rmode)
+    _rlabel = _MODE_INFO.get(_rmode, ("", _rmode))[1]
+    await msg.edit_text(f"🤖 Анализирую через ИИ ({_rlabel})… ({res['name']})")
+    import claude_advisor
+    answer, _ai_stats = await asyncio.to_thread(
+        claude_advisor.ask_text, prompt + "\n\n" + res["text"], _rmode, 0.4, True)
+    if not answer:
+        return ["⚠️ ИИ не ответил."], _ai_stats
+    import re as _re_md
+    _ans = _re_md.sub(r"\*\*(.+?)\*\*", r"\1", answer)
+    _ans = _re_md.sub(r"__(.+?)__", r"\1", _ans)
+    _clean = []
+    for _ln in _ans.split("\n"):
+        _s = _ln.lstrip()
+        _s = _re_md.sub(r"^#{1,6}\s*", "", _s)
+        _s = _re_md.sub(r"^[\*\-]\s+", "— ", _s)
+        _clean.append(_s)
+    # 17.08.2026: плашка режим/токены в разборе — как в рекомендации
+    _mstr = claude_advisor._MODE_LABELS.get(_ai_stats.get("mode"), "🧠 Глубокий (ИИ)")
+    _plaque = (f"⏱ {_ai_stats.get('time_sec', '?')}с | {_mstr} | "
+               f"📥 {_ai_stats.get('input_tokens', '?')} / "
+               f"📤 {_ai_stats.get('output_tokens', '?')} | v{VERSION}\n"
+               f"@DD_adviser_bot · dodick.run")
+    _sv_link = ""
+    if res.get("source") == "strava" and res.get("act_id"):
+        _sv_link = (f"\n🔗 View on Strava: "
+                    f"https://www.strava.com/activities/{res['act_id']}")
+    return _report_text_chunks("\n".join(_clean).strip() + _sv_link + "\n\n" + _plaque), _ai_stats
+
+
+async def _report_send(context, user_id: int, msg, res: dict, chart_items: list,
+                       ai_chunks, ai_stats, top_rows: list | None = None) -> None:
+    """Отправка готового разбора: сперва картинки, затем текст ИИ; кнопки — на последнем сообщении.
+    Общая для /report и /report_long. top_rows — дополнительные ряды кнопок сверху
+    (у интервального разбора — «⚙️ Настроить разбор»; у лонга их нет)."""
+    await msg.edit_text(f"📊 Тренировка: {res['name']}")
+    # Кнопку «Главное меню» вешаем на последнее сообщение: в полном режиме —
+    # на последний чанк анализа, в simple-режиме — на последнюю фотографию.
+    menu_btn = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu_new")]])
+    # 19.09.2026: «⭐ Оценить разбор» — только если ИИ ответил; что оцениваем — зашито в кнопку:
+    # rate_show:report:<ГГГГММДД>:<режим ИИ>
+    if ai_chunks and not ai_chunks[0].startswith("⚠️"):
+        _rate_cb = (f"rate_show:report:{str(res.get('wdate') or '').replace('-', '')}:"
+                    f"{(ai_stats or {}).get('mode') or ''}")
+        menu_btn = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⭐ Оценить разбор", callback_data=_rate_cb)],
+            [InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu_new")]])
+    if top_rows:
+        menu_btn = InlineKeyboardMarkup(list(top_rows) + list(menu_btn.inline_keyboard))
+    btn_on_last_photo = not ai_chunks
+    menu_sent = False
+    for idx, (png, cap) in enumerate(chart_items):
+        attach = btn_on_last_photo and idx == len(chart_items) - 1
+        with open(png, "rb") as f:
+            await context.bot.send_photo(
+                user_id, photo=f, caption=cap,
+                reply_markup=menu_btn if attach else None)
+        if attach:
+            menu_sent = True
+    if ai_chunks:
+        for i, ch in enumerate(ai_chunks):
+            attach = i == len(ai_chunks) - 1
+            await context.bot.send_message(
+                user_id, ch,
+                reply_markup=menu_btn if attach else None)
+            if attach:
+                menu_sent = True
+    if not menu_sent:
+        await context.bot.send_message(
+            user_id, "Готово.", reply_markup=menu_btn)
+
+
 async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
                      target_db_user_id: int | None = None,
                      selector_override: str | None = None,
                      cut_by_plan: bool = False, cand_cache: dict | None = None,
                      simple_override: bool | None = None,
                      skip_laps: int | None = None) -> None:
-    """/report — ИИ-анализ тренировки: собирает пакет данных (профиль,
+    """/report — ИИ-анализ ИНТЕРВАЛЬНОЙ тренировки: собирает пакет данных (профиль,
     план, факт по отрезкам, утренний снимок) и шлёт в ИИ, возвращает разбор тренера.
     Read-only, рабочие ветки не трогает.
     /report — последняя DD; /report DD_20260612 | /report 23219097987 — выбор тренировки;
@@ -6893,7 +6988,11 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
     cut_by_plan / cand_cache / simple_override / skip_laps — 02.10.2026: панель «⚙️ Настроить разбор»
     (report_cfg_callback): тот же разбор, но отрезки нарезаются по плану из посекундного ряда и/или
     отбрасываются первые N кругов; кандидат берётся из кэша прошлого разбора, чтобы не ходить
-    в сервисы заново."""
+    в сервисы заново.
+    05.10.2026: ПРАВИЛО — у интервалов и лонга свои обработчики (cmd_report / cmd_report_long) и свои
+    копии карточки, графиков и пакета (ai_package / ai_package_long). Здесь — только ai_package.
+    Общее — лишь отправка (_report_text_chunks, _report_ai_chunks, _report_send).
+    После правок интервального разбора проверять /report_long s."""
     chat_id = update.effective_user.id
     db_user_id = target_db_user_id or get_or_create_user(update.effective_user.id, update.effective_user.full_name)
     # /report доступен любому, у кого подключён Garmin или Strava (источник разбора).
@@ -6904,11 +7003,6 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
     args = list(context.args or [])
     # /report_p <дата> = /report data <дата> (промт + пакет, ИИ не зовётся), обе — только admin; дата — через _parse_cmd_date
     report_p = (update.effective_message.text or "").split()[0].lower().startswith("/report_p")
-    # 20.09.2026: /report_long — разбор лонга (DDLong-…): свой сборщик пакета и свой промт; пока только admin
-    long_mode = (update.effective_message.text or "").split()[0].lower().startswith("/report_long")
-    if long_mode and update.effective_user.id not in ADMIN_TELEGRAM_IDS:
-        await update.message.reply_text("Нет доступа.")
-        return
     if report_p and args and _parse_cmd_date(args[0]):
         args[0] = "DD_" + _parse_cmd_date(args[0]).replace("-", "")
     raw_mode = report_p or (bool(args) and args[0].lower() in ("data", "raw", "данные"))
@@ -6922,31 +7016,15 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
         args = args[1:]
     if simple_override is not None:
         simple_mode = simple_override
-    # 20.09.2026: /report_long <дата> — дата любого формата через _parse_cmd_date → 'YYYY-MM-DD' (лонг ищется по дате старта)
-    if long_mode and args and _parse_cmd_date(args[0]):
-        args[0] = _parse_cmd_date(args[0])
     selector = selector_override if selector_override else (args[0] if args else None)
 
     import html
-
-    def _send_chunks(text, pre=False):
-        chunks, chunk, size = [], [], 0
-        for line in text.split("\n"):
-            if size + len(line) + 1 > 3800 and chunk:
-                chunks.append("\n".join(chunk))
-                chunk, size = [], 0
-            chunk.append(line)
-            size += len(line) + 1
-        if chunk:
-            chunks.append("\n".join(chunk))
-        return chunks
 
     if raw_mode:
         msg = await context.bot.send_message(chat_id, "⏳ Собираю пакет данных…")
         try:
             from ai_package import build_package, PROMPT
-            from ai_package_long import build_long_package, PROMPT_LONG
-            res = await (build_long_package if long_mode else build_package)(db_user_id, selector)
+            res = await build_package(db_user_id, selector)
         except Exception as e:
             logger.error(f"/report data error for {update.effective_user.id}: {e}", exc_info=True)
             await msg.edit_text(f"❌ Ошибка сборки: {type(e).__name__}: {e}")
@@ -6955,8 +7033,8 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
             await msg.edit_text(f"⚠️ {res.get('msg')}")
             return
         await msg.edit_text(f"📦 Пакет данных: {res['name']}")
-        full = (PROMPT_LONG if long_mode else PROMPT) + "\n\n" + res["text"]
-        for ch in _send_chunks(full):
+        full = PROMPT + "\n\n" + res["text"]
+        for ch in _report_text_chunks(full):
             await context.bot.send_message(
                 update.effective_user.id, f"<pre>{html.escape(ch)}</pre>", parse_mode="HTML")
         return
@@ -6966,12 +7044,8 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
     msg = await context.bot.send_message(chat_id, wait)
     try:
         from ai_package import build_package, PROMPT
-        from ai_package_long import build_long_package, PROMPT_LONG
-        if long_mode:
-            res = await build_long_package(db_user_id, selector)
-        else:
-            res = await build_package(db_user_id, selector, cut_by_plan=cut_by_plan, cand=cand_cache,
-                                      skip_laps=skip_laps)
+        res = await build_package(db_user_id, selector, cut_by_plan=cut_by_plan, cand=cand_cache,
+                                  skip_laps=skip_laps)
     except Exception as e:
         logger.error(f"/report error for {update.effective_user.id}: {e}", exc_info=True)
         await msg.edit_text(f"❌ Ошибка сборки: {type(e).__name__}: {e}")
@@ -6984,7 +7058,7 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
         return
     # 02.10.2026: кандидат (круги, план, посекундный ряд) — в кэш, чтобы кнопка «без отсечек»
     # не ходила в сервисы заново (у COROS дневной лимит FIT, у Strava — квота streams)
-    if not long_mode and res.get("cand"):
+    if res.get("cand"):
         context.user_data["report_cand"] = {"db_user_id": db_user_id, "act_id": str(res.get("act_id")),
                                             "cand": res["cand"]}
 
@@ -6992,11 +7066,7 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
     # Фолбэк на старые 3 PNG, если карточка не построилась.
     chart_items = []
     try:
-        # 20.09.2026: карточка и графики лонга — свои (ai_package_long), интервалов — ai_package
-        if long_mode:
-            from ai_package_long import build_report_card, build_charts_stacked
-        else:
-            from ai_package import build_report_card, build_charts_stacked
+        from ai_package import build_report_card, build_charts_stacked
         card = await build_report_card(
             res.get("splits"), res.get("plan_steps"), res["name"],
             res.get("wdate"), res.get("wgroup"), res.get("source"),
@@ -7017,10 +7087,7 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
         logger.error(f"/report card error: {e}", exc_info=True)
     if not chart_items:
         try:
-            if long_mode:
-                from ai_package_long import build_charts
-            else:
-                from ai_package import build_charts
+            from ai_package import build_charts
             charts = await build_charts(res.get("splits"), res.get("plan_steps"),
                                         res["name"], "/tmp", str(db_user_id), dark=False)
         except Exception as e:
@@ -7032,86 +7099,128 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
             (charts.get("table_png"), "Таблица повторов")) if p]
 
     # Полный режим: получаем анализ ИИ ДО отправки (чтобы отдать всё разом).
-    ai_chunks = None
+    ai_chunks, _ai_stats = None, None
     if not simple_mode:
-        # 17.08.2026: разбор в РЕЖИМЕ ПОЛЬЗОВАТЕЛЯ (был всегда deep); calc → fast —
-        # текстовый разбор нужен всем, у формульного режима своего ИИ-пути нет.
-        _rmode = (get_preferences(db_user_id) or {}).get("ai_mode", "smart")
-        _rmode = {"calc": "fast"}.get(_rmode, _rmode)
-        _rlabel = _MODE_INFO.get(_rmode, ("", _rmode))[1]
-        await msg.edit_text(f"🤖 Анализирую через ИИ ({_rlabel})… ({res['name']})")
-        import claude_advisor
-        answer, _ai_stats = await asyncio.to_thread(
-            claude_advisor.ask_text, (PROMPT_LONG if long_mode else PROMPT) + "\n\n" + res["text"], _rmode, 0.4, True)
-        if answer:
-            import re as _re_md
-            _ans = _re_md.sub(r"\*\*(.+?)\*\*", r"\1", answer)
-            _ans = _re_md.sub(r"__(.+?)__", r"\1", _ans)
-            _clean = []
-            for _ln in _ans.split("\n"):
-                _s = _ln.lstrip()
-                _s = _re_md.sub(r"^#{1,6}\s*", "", _s)
-                _s = _re_md.sub(r"^[\*\-]\s+", "— ", _s)
-                _clean.append(_s)
-            # 17.08.2026: плашка режим/токены в разборе — как в рекомендации
-            _mstr = claude_advisor._MODE_LABELS.get(_ai_stats.get("mode"), "🧠 Глубокий (ИИ)")
-            _plaque = (f"⏱ {_ai_stats.get('time_sec', '?')}с | {_mstr} | "
-                       f"📥 {_ai_stats.get('input_tokens', '?')} / "
-                       f"📤 {_ai_stats.get('output_tokens', '?')} | v{VERSION}\n"
-                       f"@DD_adviser_bot · dodick.run")
-            _sv_link = ""
-            if res.get("source") == "strava" and res.get("act_id"):
-                _sv_link = (f"\n🔗 View on Strava: "
-                            f"https://www.strava.com/activities/{res['act_id']}")
-            ai_chunks = _send_chunks("\n".join(_clean).strip() + _sv_link + "\n\n" + _plaque)
-        else:
-            ai_chunks = ["⚠️ ИИ не ответил."]
+        ai_chunks, _ai_stats = await _report_ai_chunks(msg, res, PROMPT, db_user_id)
 
-    # Отдаём всё разом: сперва графики, затем текст анализа.
-    await msg.edit_text(f"📊 Тренировка: {res['name']}")
-    # Кнопку «Главное меню» вешаем на последнее сообщение: в полном режиме —
-    # на последний чанк анализа, в simple-режиме — на последнюю фотографию.
-    menu_btn = InlineKeyboardMarkup(
-        [[InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu_new")]])
-    # 19.09.2026: «⭐ Оценить разбор» — только если ИИ ответил; что оцениваем — зашито в кнопку:
-    # rate_show:report:<ГГГГММДД>:<режим ИИ>
-    if ai_chunks and not ai_chunks[0].startswith("⚠️"):
-        _rate_cb = (f"rate_show:report:{str(res.get('wdate') or '').replace('-', '')}:"
-                    f"{(_ai_stats or {}).get('mode') or ''}")
-        menu_btn = InlineKeyboardMarkup([
-            [InlineKeyboardButton("⭐ Оценить разбор", callback_data=_rate_cb)],
-            [InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu_new")]])
     # 02.10.2026: «⚙️ Настроить разбор» — панель с двумя настройками (нарезка по расстоянию без
     # отсечек, пропуск первых N кругов) и кнопкой «Пересобрать». Текущее состояние зашито в кнопку:
     # rcfg:<db_user_id>:<act_id>:open:<cut 0/1>:<skip N>:<simple 0/1>
-    if (res.get("can_cut") or res.get("can_skip")) and not long_mode:
+    # Только у интервального разбора — у лонга (cmd_report_long) панели нет.
+    top_rows = None
+    if res.get("can_cut") or res.get("can_skip"):
         _cfg_cb = (f"rcfg:{db_user_id}:{res.get('act_id')}:open:{1 if res.get('cut_by_plan') else 0}:"
                    f"{int(res.get('skip_laps') or 0)}:{1 if simple_mode else 0}")
         if len(_cfg_cb.encode()) <= 64:
-            menu_btn = InlineKeyboardMarkup(
-                [[InlineKeyboardButton("⚙️ Настроить разбор", callback_data=_cfg_cb)]]
-                + list(menu_btn.inline_keyboard))
-    btn_on_last_photo = not ai_chunks
-    menu_sent = False
-    for idx, (png, cap) in enumerate(chart_items):
-        attach = btn_on_last_photo and idx == len(chart_items) - 1
-        with open(png, "rb") as f:
-            await context.bot.send_photo(
-                update.effective_user.id, photo=f, caption=cap,
-                reply_markup=menu_btn if attach else None)
-        if attach:
-            menu_sent = True
-    if ai_chunks:
-        for i, ch in enumerate(ai_chunks):
-            attach = i == len(ai_chunks) - 1
-            await context.bot.send_message(
-                update.effective_user.id, ch,
-                reply_markup=menu_btn if attach else None)
-            if attach:
-                menu_sent = True
-    if not menu_sent:
+            top_rows = [[InlineKeyboardButton("⚙️ Настроить разбор", callback_data=_cfg_cb)]]
+    # Отдаём всё разом: сперва графики, затем текст анализа.
+    await _report_send(context, update.effective_user.id, msg, res, chart_items,
+                       ai_chunks, _ai_stats, top_rows=top_rows)
+
+
+async def cmd_report_long(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/report_long — ИИ-разбор ЛОНГА (DDLong-…), пока только admin. С 20.09.2026 — свой пакет, промт,
+    карточка и графики (ai_package_long); с 05.10.2026 — свой обработчик, отдельный от cmd_report.
+    /report_long — последний лонг; /report_long 0920 | 20260920 | 2026-09-20 — по дате СТАРТА
+    (в имени лонга даты нет; дата любого формата через _parse_cmd_date);
+    /report_long simple|s [дата] — только карточка и графики, без вызова ИИ;
+    /report_long data [дата] — сырой пакет данных + промпт (без вызова ИИ).
+    ПРАВИЛО: у интервалов и лонга свои обработчики и свои копии карточки, графиков и пакета.
+    Здесь — только ai_package_long. Меняя подпись функции интервального разбора, копию лонга и этот
+    обработчик не трогать (и наоборот). Панели «⚙️ Настроить разбор», нарезки по плану и пропуска
+    кругов у лонга нет. Общее — лишь отправка (_report_text_chunks, _report_ai_chunks, _report_send)."""
+    chat_id = update.effective_user.id
+    db_user_id = get_or_create_user(update.effective_user.id, update.effective_user.full_name)
+    if not (get_token(db_user_id, "garmin") or get_token(db_user_id, "strava")):
         await context.bot.send_message(
-            update.effective_user.id, "Готово.", reply_markup=menu_btn)
+            chat_id, "Для разбора тренировки нужен подключённый Garmin или Strava.")
+        return
+    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+        await update.message.reply_text("Нет доступа.")
+        return
+    args = list(context.args or [])
+    raw_mode = bool(args) and args[0].lower() in ("data", "raw", "данные")
+    if raw_mode:
+        args = args[1:]
+    simple_mode = bool(args) and args[0].lower() in ("simple", "s")
+    if simple_mode:
+        args = args[1:]
+    if args and _parse_cmd_date(args[0]):
+        args[0] = _parse_cmd_date(args[0])
+    selector = args[0] if args else None
+
+    import html
+    from ai_package_long import (build_long_package, PROMPT_LONG,
+                                 build_report_card as build_long_card,
+                                 build_charts_stacked as build_long_charts_stacked,
+                                 build_charts as build_long_charts)
+
+    if raw_mode:
+        msg = await context.bot.send_message(chat_id, "⏳ Собираю пакет данных…")
+        try:
+            res = await build_long_package(db_user_id, selector)
+        except Exception as e:
+            logger.error(f"/report_long data error for {update.effective_user.id}: {e}", exc_info=True)
+            await msg.edit_text(f"❌ Ошибка сборки: {type(e).__name__}: {e}")
+            return
+        if not res.get("ok"):
+            await msg.edit_text(f"⚠️ {res.get('msg')}")
+            return
+        await msg.edit_text(f"📦 Пакет данных: {res['name']}")
+        for ch in _report_text_chunks(PROMPT_LONG + "\n\n" + res["text"]):
+            await context.bot.send_message(chat_id, f"<pre>{html.escape(ch)}</pre>", parse_mode="HTML")
+        return
+
+    wait = ("⏳ Собираю данные и графики…" if simple_mode else
+            "⏳ Собираю данные, графики и анализ через ИИ…\nМожет занять 1-3 мин.")
+    msg = await context.bot.send_message(chat_id, wait)
+    try:
+        res = await build_long_package(db_user_id, selector)
+    except Exception as e:
+        logger.error(f"/report_long error for {update.effective_user.id}: {e}", exc_info=True)
+        await msg.edit_text(f"❌ Ошибка сборки: {type(e).__name__}: {e}")
+        return
+    if not res.get("ok"):
+        await msg.edit_text(f"⚠️ {res.get('msg')}")
+        return
+
+    # Картинки: карточка лонга + графики одной вертикальной PNG.
+    # Фолбэк на старые 3 PNG, если карточка не построилась.
+    chart_items = []
+    try:
+        card = await build_long_card(
+            res.get("splits"), res.get("plan_steps"), res["name"],
+            res.get("wdate"), res.get("wgroup"), res.get("source"),
+            res.get("s4"), "/tmp", str(db_user_id), dark=False,
+            splits400=res.get("splits400"),
+            no_gps=bool(res.get("no_gps")), by_watch_plan=bool(res.get("by_watch_plan")),
+            by_stryd=bool(res.get("by_stryd")))
+        if card:
+            stacked = await build_long_charts_stacked(
+                res.get("splits"), res.get("plan_steps"), res["name"],
+                "/tmp", str(db_user_id), dark=False, source=res.get("source") or "",
+                splits_fine=res.get("splits100"))
+            chart_items = [(p, c) for p, c in (
+                (card, "@DD_adviser_bot · dodick.run"),
+                (stacked, "Графики · @DD_adviser_bot · dodick.run")) if p]
+    except Exception as e:
+        logger.error(f"/report_long card error: {e}", exc_info=True)
+    if not chart_items:
+        try:
+            charts = await build_long_charts(res.get("splits"), res.get("plan_steps"),
+                                             res["name"], "/tmp", str(db_user_id), dark=False)
+        except Exception as e:
+            logger.error(f"/report_long charts error: {e}", exc_info=True)
+            charts = {}
+        chart_items = [(p, c) for p, c in (
+            (charts.get("work_png"), "Рабочие интервалы"),
+            (charts.get("rest_png"), "Отдых"),
+            (charts.get("table_png"), "Таблица повторов")) if p]
+
+    ai_chunks, _ai_stats = None, None
+    if not simple_mode:
+        ai_chunks, _ai_stats = await _report_ai_chunks(msg, res, PROMPT_LONG, db_user_id)
+    await _report_send(context, chat_id, msg, res, chart_items, ai_chunks, _ai_stats)
 
 
 async def report_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -7335,7 +7444,7 @@ def main():
     app.add_handler(CommandHandler("howto",     cmd_howto))
     app.add_handler(CommandHandler("report",    cmd_report))
     app.add_handler(CommandHandler("report_p",  cmd_report))
-    app.add_handler(CommandHandler("report_long", cmd_report))
+    app.add_handler(CommandHandler("report_long", cmd_report_long))
     app.add_handler(CommandHandler("report_user", report_user_command))
     app.add_handler(CallbackQueryHandler(msg_user_callback,  pattern=r"^msgu_\d+$"))
     app.add_handler(CallbackQueryHandler(msg_service_callback, pattern=r"^msgsvc_\w+$"))

@@ -421,6 +421,9 @@ async def build_charts(splits, plan_steps, name: str, out_dir: str,
     return {"work_png": work_png, "rest_png": rest_png, "table_png": table_png}
 
 
+# ПРАВИЛО (05.10.2026): у интервалов и лонга свои копии этой функции (ai_package / ai_package_long)
+# и свои обработчики в bot.py (cmd_report / cmd_report_long). Меняя подпись одной — вторую не трогать;
+# после правок интервального разбора проверять /report_long s.
 async def build_charts_stacked(splits, plan_steps, name: str, out_dir: str,
                                tag: str, dark: bool = False,
                                source: str = "", splits_fine=None) -> str | None:
@@ -791,11 +794,17 @@ def _plan_diagram(ax, blocks, plan_steps):
     ax.add_patch(Rectangle((0, 0.10), 1.0, 0.07, facecolor="#e0e0e0", edgecolor="none"))
 
 
+# ПРАВИЛО (05.10.2026): у интервалов и лонга свои копии этой функции (ai_package / ai_package_long)
+# и свои обработчики в bot.py (cmd_report / cmd_report_long). Меняя подпись одной — вторую не трогать;
+# после правок интервального разбора проверять /report_long s.
 async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source: str,
                             s4: dict | None, out_dir: str, tag: str,
                             dark: bool = False, splits400=None,
                             no_gps: bool = False, by_watch_plan: bool = False,
-                            by_stryd: bool = False) -> str | None:
+                            by_stryd: bool = False, cut_by_plan: bool = False,
+                            skip_laps: int = 0) -> str | None:
+    # cut_by_plan / skip_laps — 05.10.2026: приняты ради совместимости с подписью интервальной карточки
+    # (v0.33–0.34), у лонга НЕ используются: нарезки по плану и пропуска кругов у лонга нет.
     """Вертикальная карточка разбора под телефон (портрет, три зоны сверху вниз):
     1) шапка — заголовок, название/дата/группа, суть, структура плана;
     2) факт — таблица повторов (зебра, заливка отклонений, строка «ср.»);

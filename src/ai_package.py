@@ -1121,6 +1121,9 @@ def _series_model(ordered, plan_steps):
     return merged
 
 
+# ПРАВИЛО (05.10.2026): у интервалов и лонга свои копии этой функции (ai_package / ai_package_long)
+# и свои обработчики в bot.py (cmd_report / cmd_report_long). Меняя подпись одной — вторую не трогать;
+# после правок интервального разбора проверять /report_long s.
 async def build_charts_stacked(splits, plan_steps, name: str, out_dir: str,
                                tag: str, dark: bool = False,
                                source: str = "", splits_fine=None) -> str | None:
@@ -1432,6 +1435,9 @@ def _km_label(label: str) -> str:
     return (f"{km:.1f}".rstrip("0").rstrip(".")).replace(".", ",") + " км"
 
 
+# ПРАВИЛО (05.10.2026): у интервалов и лонга свои копии этой функции (ai_package / ai_package_long)
+# и свои обработчики в bot.py (cmd_report / cmd_report_long). Меняя подпись одной — вторую не трогать;
+# после правок интервального разбора проверять /report_long s.
 async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source: str,
                             s4: dict | None, out_dir: str, tag: str,
                             dark: bool = False, splits400=None,
