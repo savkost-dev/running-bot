@@ -5496,6 +5496,38 @@ async def scheduled_brief_comment(context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.error(f"Бриф-комментарий: {e}")
 
 
+def _news_vote_markup(key: str) -> InlineKeyboardMarkup:
+    """05.10.2026: две кнопки под новостью. Нажатие пишется сквозным логгером действий
+    в user_activity как btn:news:<key>:1 / btn:news:<key>:0 — отдельного хранения голосов нет."""
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("👍 Мне полезно", callback_data=f"news:{key}:1"),
+        InlineKeyboardButton("👎 Мне не нужно", callback_data=f"news:{key}:0"),
+    ]])
+
+
+def _news_votes(key: str) -> tuple[int, int]:
+    """(полезно, не нужно) по новости: последний голос каждого человека из user_activity."""
+    from database import get_connection
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT user_id, command FROM user_activity WHERE command IN (?, ?) ORDER BY created_at, id",
+            (f"btn:news:{key}:1", f"btn:news:{key}:0")).fetchall()
+    last = {uid: cmd for uid, cmd in rows}
+    up = sum(1 for c in last.values() if c.endswith(":1"))
+    return up, len(last) - up
+
+
+async def news_vote_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Кнопки «Мне полезно / Мне не нужно» под новостью: благодарим и убираем кнопки.
+    Сам голос уже записан сквозным логгером действий (_activity_logger)."""
+    query = update.callback_query
+    await query.answer("Спасибо, учту 🙏")
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+    except BadRequest:
+        pass
+
+
 def _pending_user_news() -> list:
     """Записи рубрики «Что нового» (version.USER_NEWS), которые ещё не уходили пользователям."""
     import version as _ver
@@ -5517,7 +5549,8 @@ async def _send_user_news(context, recipients: list) -> None:
         for telegram_id, _name, _un in recipients:
             try:
                 await context.bot.send_message(telegram_id, item["text"], parse_mode="HTML",
-                                               disable_notification=True)
+                                               disable_notification=True,
+                                               reply_markup=_news_vote_markup(item["key"]))
                 ok += 1
                 await asyncio.sleep(0.1)
             except Forbidden:
@@ -5538,14 +5571,18 @@ async def news_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     from database import get_bot_setting
     pending = _pending_user_news()
     if not pending:
-        marks = [f"{n['key']}: {get_bot_setting('news_sent:' + n['key'])}"
-                 for n in (getattr(_ver, "USER_NEWS", None) or [])]
-        await update.message.reply_text("Неотправленных новостей нет.\nУшли: " + ("; ".join(marks) or "—"))
+        marks = []
+        for n in (getattr(_ver, "USER_NEWS", None) or []):
+            _up, _down = _news_votes(n["key"])
+            marks.append(f"{n['key']}: ушла {get_bot_setting('news_sent:' + n['key'])} получателям | "
+                         f"👍 {_up} · 👎 {_down}")
+        await update.message.reply_text("Неотправленных новостей нет.\n" + ("\n".join(marks) or "—"))
         return
     await update.message.reply_text(
         f"Неотправленных новостей: {len(pending)}. Уйдут вторым сообщением после ближайшей вечерней рассылки. Ниже — как увидит пользователь:")
     for item in pending:
-        await context.bot.send_message(update.effective_user.id, item["text"], parse_mode="HTML")
+        await context.bot.send_message(update.effective_user.id, item["text"], parse_mode="HTML",
+                                       reply_markup=_news_vote_markup(item["key"]))
 
 
 async def scheduled_evening(context: ContextTypes.DEFAULT_TYPE):
@@ -7675,6 +7712,7 @@ def main():
     app.add_handler(CommandHandler("a_user",    a_user_command))
     app.add_handler(CommandHandler("w_user",    w_user_command))
     app.add_handler(CommandHandler("news",      news_command))
+    app.add_handler(CallbackQueryHandler(news_vote_callback, pattern=r"^news:"))
     app.add_handler(CommandHandler("w_user_light", w_user_light_command))
     app.add_handler(CommandHandler("l_user",    l_user_command))
     app.add_handler(CommandHandler("p_b",       p_b_self_command))
