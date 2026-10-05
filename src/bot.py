@@ -1290,6 +1290,7 @@ def _build_help_text(is_admin: bool) -> str:
             "/b_user — вариант B для выбранного пользователя\n"
             "/a_user — вариант A для выбранного пользователя\n"
             "/w_user — реальный путь пользователя (его ai_mode: B или A)\n"
+            "/news — рубрика «Что нового»: что уйдёт пользователям после вечерней рассылки\n"
             "/w_user_light — то же, но принудительно в лёгком режиме (fast)\n"
             "/report_user — разбор тренировки выбранного пользователя (/report_user 18886572975 — конкретная по id/маске)\n"
             "/l_user — лонг для выбранного пользователя\n"
@@ -5495,6 +5496,58 @@ async def scheduled_brief_comment(context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.error(f"Бриф-комментарий: {e}")
 
 
+def _pending_user_news() -> list:
+    """Записи рубрики «Что нового» (version.USER_NEWS), которые ещё не уходили пользователям."""
+    import version as _ver
+    from database import get_bot_setting
+    return [n for n in (getattr(_ver, "USER_NEWS", None) or [])
+            if n.get("key") and n.get("text") and not get_bot_setting(f"news_sent:{n['key']}")]
+
+
+async def _send_user_news(context, recipients: list) -> None:
+    """05.10.2026: рубрика «Что нового» — вторым тихим сообщением после вечерней рассылки всем,
+    кто её получил. Каждая запись уходит один раз: после отправки ставится отметка
+    bot_settings news_sent:<key>. Ошибки отдельного получателя рассылку не роняют."""
+    from database import set_bot_setting
+    pending = _pending_user_news()
+    if not pending or not recipients:
+        return
+    for item in pending:
+        ok = 0
+        for telegram_id, _name, _un in recipients:
+            try:
+                await context.bot.send_message(telegram_id, item["text"], parse_mode="HTML",
+                                               disable_notification=True)
+                ok += 1
+                await asyncio.sleep(0.1)
+            except Forbidden:
+                await _report_block(context.bot, telegram_id, "рубрика «Что нового»")
+            except Exception as e:
+                logger.error(f"user news {item['key']} error for {telegram_id}: {e}")
+        set_bot_setting(f"news_sent:{item['key']}", f"{datetime.utcnow().isoformat(timespec='seconds')}Z | {ok}")
+        logger.info(f"Рубрика «Что нового» {item['key']}: отправлено {ok} из {len(recipients)}")
+        await _notify_admin(context.bot, f"🆕 «Что нового» ({item['key']}): отправлено {ok} из {len(recipients)}")
+
+
+async def news_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/news (admin) — показать рубрику «Что нового» так, как её увидят пользователи:
+    неотправленные записи целиком; если таких нет — когда ушла последняя."""
+    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+        return
+    import version as _ver
+    from database import get_bot_setting
+    pending = _pending_user_news()
+    if not pending:
+        marks = [f"{n['key']}: {get_bot_setting('news_sent:' + n['key'])}"
+                 for n in (getattr(_ver, "USER_NEWS", None) or [])]
+        await update.message.reply_text("Неотправленных новостей нет.\nУшли: " + ("; ".join(marks) or "—"))
+        return
+    await update.message.reply_text(
+        f"Неотправленных новостей: {len(pending)}. Уйдут вторым сообщением после ближайшей вечерней рассылки. Ниже — как увидит пользователь:")
+    for item in pending:
+        await context.bot.send_message(update.effective_user.id, item["text"], parse_mode="HTML")
+
+
 async def scheduled_evening(context: ContextTypes.DEFAULT_TYPE):
     # return  # TEMP: рассылка отключена 2026-06-01, убрать после фикса зон
     now = datetime.now()
@@ -5544,6 +5597,12 @@ async def scheduled_evening(context: ContextTypes.DEFAULT_TYPE):
 
     await asyncio.gather(*[_mail_one(t, n, u) for t, n, u, _has in users])
     logger.info(f"Вечерняя рассылка завершена ({wtype}, status={status}): {count} отправлено (кэш, параллель ×5)")
+
+    # 05.10.2026: рубрика «Что нового» — вторым тихим сообщением тем, кто получил рассылку
+    try:
+        await _send_user_news(context, sent)
+    except Exception as e:
+        logger.error(f"Рубрика «Что нового» не ушла: {e}")
 
     # Эталоны теперь пишутся вместе с разбором (_store_analysis) — здесь страховка
     # на случай анализов, сохранённых до перехода на единое ядро.
@@ -7615,6 +7674,7 @@ def main():
     app.add_handler(CommandHandler("b_user",    b_command))
     app.add_handler(CommandHandler("a_user",    a_user_command))
     app.add_handler(CommandHandler("w_user",    w_user_command))
+    app.add_handler(CommandHandler("news",      news_command))
     app.add_handler(CommandHandler("w_user_light", w_user_light_command))
     app.add_handler(CommandHandler("l_user",    l_user_command))
     app.add_handler(CommandHandler("p_b",       p_b_self_command))

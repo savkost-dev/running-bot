@@ -2238,6 +2238,19 @@ def set_preprocess_mode(mode: str) -> None:
     _db_logger.info(f"preprocess_mode установлен: {mode}")
 
 
+def get_bot_setting(key: str) -> str | None:
+    """Значение из bot_settings по ключу или None."""
+    with get_connection() as conn:
+        row = conn.execute("SELECT value FROM bot_settings WHERE key = ?", (key,)).fetchone()
+    return row[0] if row else None
+
+
+def set_bot_setting(key: str, value: str) -> None:
+    """Записывает значение в bot_settings (вставка или замена)."""
+    with get_connection() as conn:
+        conn.execute("INSERT OR REPLACE INTO bot_settings (key, value) VALUES (?, ?)", (key, str(value)))
+
+
 def save_raw_service_data(user_id: int, service: str, raw_json: str) -> None:
     """Слой 1.1: сохраняет сырой ответ сервиса as is.
 
