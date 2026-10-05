@@ -137,7 +137,8 @@ def get_last_run(db_user_id: int) -> dict | None:
 
 
 def get_idle(db_user_id: int, workout_date: str | None) -> dict | None:
-    """05.10.2026: простой перед тренировкой — {"days", "shift", "last_run", "source"}.
+    """05.10.2026: простой перед тренировкой — {"days", "shift", "last_run", "source", "until"}.
+    until — дата, до которой считали (день, когда человек бежит работу).
     days — полные дни без бега до workout_date (нет пробежек во всём окне → LAST_RUN_WINDOW_DAYS),
     shift — сдвиг зон в с/км по zones.idle_shift_sec (0 — правило не действует).
     None — данных нет, правило выключено."""
@@ -148,7 +149,8 @@ def get_idle(db_user_id: int, workout_date: str | None) -> dict | None:
     days = idle_days(lr["date"], workout_date) if lr["date"] else LAST_RUN_WINDOW_DAYS
     if days is None:
         return None
-    return {"days": days, "shift": _z.idle_shift_sec(days), "last_run": lr["date"], "source": lr["source"]}
+    return {"days": days, "shift": _z.idle_shift_sec(days), "last_run": lr["date"], "source": lr["source"],
+            "until": str(workout_date)[:10] if workout_date else date.today().isoformat()}
 
 
 def idle_days(last_run_date: str | None, workout_date: str | None) -> int | None:

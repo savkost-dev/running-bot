@@ -3974,7 +3974,8 @@ async def _send_ai_variant_b(
                 logger.error(f"save_last_recommendation (B): {_e}")
         # Админу — снимок на утро (из базы) + текущие данные (на лету), отдельным сообщением
         await _send_admin_data_block(telegram_id, db_user_id, user_data.get("recovery"), context,
-                                     workout_date=((workout_dict or {}).get("workout_date") or analysis.get("workout_date")))
+                                     workout_date=((user_data.get("idle") or {}).get("until")
+                                                   or (workout_dict or {}).get("workout_date") or analysis.get("workout_date")))
         if msg:
             try:
                 await msg.edit_text(msg_text, parse_mode="HTML", reply_markup=final_b_markup)
@@ -4121,10 +4122,14 @@ async def _send_recommendation(
     }
     # 05.10.2026: простой перед интервальной — дни без бега и сдвиг зон (fitness.get_idle,
     # только база, без запросов к трекерам). Для лонга правило не применяется.
+    # Тренировка уже прошла, а рекомендацию запросили — человек бежит её сам, сегодня, мимо общего
+    # графика (правило Антона): простой считаем до сегодняшнего дня по Москве, а не до прошедшей даты.
     if not long:
         try:
             import fitness as _fit_idle
-            user_data["idle"] = _fit_idle.get_idle(db_user_id, _wd)
+            _idle_until = ((datetime.utcnow() + timedelta(hours=3)).date().isoformat()
+                           if (_is_past_rt or not _wd) else _wd)
+            user_data["idle"] = _fit_idle.get_idle(db_user_id, _idle_until)
         except Exception as _e_idle:
             logger.warning(f"idle factor error for {telegram_id}: {_e_idle}")
 
@@ -4297,7 +4302,8 @@ async def _send_recommendation(
         except Exception as _e:
             logger.error(f"save_last_recommendation (A): {_e}")
     # Админу — снимок на утро (из базы) + текущие данные (на лету), отдельным сообщением
-    await _send_admin_data_block(telegram_id, db_user_id, user_data.get("recovery"), context, workout_date=_wd)
+    await _send_admin_data_block(telegram_id, db_user_id, user_data.get("recovery"), context,
+                                 workout_date=((user_data.get("idle") or {}).get("until") or _wd))
     scenario_header = scenario_ctx["user_text"] + "\n\n" if scenario_ctx.get("user_text") else ""
     await _out(scenario_header + banner + body, final_markup, parse_mode="HTML")
     # 13.09.2026: лонг — отдельное окно «Загрузить в Garmin» (эталоны DDLong-N / N+), только с подключённым Garmin
