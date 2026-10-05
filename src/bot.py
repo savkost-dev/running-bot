@@ -7266,6 +7266,129 @@ async def cmd_report_long(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await _report_send(context, chat_id, msg, res, chart_items, ai_chunks, _ai_stats, title=_long_title(res))
 
 
+async def cmd_long_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/long_ai (admin) — ТЕСТОВАЯ рекомендация длительной через ИИ (05.10.2026).
+    Изолированная ветка: боевую формульную (/long, рассылка, recommend_long) не трогает,
+    в базу ничего не пишет, другим пользователям ничего не шлёт — ответ уходит только админу.
+    Промт и сборка пакета данных — src/long_ai.py (PROMPT_LONG_AI, build_long_ai_package).
+    /long_ai — на данных админа, режим ИИ из /mode;
+    /long_ai p — только промт и пакет данных, без вызова ИИ;
+    /long_ai 39 — на данных пользователя с id 39 (id — из /users);
+    /long_ai deep|smart|fast — режим ИИ на этот прогон. Аргументы можно сочетать: /long_ai 39 p."""
+    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+        await update.message.reply_text("Нет доступа.")
+        return
+    import html
+    import json as _json
+    import long_ai
+    import database as _db
+    from ai_package import _age
+
+    chat_id = update.effective_user.id
+    admin_db_id = get_or_create_user(update.effective_user.id, update.effective_user.full_name)
+    args = [a.lower() for a in (context.args or [])]
+    prompt_only = any(a in ("p", "data", "prompt") for a in args)
+    mode = next((a for a in args if a in ("deep", "smart", "fast")), None)
+    target = next((int(a) for a in args if a.isdigit()), None)
+    db_user_id = target or admin_db_id
+    who = "админ"
+    if target and target != admin_db_id:
+        u = next((x for x in get_users_list_for_b(all_users=True) if x.get("db_user_id") == target), None)
+        if not u:
+            await update.message.reply_text(f"Пользователя с id {target} нет.")
+            return
+        who = f"{u.get('name')} (id {target})"
+
+    msg = await context.bot.send_message(chat_id, "🧪 Лонг через ИИ: собираю данные…")
+    # Анализ анонса — последний сохранённый Шаг 1 по лонгу (текущий или прошедший; заново не считаем).
+    row, status = get_latest_workout_analysis("long", None, None, None)
+    try:
+        analysis = _json.loads((row or {}).get("analyzed_json") or "{}")
+    except Exception:
+        analysis = {}
+    if not analysis:
+        await msg.edit_text("⚠️ В базе нет анализа анонса лонга (Шаг 1).")
+        return
+    analysis.setdefault("workout_date", (row or {}).get("workout_date"))
+    analysis["workout_type"] = "long"
+
+    profile = get_user_profile(db_user_id) or {}
+    zinfo = zones.get_pace_zones(db_user_id)
+    recovery = None
+    try:
+        recovery = await _get_unified_recovery(db_user_id, force_fresh=False)
+    except Exception as e:
+        logger.warning(f"/long_ai recovery error for {db_user_id}: {e}")
+    # Нагрузка за 48 ч и последний старт — тем же порядком источников, что у боевого /long.
+    fitness = None
+    for getter in (get_garmin_fitness_data, get_coros_fitness_data, get_polar_fitness_data):
+        try:
+            fitness = await getter(db_user_id)
+        except Exception as e:
+            logger.warning(f"/long_ai fitness error for {db_user_id}: {e}")
+        if fitness:
+            break
+    if not fitness:
+        try:
+            _tok = await ensure_valid_token(db_user_id)
+            if _tok:
+                fitness = await get_fitness_data(db_user_id, _tok)
+        except Exception as e:
+            logger.warning(f"/long_ai strava fitness error for {db_user_id}: {e}")
+    try:
+        activities = _db.get_strava_activities(db_user_id)
+    except Exception:
+        activities = []
+
+    pkg = long_ai.build_long_ai_package(
+        profile=profile, zinfo=zinfo, recovery=recovery, fitness=fitness, analysis=analysis,
+        activities=activities, age=_age(profile.get("birthdate")))
+    if not pkg.get("ok"):
+        await msg.edit_text(f"⚠️ {pkg.get('msg')}")
+        return
+
+    # Что дают формулы сейчас — только админу для сравнения, в промт НЕ идёт (чтобы не подсказывать ИИ).
+    formula = "—"
+    try:
+        _rec = claude_advisor.recommend_long(
+            analysis, {"db_user_id": db_user_id, "specialization": profile.get("specialization"),
+                       "recovery": recovery})
+        if _rec and _rec.get("ok") and _rec.get("main_group"):
+            _adv = claude_advisor.recommendation_to_long_advice(_rec, analysis, recovery)
+            _strat = {"progressive": "прогресс", "even": "ровно"}.get(_adv.get("run_strategy"), "")
+            formula = f"гр.{_rec['main_group'].get('number')} {_strat}".strip()
+    except Exception as e:
+        logger.warning(f"/long_ai formula error for {db_user_id}: {e}")
+
+    if not mode:
+        mode = (get_preferences(admin_db_id) or {}).get("ai_mode", "smart")
+        mode = {"calc": "fast"}.get(mode, mode)
+    header = (f"🧪 Лонг через ИИ (тест) · {who}\n"
+              f"Анонс: {analysis.get('workout_date') or '—'} ({status}) · формулы сейчас: {formula}")
+    full_prompt = long_ai.PROMPT_LONG_AI + "\n\n" + pkg["text"]
+
+    if prompt_only:
+        await msg.edit_text(header + "\n📦 Промт и пакет данных (ИИ не вызывался):")
+        for ch in _report_text_chunks(full_prompt):
+            await context.bot.send_message(chat_id, f"<pre>{html.escape(ch)}</pre>", parse_mode="HTML")
+        return
+
+    await msg.edit_text(header + f"\n🤖 Спрашиваю ИИ ({_MODE_INFO.get(mode, ('', mode))[1]})…")
+    answer, stats = await asyncio.to_thread(claude_advisor.ask_text, full_prompt, mode, 0.4, True)
+    if not answer:
+        await msg.edit_text(header + "\n⚠️ ИИ не ответил.")
+        return
+    import re as _re_md
+    answer = _re_md.sub(r"\*\*(.+?)\*\*", r"\1", answer)
+    answer = "\n".join(_re_md.sub(r"^#{1,6}\s*", "", ln) for ln in answer.split("\n")).strip()
+    plaque = (f"⏱ {stats.get('time_sec', '?')}с | {claude_advisor._MODE_LABELS.get(stats.get('mode'), mode)} | "
+              f"📥 {stats.get('input_tokens', '?')} / 📤 {stats.get('output_tokens', '?')} | "
+              f"v{VERSION} · тест /long_ai")
+    await msg.edit_text(header)
+    for ch in _report_text_chunks(answer + "\n\n" + plaque):
+        await context.bot.send_message(chat_id, ch)
+
+
 async def report_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/report_user (admin) — разбор тренировки выбранного пользователя.
     /report_user — последняя DD; /report_user 18886572975 | /report_user DD_20260612 — конкретная."""
@@ -7488,6 +7611,7 @@ def main():
     app.add_handler(CommandHandler("report",    cmd_report))
     app.add_handler(CommandHandler("report_p",  cmd_report))
     app.add_handler(CommandHandler("report_long", cmd_report_long))
+    app.add_handler(CommandHandler("long_ai",   cmd_long_ai))
     app.add_handler(CommandHandler("report_user", report_user_command))
     app.add_handler(CallbackQueryHandler(msg_user_callback,  pattern=r"^msgu_\d+$"))
     app.add_handler(CallbackQueryHandler(msg_service_callback, pattern=r"^msgsvc_\w+$"))

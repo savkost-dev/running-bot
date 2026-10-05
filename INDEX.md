@@ -26,6 +26,11 @@
 - Лонг (05.10.2026): `/report_long` — свой обработчик `bot.cmd_report_long`, свой пакет, промт `PROMPT_LONG`, карточка и графики в `src/ai_package_long.py`. Интервалы — `bot.cmd_report` и `src/ai_package.py`.
 - **Правило:** у интервалов и лонга свои копии (`build_report_card`, `build_charts_stacked`, `build_charts`, сборщик пакета) и свои обработчики; меняя подпись одной — вторую не трогать. Общая только отправка (`_report_text_chunks`, `_report_ai_chunks`, `_report_send` в `bot.py`). После правок интервального разбора проверять `/report_long s`.
 
+## Лонг через ИИ — тестовая ветка (05.10.2026)
+- Только админ: `/long_ai` (`p` — промт и данные без ИИ, `<id>` — на данных пользователя, `deep|smart|fast` — режим).
+- Промт `PROMPT_LONG_AI` и пакет данных — `src/long_ai.py`; обработчик — `bot.cmd_long_ai`. В базу не пишет.
+- Боевая рекомендация лонга (`/long`, рассылка, `claude_advisor.recommend_long`) — формулы, эту ветку не трогаем.
+
 - [GARMIN_WORKOUT_JSON.md](GARMIN_WORKOUT_JSON.md) — памятка по JSON эталона Garmin: id условий и целей шага, где Garmin молча теряет значения (22.09.2026, из чужого репозитория, у нас не проверялось).
 
 ## Схема цикла «стадион» (19.09.2026)
