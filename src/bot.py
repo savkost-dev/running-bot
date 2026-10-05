@@ -6893,7 +6893,7 @@ def _report_text_chunks(text: str) -> list:
     return chunks
 
 
-async def _report_ai_chunks(msg, res: dict, prompt: str, db_user_id: int):
+async def _report_ai_chunks(msg, res: dict, prompt: str, db_user_id: int, title: str | None = None):
     """Текст разбора от ИИ, готовый к отправке: (список сообщений, статистика вызова).
     Общая для /report и /report_long: режим пользователя, чистка Markdown, плашка, ссылка Strava.
     Промт передаёт вызывающий — у интервалов PROMPT, у лонга PROMPT_LONG."""
@@ -6902,7 +6902,8 @@ async def _report_ai_chunks(msg, res: dict, prompt: str, db_user_id: int):
     _rmode = (get_preferences(db_user_id) or {}).get("ai_mode", "smart")
     _rmode = {"calc": "fast"}.get(_rmode, _rmode)
     _rlabel = _MODE_INFO.get(_rmode, ("", _rmode))[1]
-    await msg.edit_text(f"🤖 Анализирую через ИИ ({_rlabel})… ({res['name']})")
+    # title — подпись тренировки в служебных сообщениях; у лонга — имя с датой (в имени DDLong-… даты нет)
+    await msg.edit_text(f"🤖 Анализирую через ИИ ({_rlabel})… ({title or res['name']})")
     import claude_advisor
     answer, _ai_stats = await asyncio.to_thread(
         claude_advisor.ask_text, prompt + "\n\n" + res["text"], _rmode, 0.4, True)
@@ -6931,11 +6932,12 @@ async def _report_ai_chunks(msg, res: dict, prompt: str, db_user_id: int):
 
 
 async def _report_send(context, user_id: int, msg, res: dict, chart_items: list,
-                       ai_chunks, ai_stats, top_rows: list | None = None) -> None:
+                       ai_chunks, ai_stats, top_rows: list | None = None,
+                       title: str | None = None) -> None:
     """Отправка готового разбора: сперва картинки, затем текст ИИ; кнопки — на последнем сообщении.
     Общая для /report и /report_long. top_rows — дополнительные ряды кнопок сверху
     (у интервального разбора — «⚙️ Настроить разбор»; у лонга их нет)."""
-    await msg.edit_text(f"📊 Тренировка: {res['name']}")
+    await msg.edit_text(f"📊 Тренировка: {title or res['name']}")
     # Кнопку «Главное меню» вешаем на последнее сообщение: в полном режиме —
     # на последний чанк анализа, в simple-режиме — на последнюю фотографию.
     menu_btn = InlineKeyboardMarkup(
@@ -7118,6 +7120,16 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
                        ai_chunks, _ai_stats, top_rows=top_rows)
 
 
+def _long_title(res: dict) -> str:
+    """Подпись лонга в служебных сообщениях разбора: имя + дата старта («DDLong-3p_wu · 20.09.2026»).
+    В имени лонга даты нет, без неё не видно, какой лонг разбирается."""
+    d = str(res.get("wdate") or "")
+    try:
+        return f"{res['name']} · {datetime.strptime(d, '%Y-%m-%d').strftime('%d.%m.%Y')}"
+    except ValueError:
+        return str(res["name"])
+
+
 async def cmd_report_long(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/report_long — ИИ-разбор ЛОНГА (DDLong-…), пока только admin. С 20.09.2026 — свой пакет, промт,
     карточка и графики (ai_package_long); с 05.10.2026 — свой обработчик, отдельный от cmd_report.
@@ -7166,7 +7178,7 @@ async def cmd_report_long(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if not res.get("ok"):
             await msg.edit_text(f"⚠️ {res.get('msg')}")
             return
-        await msg.edit_text(f"📦 Пакет данных: {res['name']}")
+        await msg.edit_text(f"📦 Пакет данных: {_long_title(res)}")
         for ch in _report_text_chunks(PROMPT_LONG + "\n\n" + res["text"]):
             await context.bot.send_message(chat_id, f"<pre>{html.escape(ch)}</pre>", parse_mode="HTML")
         return
@@ -7219,8 +7231,8 @@ async def cmd_report_long(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     ai_chunks, _ai_stats = None, None
     if not simple_mode:
-        ai_chunks, _ai_stats = await _report_ai_chunks(msg, res, PROMPT_LONG, db_user_id)
-    await _report_send(context, chat_id, msg, res, chart_items, ai_chunks, _ai_stats)
+        ai_chunks, _ai_stats = await _report_ai_chunks(msg, res, PROMPT_LONG, db_user_id, title=_long_title(res))
+    await _report_send(context, chat_id, msg, res, chart_items, ai_chunks, _ai_stats, title=_long_title(res))
 
 
 async def report_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
