@@ -4044,7 +4044,7 @@ def format_long_run_message(advice: dict, workout: dict, stats: dict | None = No
             lines.append(f"🔴 Тяжело → {if_tired}")
 
     # 06.10.2026 (Антон): тест лонга через ИИ — пояснения по типам ПЕРЕД подготовкой: фиксированная
-    # строка, затем 🟢/🔴 и жирное «подходит / не подходит» (цвета в Telegram только кружками) и фраза ИИ.
+    # строка, затем ✅/❌ и жирное «подходит / не подходит» (кружки 🟢/🔴 заняты блоком «Оцени на разминке») и фраза ИИ.
     # Только если ИИ отдал types_today; у формульного /long их нет.
     _types_today = advice.get("types_today") if isinstance(advice.get("types_today"), list) else []
     if _types_today:
@@ -4054,11 +4054,12 @@ def format_long_run_message(advice: dict, workout: dict, stats: dict | None = No
         for _tname, _note in LONG_TYPE_NOTES.items():
             _t = _ai_by_type.get(_tname.lower()) or {}
             _why = str(_t.get("today") or "").strip()
+            _why = _why[:1].upper() + _why[1:]      # ИИ начинает фразу со строчной — поднимаем
             _fits = _t.get("fits")
             if isinstance(_fits, str):
                 _fits = _fits.strip().lower() in ("true", "да", "yes", "1")
             _verdict = ("" if _fits is None else
-                        ("🟢 <b>Сегодня подходит.</b>" if _fits else "🔴 <b>Сегодня не подходит.</b>"))
+                        ("✅ <b>Сегодня подходит.</b>" if _fits else "❌ <b>Сегодня не подходит.</b>"))
             lines.append(f"• <b>{LONG_TYPE_ROMAN[_tname]}. {_tname}</b> — {_note}"
                          + (f"\n   {_verdict}" if _verdict else "")
                          + (f" <i>{_html.escape(_why)}</i>" if _why else ""))
