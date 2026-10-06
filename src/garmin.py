@@ -498,23 +498,53 @@ async def get_training_load(db_user_id: int) -> dict | None:
 
 _RUN_TYPE_KEYS = ("running", "treadmill_running", "track_running", "trail_running",
                   "indoor_running", "virtual_run", "street_running")
+# 06.10.2026 (Антон): паузу сбрасывают только бег, велосипед, плавание и беговые лыжи.
+# Остальное (ходьба, походы, гребля, эллипс, силовая, йога, горные лыжи) — нет. (подстрока typeKey → вид)
+_AEROBIC_KINDS = (("run", "бег"), ("cycl", "велосипед"), ("bik", "велосипед"), ("swim", "плавание"),
+                  ("cross_country", "лыжи"), ("skate_ski", "лыжи"), ("backcountry", "лыжи"))
 
 
-def last_run_date_from_activities(acts) -> str | None:
-    """02.10.2026: список активностей (get_activities_by_date, 'running') → дата последней
-    пробежки 'YYYY-MM-DD' или None. Пробежка — fitness.is_run (от 3 км или от 20 минут)."""
+def is_run_type(type_key) -> bool:
+    tk = str(type_key or "")
+    return "run" in tk or any(t in tk for t in _RUN_TYPE_KEYS)
+
+
+def aerobic_kind(type_key) -> str | None:
+    """Вид тренировки по-русски (бег / велосипед / плавание / лыжи) или None, если вид не считается."""
+    tk = str(type_key or "").lower()
+    if "resort" in tk:
+        return None
+    for key, kind in _AEROBIC_KINDS:
+        if key in tk:
+            return kind
+    return None
+
+
+def sessions_from_activities(acts) -> list:
+    """06.10.2026: список активностей Garmin → [{date, kind, run}] только по аэробным,
+    которые тянут на тренировку: бег — fitness.is_run (≥3 км или ≥20 мин), остальное — ≥20 мин."""
     import fitness as _fit
     out = []
     for a in acts or []:
         if not isinstance(a, dict):
             continue
-        tk = str((a.get("activityType") or {}).get("typeKey") or "")
-        if tk and "run" not in tk and not any(t in tk for t in _RUN_TYPE_KEYS):
+        tk = (a.get("activityType") or {}).get("typeKey")
+        kind = aerobic_kind(tk)
+        if not kind:
             continue
-        if not _fit.is_run(a.get("distance"), a.get("duration") or a.get("movingDuration")):
+        dur = a.get("duration") or a.get("movingDuration")
+        run = is_run_type(tk)
+        ok = _fit.is_run(a.get("distance"), dur) if run else _fit.is_session(dur)
+        if not ok:
             continue
-        out.append(str(a.get("startTimeLocal") or a.get("startTimeGMT") or "")[:10])
-    return _fit.latest_date(out)
+        out.append({"date": str(a.get("startTimeLocal") or a.get("startTimeGMT") or "")[:10], "kind": kind, "run": run})
+    return out
+
+
+def last_run_date_from_activities(acts) -> str | None:
+    """02.10.2026: дата последней пробежки 'YYYY-MM-DD' или None (через sessions_from_activities)."""
+    import fitness as _fit
+    return _fit.latest_date(s["date"] for s in sessions_from_activities(acts) if s["run"])
 
 
 async def get_activities_48h(db_user_id: int) -> dict | None:
@@ -772,7 +802,9 @@ async def fetch_raw(db_user_id: int) -> dict | None:
             "sleep_data":         lambda: client.get_sleep_data(today),
             "hrv_data":           lambda: client.get_hrv_data(today),
             "lactate_threshold":  lambda: client.get_lactate_threshold(),
-            "activities_14d":     lambda: client.get_activities_by_date(start_14, today, "running"),
+            # 06.10.2026: без фильтра по виду — паузу сбрасывает любая аэробная тренировка
+            # (велосипед, плавание, лыжи…); бег для activities_48h отбирается ниже по типу
+            "activities_14d":     lambda: client.get_activities_by_date(start_14, today),
             "user_profile":       lambda: client.get_user_profile(),
         }
         for key, fn in calls.items():
@@ -783,6 +815,7 @@ async def fetch_raw(db_user_id: int) -> dict | None:
                 print(f"  Garmin [{key}] err: {str(e)[:60]}")
         acts14 = raw.get("activities_14d")
         raw["activities_48h"] = ([a for a in acts14 if isinstance(a, dict)
+                                  and is_run_type((a.get("activityType") or {}).get("typeKey"))
                                   and str(a.get("startTimeLocal") or "")[:10] >= start_48]
                                  if isinstance(acts14, list) else None)
         return raw

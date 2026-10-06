@@ -668,24 +668,39 @@ def parse_sport_records(text) -> list:
 
 
 RUN_SPORT_TYPES = {100, 101, 102, 103}   # outdoor / indoor / trail / track
+# 06.10.2026 (Антон): паузу сбрасывают только бег, велосипед, плавание и беговые лыжи
+# (500 ski, 502 XC ski, 503 alpine touring); походы, гребля, кардио, силовая, ходьба, сноуборд — нет
+AEROBIC_KINDS = {**{t: "бег" for t in RUN_SPORT_TYPES},
+                 **{t: "велосипед" for t in (200, 201, 202, 203, 204, 205, 299)},
+                 300: "плавание", 301: "плавание",
+                 500: "лыжи", 502: "лыжи", 503: "лыжи"}
 
 
-def last_run_date_from_records(records) -> str | None:
-    """02.10.2026: записи из parse_sport_records → дата последней пробежки или None.
-    Пробежка — беговой вид и fitness.is_run (от 3 км или от 20 минут)."""
+def sessions_from_records(records) -> list:
+    """06.10.2026: записи из parse_sport_records → [{date, kind, run}] только по аэробным,
+    которые тянут на тренировку: бег — fitness.is_run, остальное — ≥20 мин."""
     import fitness as _fit
     from datetime import datetime as _dt, timezone as _tz
     out = []
     for r in records or []:
-        if r.get("sport_type") not in RUN_SPORT_TYPES:
+        kind = AEROBIC_KINDS.get(r.get("sport_type"))
+        if not kind:
             continue
-        if not _fit.is_run(r.get("distance_m"), r.get("duration_s")):
+        run = r.get("sport_type") in RUN_SPORT_TYPES
+        ok = _fit.is_run(r.get("distance_m"), r.get("duration_s")) if run else _fit.is_session(r.get("duration_s"))
+        if not ok:
             continue
         d = r.get("date")
         if not d and r.get("start_ts"):
             d = _dt.fromtimestamp(int(r["start_ts"]), tz=_tz.utc).strftime("%Y-%m-%d")
-        out.append(d)
-    return _fit.latest_date(out)
+        out.append({"date": d, "kind": kind, "run": run})
+    return out
+
+
+def last_run_date_from_records(records) -> str | None:
+    """02.10.2026: дата последней пробежки или None (через sessions_from_records)."""
+    import fitness as _fit
+    return _fit.latest_date(s["date"] for s in sessions_from_records(records) if s["run"])
 
 
 async def get_vo2max(db_user_id: int) -> float | None:

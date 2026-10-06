@@ -55,6 +55,17 @@ def is_run(dist_m, dur_s) -> bool:
     return d >= RUN_MIN_M or t >= RUN_MIN_S
 
 
+SESSION_MIN_S = 1200        # 06.10.2026: не-беговая аэробная тренировка — от 20 минут
+
+
+def is_session(dur_s) -> bool:
+    """Не-беговая аэробная запись тянет на тренировку: от SESSION_MIN_S секунд."""
+    try:
+        return float(dur_s or 0) >= SESSION_MIN_S
+    except (TypeError, ValueError):
+        return False
+
+
 def latest_date(dates) -> str | None:
     """Самая свежая 'YYYY-MM-DD' из списка (пустые пропускаются) или None."""
     dates = [d for d in dates if d]
@@ -90,66 +101,65 @@ def _raw_of(db_user_id: int, service: str) -> dict | None:
 
 
 def get_last_run(db_user_id: int) -> dict | None:
-    """Самая свежая пробежка по всем живым источникам:
-    {"date": 'YYYY-MM-DD' | None, "source": str | None, "all": {источник: дата}, "empty": [источники]}.
-    "empty" — живые источники со свежим списком тренировок, в котором нет ни одной пробежки
-    за LAST_RUN_WINDOW_DAYS. date=None при непустом "empty" значит «не бегал всё окно».
-    None — ни один живой источник ничего не знает (фактор простоя выключен).
-    Читает только базу: сырьё трекеров и окно Strava."""
+    """Последняя пробежка и последняя аэробная тренировка любого вида по всем живым источникам:
+    {"date": дата последней пробежки | None, "source", "all": {источник: дата пробежки},
+     "active_date": дата последней тренировки из засчитываемых (бег, велосипед, плавание, беговые лыжи) | None,
+     "active_kind": её вид по-русски, "empty": [источники со свежим списком без единой тренировки]}.
+    06.10.2026 (Антон): паузу сбрасывают бег, велосипед, плавание и беговые лыжи; остальное — нет.
+    None — ни один живой источник ничего не знает. Читает только базу."""
     import garmin as _g
     import coros_mcp as _cm
     import polar as _p
-    from strava import last_run_date_from_window
-    best, empty = {}, []
+    from strava import sessions_from_window
+    runs, empty, sessions = {}, [], []
+
+    def take(src, sess, full):
+        d = latest_date(s["date"] for s in sess if s["run"])
+        if d:
+            runs[src] = d
+        if sess:
+            sessions.extend(sess)
+        elif full:
+            empty.append(src)
+
     raw = _raw_of(db_user_id, "garmin")
     if raw:
         acts = raw.get("activities_14d")
         full = isinstance(acts, list)
         if not full:
             acts = raw.get("activities_48h")   # сырьё до 0.35.0 — только 48 часов
-        d = _g.last_run_date_from_activities(acts)
-        if d:
-            best["garmin"] = d
-        elif full:
-            empty.append("garmin")
+        take("garmin", _g.sessions_from_activities(acts), full)
     raw = _raw_of(db_user_id, _cm.SERVICE)
     if raw and raw.get("querySportRecords"):
-        d = _cm.last_run_date_from_records(_cm.parse_sport_records(raw["querySportRecords"]))
-        if d:
-            best["coros_mcp"] = d
-        else:
-            empty.append("coros_mcp")
+        take("coros_mcp", _cm.sessions_from_records(_cm.parse_sport_records(raw["querySportRecords"])), True)
     raw = _raw_of(db_user_id, "polar")
     if raw and isinstance(raw.get("exercises"), list):
-        d = _p.last_run_date_from_exercises(raw["exercises"])
-        if d:
-            best["polar"] = d
-        else:
-            empty.append("polar")
+        take("polar", _p.sessions_from_exercises(raw["exercises"]), True)
     if get_token(db_user_id, "strava"):
-        d = last_run_date_from_window(db_user_id)
-        if d:
-            best["strava"] = d
-    if not best and not empty:
+        take("strava", sessions_from_window(db_user_id), False)
+    if not runs and not empty and not sessions:
         return None
-    src = max(best, key=lambda k: best[k]) if best else None
-    return {"date": best[src] if src else None, "source": src, "all": best, "empty": empty}
+    src = max(runs, key=lambda k: runs[k]) if runs else None
+    last = max(sessions, key=lambda s: s["date"] or "") if sessions else None
+    return {"date": runs[src] if src else None, "source": src, "all": runs, "empty": empty,
+            "active_date": last["date"] if last else None, "active_kind": last["kind"] if last else None}
 
 
 def get_idle(db_user_id: int, workout_date: str | None) -> dict | None:
-    """05.10.2026: простой перед тренировкой — {"days", "shift", "last_run", "source", "until"}.
-    until — дата, до которой считали (день, когда человек бежит работу).
-    days — полные дни без бега до workout_date (нет пробежек во всём окне → LAST_RUN_WINDOW_DAYS),
-    shift — сдвиг зон в с/км по zones.idle_shift_sec (0 — правило не действует).
+    """05.10.2026: простой перед тренировкой — {"days", "shift", "last_run", "last_active", "last_kind",
+    "source", "until"}. until — дата, до которой считали (день, когда человек бежит работу).
+    days — полные дни без аэробных тренировок до workout_date (06.10: любой вид, не только бег;
+    ничего во всём окне → LAST_RUN_WINDOW_DAYS), shift — сдвиг зон по zones.idle_shift_sec.
     None — данных нет, правило выключено."""
     import zones as _z
     lr = get_last_run(db_user_id)
     if not lr:
         return None
-    days = idle_days(lr["date"], workout_date) if lr["date"] else LAST_RUN_WINDOW_DAYS
+    days = idle_days(lr["active_date"], workout_date) if lr["active_date"] else LAST_RUN_WINDOW_DAYS
     if days is None:
         return None
     return {"days": days, "shift": _z.idle_shift_sec(days), "last_run": lr["date"], "source": lr["source"],
+            "last_active": lr["active_date"], "last_kind": lr["active_kind"],
             "until": str(workout_date)[:10] if workout_date else date.today().isoformat()}
 
 

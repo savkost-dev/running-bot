@@ -555,20 +555,42 @@ def _iso_duration_sec(value) -> float | None:
     return int(d or 0) * 86400 + int(h or 0) * 3600 + int(mi or 0) * 60 + float(s or 0)
 
 
-def last_run_date_from_exercises(exercises) -> str | None:
-    """02.10.2026: список /exercises → дата последней пробежки или None.
-    Беговые виды — в sport есть RUN; пробежка — fitness.is_run (от 3 км или от 20 минут)."""
+def _aerobic_kind(sport) -> str | None:
+    """06.10.2026: вид Polar (RUNNING, CYCLING, CROSS-COUNTRY_SKIING…) → по-русски или None."""
+    s = str(sport or "").upper()
+    # 06.10.2026 (Антон): только бег, велосипед, плавание и беговые лыжи
+    if not s or "DOWNHILL" in s or "ALPINE" in s:
+        return None
+    for key, kind in (("RUN", "бег"), ("TREADMILL", "бег"), ("CYCL", "велосипед"), ("BIK", "велосипед"),
+                      ("SPINN", "велосипед"), ("SWIM", "плавание"), ("SKI", "лыжи")):
+        if key in s:
+            return kind
+    return None
+
+
+def sessions_from_exercises(exercises) -> list:
+    """06.10.2026: список /exercises → [{date, kind, run}] только по аэробным, которые тянут на тренировку."""
     import fitness as _fit
     out = []
     for e in exercises or []:
         if not isinstance(e, dict):
             continue
-        if "RUN" not in str(e.get("sport") or e.get("detailed_sport_info") or "").upper():
+        kind = _aerobic_kind(e.get("sport") or e.get("detailed_sport_info"))
+        if not kind:
             continue
-        if not _fit.is_run(e.get("distance"), _iso_duration_sec(e.get("duration"))):
+        run = kind == "бег"
+        dur = _iso_duration_sec(e.get("duration"))
+        ok = _fit.is_run(e.get("distance"), dur) if run else _fit.is_session(dur)
+        if not ok:
             continue
-        out.append(str(e.get("start_time") or "")[:10])
-    return _fit.latest_date(out)
+        out.append({"date": str(e.get("start_time") or "")[:10], "kind": kind, "run": run})
+    return out
+
+
+def last_run_date_from_exercises(exercises) -> str | None:
+    """02.10.2026: дата последней пробежки или None (через sessions_from_exercises)."""
+    import fitness as _fit
+    return _fit.latest_date(s["date"] for s in sessions_from_exercises(exercises) if s["run"])
 
 
 # ── Physical info: VO2max + пороги (через transaction-механику) ──

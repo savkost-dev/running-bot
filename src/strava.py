@@ -407,19 +407,42 @@ async def get_activity_streams(access_token: str, activity_id: int,
     return pts
 
 
-def last_run_date_from_window(db_user_id: int) -> str | None:
-    """02.10.2026: дата последней пробежки из окна strava_activities (вебхук), запросов нет.
-    Пробежка — тип Run и fitness.is_run (от 3 км или от 20 минут)."""
+def _aerobic_kind_strava(a) -> str | None:
+    """06.10.2026 (Антон): тип Strava → только бег, велосипед, плавание, беговые лыжи; остальное None
+    (Hike, Rowing, Elliptical, Walk, WeightTraining, AlpineSki, Workout…)."""
+    t = str(a.get("sport_type") or a.get("type") or "")
+    tl = t.lower()
+    if not tl or "alpine" in tl:
+        return None
+    for key, kind in (("run", "бег"), ("ride", "велосипед"), ("swim", "плавание"), ("ski", "лыжи")):
+        if key in tl:
+            return kind
+    return None
+
+
+def sessions_from_window(db_user_id: int) -> list:
+    """06.10.2026: окно strava_activities → [{date, kind, run}] только по аэробным, которые тянут на тренировку.
+    Запросов к API нет."""
     import fitness as _fit
     from database import get_strava_activities
     out = []
     for a in get_strava_activities(db_user_id) or []:
-        if "run" not in str(a.get("type") or a.get("sport_type") or "").lower():
+        kind = _aerobic_kind_strava(a)
+        if not kind:
             continue
-        if not _fit.is_run(a.get("distance"), a.get("moving_time") or a.get("elapsed_time")):
+        run = kind == "бег"
+        dur = a.get("moving_time") or a.get("elapsed_time")
+        ok = _fit.is_run(a.get("distance"), dur) if run else _fit.is_session(dur)
+        if not ok:
             continue
-        out.append(str(a.get("start_date_local") or a.get("start_date") or "")[:10])
-    return _fit.latest_date(out)
+        out.append({"date": str(a.get("start_date_local") or a.get("start_date") or "")[:10], "kind": kind, "run": run})
+    return out
+
+
+def last_run_date_from_window(db_user_id: int) -> str | None:
+    """02.10.2026: дата последней пробежки из окна Strava или None (через sessions_from_window)."""
+    import fitness as _fit
+    return _fit.latest_date(s["date"] for s in sessions_from_window(db_user_id) if s["run"])
 
 
 async def get_recent_48h_load(access_token: str, db_user_id: int | None = None) -> dict:

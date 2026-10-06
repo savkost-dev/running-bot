@@ -3822,8 +3822,10 @@ async def _send_admin_data_block(
                 _srcs = ", ".join(f"{k} {v}" for k, v in sorted(_lr["all"].items(), key=lambda kv: kv[1], reverse=True))
                 _empty = (" | без пробежек за 14 дней: " + ", ".join(_lr["empty"])) if _lr.get("empty") else ""
                 _shift = _gi.get("shift") or 0
+                _act = (f" | последняя тренировка: {_lr['active_date']} ({_lr['active_kind']})"
+                        if _lr.get("active_date") and _lr.get("active_date") != _lr.get("date") else "")
                 _lines.append(
-                    f"\n<b>Последняя пробежка</b>: {_lr['date'] or 'нет в окне'} ({_srcs or '—'}){_empty}\n"
+                    f"\n<b>Последняя пробежка</b>: {_lr['date'] or 'нет в окне'} ({_srcs or '—'}){_empty}{_act}\n"
                     f"Простой до {workout_date or 'сегодня'}: {_idle} дн."
                     + (f" → зоны +{_shift} с/км (только интервальная)" if _shift else " → без поправки")
                 )
