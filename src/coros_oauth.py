@@ -134,30 +134,53 @@ def save_tokens(db_user_id: int, token_data: dict) -> None:
     )
 
 
+# 06.10.2026: ключ COROS живёт 30 дней, и ключ продления — столько же: после истечения COROS
+# отвечает invalid_grant, продлить уже нельзя (так 05–06.10 отвалились четверо, подключившиеся 5–6.09).
+# Продлеваем ЗАРАНЕЕ, когда осталось меньше REFRESH_AHEAD_SEC: ночная загрузка ходит к COROS
+# каждый день, так что успевает у всех. Проверено 06.10 на ключе админа: COROS выдал новый ключ
+# на 30 дней (expires_in 2591999), старый заменил.
+REFRESH_AHEAD_SEC = 7 * 86400
+_refresh_locks: dict = {}   # db_user_id → asyncio.Lock: два продления одним ключом подряд — второе получит отказ
+
+
+def _expires_at(row) -> int:
+    try:
+        return int(float(row.get("expires_at") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 async def ensure_valid_token(db_user_id: int):
-    """Действующий токен пользователя: при необходимости продлевает сам."""
+    """Действующий токен пользователя: продлевает сам за REFRESH_AHEAD_SEC до истечения.
+    Если продление не прошло, а ключ ещё действует — отдаёт его; истёк — None."""
+    import asyncio
     from database import get_token
 
     row = get_token(db_user_id, SERVICE)
-    if not row:
+    if not row or not row.get("access_token"):
         return None
-    access = row.get("access_token")
-    refresh = row.get("refresh_token")
-    expires_at = row.get("expires_at")
-    if not access:
-        return None
-    try:
-        expired = int(float(expires_at or 0)) - 120 <= int(_time.time())
-    except (TypeError, ValueError):
-        expired = True
-    if not expired:
-        return access
-    if not refresh:
-        return None
-    try:
-        fresh = await refresh_access_token(refresh)
-    except Exception as e:
-        logger.error(f"COROS refresh error uid={db_user_id}: {e}")
-        return None
-    save_tokens(db_user_id, fresh)
-    return fresh["access_token"]
+    now = int(_time.time())
+    if _expires_at(row) - REFRESH_AHEAD_SEC > now:
+        return row["access_token"]
+    lock = _refresh_locks.setdefault(db_user_id, asyncio.Lock())
+    async with lock:
+        row = get_token(db_user_id, SERVICE)   # мог продлить параллельный вызов, пока ждали
+        if not row or not row.get("access_token"):
+            return None
+        exp = _expires_at(row)
+        if exp - REFRESH_AHEAD_SEC > now:
+            return row["access_token"]
+        still_valid = exp - 120 > now
+        refresh = row.get("refresh_token")
+        if not refresh:
+            return row["access_token"] if still_valid else None
+        try:
+            fresh = await refresh_access_token(refresh)
+        except Exception as e:
+            logger.error(f"COROS refresh error uid={db_user_id}: {e}"
+                         + (" (ключ ещё действует, работаем на нём)" if still_valid else ""))
+            return row["access_token"] if still_valid else None
+        save_tokens(db_user_id, fresh)
+        logger.info(f"COROS token refreshed uid={db_user_id}: действует ещё "
+                    f"{int(fresh.get('expires_in', 0)) // 86400} дн.")
+        return fresh["access_token"]
