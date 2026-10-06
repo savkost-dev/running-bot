@@ -23,6 +23,7 @@ text — готовый текстовый пакет (без промпта). P
 import os
 import re
 import bisect
+import logging
 import asyncio
 import copy
 from datetime import datetime, timezone, date
@@ -1155,9 +1156,167 @@ def _series_model(ordered, plan_steps):
 # ПРАВИЛО (05.10.2026): у интервалов и лонга свои копии этой функции (ai_package / ai_package_long)
 # и свои обработчики в bot.py (cmd_report / cmd_report_long). Меняя подпись одной — вторую не трогать;
 # после правок интервального разбора проверять /report_long s.
+# ══════════════════════════════════════════════════════════════════════════════
+# Тема карточки разбора: праздник дня и фон (06.10.2026, Антон).
+# ИИ рисует только фон, цифры/таблицу/графики кладёт бот — данные целы.
+# Календарь: assets/holidays.txt («MM-DD<TAB>Название», # и пустые — мимо), первая подходящая.
+# Фон: assets/bg/YYYY-MM-DD.webp|png|jpg по дате тренировки; нет файла — всё как раньше.
+# Откат: CARD_THEME=0 в .env выключает и праздник, и фон. assets/ копирует deploy.ps1 отдельной строкой.
+# Точки входа: card_theme_for(wdate) -> {holiday, bg}; _apply_card_background(fig, bg, zones).
+# ══════════════════════════════════════════════════════════════════════════════
+logger = logging.getLogger(__name__)
+
+ASSETS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets")
+HOLIDAYS_FILE = os.path.join(ASSETS_DIR, "holidays.txt")
+BG_DIR = os.path.join(ASSETS_DIR, "bg")
+BG_EXTS = (".webp", ".png", ".jpg", ".jpeg")
+
+# Подложка под зоны карточки: тёмная, полупрозрачная. Прозрачность по зонам:
+# шапка и итоги — фон виднее, таблица — плотнее (мелкие цифры поверх луж не читаются).
+CARD_PLATE_RGB = (0.07, 0.07, 0.09)
+CARD_PLATE_ALPHA = {"header": 0.60, "table": 0.76, "footer": 0.52, "chart": 0.70}
+# Фон сам по себе тёмный (средняя яркость ~8%), чуть поднимаем, чтобы сцена читалась.
+CARD_BG_BRIGHTNESS = 1.25
+
+_MONTHS_GEN = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля",
+               "августа", "сентября", "октября", "ноября", "декабря"]
+
+
+def _card_theme_enabled() -> bool:
+    """CARD_THEME=0 (или off/false) в окружении — всё выключено."""
+    return str(os.getenv("CARD_THEME", "1")).strip().lower() not in ("0", "off", "false", "no")
+
+
+def _theme_date(wdate) -> date | None:
+    if isinstance(wdate, datetime):
+        return wdate.date()
+    if isinstance(wdate, date):
+        return wdate
+    s = str(wdate or "").strip()[:10]
+    for fmt in ("%Y-%m-%d", "%Y%m%d"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _holiday_for(wdate) -> str | None:
+    """Название праздника на дату из assets/holidays.txt или None."""
+    d = _theme_date(wdate)
+    if not d or not os.path.exists(HOLIDAYS_FILE):
+        return None
+    key = d.strftime("%m-%d")
+    try:
+        with open(HOLIDAYS_FILE, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                parts = line.split("\t", 1) if "\t" in line else line.split(" ", 1)
+                if len(parts) == 2 and parts[0].strip() == key and parts[1].strip():
+                    return parts[1].strip()
+    except OSError as e:
+        logger.warning(f"card theme: holidays.txt не читается: {e}")
+    return None
+
+
+def _holiday_line(wdate) -> str | None:
+    """«9 октября · День отражений в лужах» или None."""
+    d = _theme_date(wdate)
+    name = _holiday_for(d)
+    if not (d and name):
+        return None
+    return f"{d.day} {_MONTHS_GEN[d.month - 1]} · {name}"
+
+
+def _background_for(wdate) -> str | None:
+    """Путь к фону assets/bg/YYYY-MM-DD.* или None."""
+    d = _theme_date(wdate)
+    if not d:
+        return None
+    for ext in BG_EXTS:
+        p = os.path.join(BG_DIR, d.strftime("%Y-%m-%d") + ext)
+        if os.path.exists(p):
+            return p
+    return None
+
+
+def card_theme_for(wdate) -> dict:
+    """{holiday: str|None, bg: path|None}; при CARD_THEME=0 оба None."""
+    if not _card_theme_enabled():
+        return {"holiday": None, "bg": None}
+    return {"holiday": _holiday_line(wdate), "bg": _background_for(wdate)}
+
+
+def _apply_card_background(fig, bg_path: str, zone_axes, pad: float = 0.012) -> bool:
+    """Кладёт картинку под всю фигуру и полупрозрачные плашки под каждую зону.
+    zone_axes — список зон: {"axes": [ax, ...], "alpha": 0..1, "tight": bool, "texts": [...]}
+    (alpha по умолчанию — таблица; tight — плашка по tight bbox с подписями осей, для графиков).
+    Картинка режется по центру под пропорции фигуры, без искажения.
+    Возвращает False, если картинка не легла (карточка остаётся как есть)."""
+    try:
+        from PIL import Image, ImageEnhance
+        from matplotlib.patches import FancyBboxPatch
+        import numpy as np
+
+        fw, fh = fig.get_size_inches()
+        target = fw / fh
+        img = Image.open(bg_path).convert("RGB")
+        iw, ih = img.size
+        if iw / ih > target:   # шире, чем нужно — режем бока
+            nw = int(round(ih * target))
+            x0 = (iw - nw) // 2
+            img = img.crop((x0, 0, x0 + nw, ih))
+        else:                  # выше — режем верх/низ поровну
+            nh = int(round(iw / target))
+            y0 = (ih - nh) // 2
+            img = img.crop((0, y0, iw, y0 + nh))
+        if CARD_BG_BRIGHTNESS != 1.0:
+            img = ImageEnhance.Brightness(img).enhance(CARD_BG_BRIGHTNESS)
+
+        ax_bg = fig.add_axes([0, 0, 1, 1], zorder=-2)
+        ax_bg.imshow(np.asarray(img), aspect="auto", interpolation="bilinear")
+        ax_bg.axis("off")
+        fig.patch.set_alpha(0.0)
+
+        renderer = None
+        inv = fig.transFigure.inverted()
+        for zone in zone_axes:
+            axes = zone.get("axes") or []
+            alpha = float(zone.get("alpha", CARD_PLATE_ALPHA["table"]))
+            if zone.get("tight"):
+                # Графики: плашка вместе с подписями осей, тиками и заголовком (tight bbox),
+                # а сама область графика делается полупрозрачной.
+                if renderer is None:
+                    renderer = fig.canvas.get_renderer()
+                boxes = [a.get_tightbbox(renderer).transformed(inv) for a in axes if a is not None]
+                boxes += [t.get_window_extent(renderer).transformed(inv)
+                          for t in (zone.get("texts") or []) if t is not None]
+                for a in axes:
+                    if a is not None:
+                        a.set_facecolor((*CARD_PLATE_RGB, alpha))
+            else:
+                boxes = [a.get_position() for a in axes if a is not None]
+            if not boxes:
+                continue
+            x0 = min(b.x0 for b in boxes) - pad
+            x1 = max(b.x1 for b in boxes) + pad
+            y0 = min(b.y0 for b in boxes) - pad
+            y1 = max(b.y1 for b in boxes) + pad
+            fig.patches.append(FancyBboxPatch(
+                (x0, y0), x1 - x0, y1 - y0, boxstyle="round,pad=0.004,rounding_size=0.012",
+                facecolor=(*CARD_PLATE_RGB, alpha), edgecolor="none", transform=fig.transFigure,
+                zorder=-1, figure=fig))
+        return True
+    except Exception as e:
+        logger.warning(f"card theme: фон не лёг ({bg_path}): {e}")
+        return False
+
+
 async def build_charts_stacked(splits, plan_steps, name: str, out_dir: str,
                                tag: str, dark: bool = False,
-                               source: str = "", splits_fine=None) -> str | None:
+                               source: str = "", splits_fine=None, wdate=None) -> str | None:
     """Оба графика (работа + отдых) на ОДНОЙ вертикальной картинке под телефон:
     сверху интервалы (сегменты/эталон/тренд/дельты), снизу отдых (коридоры).
     Логика отрисовки повторяет activity_review._plot_work_segmented/_plot_rest,
@@ -1166,6 +1325,11 @@ async def build_charts_stacked(splits, plan_steps, name: str, out_dir: str,
     import numpy as np
     import matplotlib.pyplot as plt
     from matplotlib.ticker import FuncFormatter
+
+    # 06.10.2026: тот же фон, что у карточки (одна рекомендация — один вид). wdate=None — как раньше.
+    bg_path = card_theme_for(wdate).get("bg") if wdate else None
+    if bg_path:
+        dark = True
 
     ar.DARK_MODE = dark
     ordered = ar._ordered_laps(splits)
@@ -1356,6 +1520,14 @@ async def build_charts_stacked(splits, plan_steps, name: str, out_dir: str,
         _sig = "DoDick · @DD_adviser_bot · dodick.run" + (" · Powered by Strava" if source == "strava" else "")
         fig.text(0.985, 0.005, _sig, fontsize=8, alpha=0.6,
                  ha="right", va="bottom")
+        if bg_path:
+            fig.canvas.draw()   # нужны реальные размеры подписей для tight bbox
+            zones = [{"axes": [ax], "alpha": CARD_PLATE_ALPHA["chart"], "tight": True,
+                      "texts": [fig._suptitle]}]
+            if has_rest:
+                zones.append({"axes": [ax2], "alpha": CARD_PLATE_ALPHA["chart"], "tight": True})
+            _apply_card_background(fig, bg_path, zones)
+
         out_path = os.path.join(out_dir, f"charts_{tag}.png")
         fig.savefig(out_path, dpi=120)
         plt.close(fig)
@@ -1484,6 +1656,14 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
     import textwrap
     import matplotlib.pyplot as plt
     from matplotlib.patches import FancyBboxPatch, Rectangle
+
+    # 06.10.2026: праздник дня + фон на дату тренировки (assets/). Нет фона — всё как раньше.
+    # С фоном карточка всегда тёмная (текст светлый поверх плашек). CARD_THEME=0 — откат.
+    theme = card_theme_for(wdate)
+    holiday_ln = theme.get("holiday")
+    bg_path = theme.get("bg")
+    if bg_path:
+        dark = True
 
     ar.DARK_MODE = dark
     ordered = ar._ordered_laps(splits)
@@ -1681,7 +1861,7 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
     # ── Компоновка: портрет, три зоны ──
     th = ar._theme()
     accent = "#ff8c00"
-    n_hdr_lines = 2 + len(rcs_lines) + (1 if plan_line else 0)
+    n_hdr_lines = 2 + len(rcs_lines) + (1 if plan_line else 0) + (1 if holiday_ln else 0)
     hdr_in = 0.26 * n_hdr_lines + 0.18
     tbl_in = sum(0.46 * s["n_rows"] for s in sections) + \
         (0.14 * len(sections) if len(sections) > 1 else 0)
@@ -1712,6 +1892,10 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
         ax_h.text(0, y, meta_line, fontsize=10.5, alpha=0.8,
                   va="top", ha="left", transform=ax_h.transAxes)
         y -= dy
+        if holiday_ln:
+            ax_h.text(0, y, holiday_ln, fontsize=11, fontweight="bold", color=accent,
+                      va="top", ha="left", transform=ax_h.transAxes)
+            y -= dy
         for ln, st in rcs_lines:
             ax_h.text(0, y, ln, fontsize=10.5,
                       style="italic" if st == "italic" else "normal",
@@ -1725,8 +1909,10 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
         # Зона 2: секции-таблицы по блокам (bbox на всю под-зону)
         zebra = "#2a2a2a" if dark else "#f2f2f2"
         hdr_bg = "#333333" if not dark else "#3a3a3a"
+        table_axes = []
         for si, sec in enumerate(sections):
             ax_t = fig.add_subplot(sub[si]); ax_t.axis("off")
+            table_axes.append(ax_t)
             if len(sections) > 1:
                 ax_t.set_title(sec["title"], fontsize=10.5, fontweight="bold", pad=3)
             tbl = ax_t.table(cellText=sec["rows"], colLabels=sec["headers"],
@@ -1779,6 +1965,13 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
         _sig = "DoDick · @DD_adviser_bot · dodick.run" + (" · Powered by Strava" if source == "strava" else "")
         ax_b.text(0.99, 0.0, _sig, fontsize=8.5, alpha=0.6,
                   ha="right", va="bottom", transform=ax_b.transAxes)
+
+        if bg_path:
+            # Плашки: шапка+схема, таблицы, итоги — между ними виден фон.
+            _apply_card_background(fig, bg_path, [
+                {"axes": [ax_h, ax_d], "alpha": CARD_PLATE_ALPHA["header"]},
+                {"axes": table_axes, "alpha": CARD_PLATE_ALPHA["table"]},
+                {"axes": [ax_b], "alpha": CARD_PLATE_ALPHA["footer"]}])
 
         out_path = os.path.join(out_dir, f"card_{tag}.png")
         fig.savefig(out_path, dpi=120)

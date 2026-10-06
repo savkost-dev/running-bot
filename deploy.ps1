@@ -26,6 +26,8 @@ scp -i $SSH_KEY "$SRC_LOCAL/*.py" "${REMOTE}:${SRC_REMOTE}/"
 scp -i $SSH_KEY "D:/running-bot/.env"         "${REMOTE}:/opt/running-bot/"
 scp -i $SSH_KEY "D:/running-bot/CHANGELOG.md" "${REMOTE}:/opt/running-bot/"
 scp -i $SSH_KEY "D:/running-bot/CLAUDE.md"    "${REMOTE}:/opt/running-bot/"
+# 06.10.2026: fony kartochki i kalendar prazdnikov (assets/) — *.py ikh ne lovit
+scp -r -i $SSH_KEY "D:/running-bot/assets"    "${REMOTE}:/opt/running-bot/"
 
 # -- 3. Restart --
 Write-Host "==> Restarting running-bot..." -ForegroundColor Yellow
