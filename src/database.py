@@ -1680,7 +1680,7 @@ def get_recommendations_for_date(workout_date: str) -> list[dict]:
             SELECT COALESCE(u.name, u.username, 'user_' || lr.user_id),
                    lr.recommended_group, lr.evening_recovery_score, lr.lowered_by_recovery,
                    u.username, u.telegram_id, pf.answer,
-                   lr.user_id, lr.groups_pct
+                   lr.user_id, lr.groups_pct, lr.advice_json
             FROM recommendation_history lr
             JOIN users u ON u.id = lr.user_id
             LEFT JOIN pace_feedback pf
@@ -1699,9 +1699,22 @@ def get_recommendations_for_date(workout_date: str) -> list[dict]:
             "pace_answer": r[6],
             "user_id": r[7],
             "groups_pct": _json.loads(r[8]) if r[8] else None,
+            # 06.10.2026: простой перед тренировкой, если правило сработало (bot: advice["idle"])
+            "idle": _idle_of(r[9]),
         }
         for r in rows
     ]
+
+
+def _idle_of(advice_json):
+    """{days, shift, last_run, …} из advice_json рекомендации или None."""
+    if not advice_json:
+        return None
+    try:
+        idle = (_json.loads(advice_json) or {}).get("idle")
+    except (TypeError, ValueError):
+        return None
+    return idle if isinstance(idle, dict) and idle.get("days") is not None else None
 
 
 # ── Кэш Garmin recovery ──────────────────────────────────────
