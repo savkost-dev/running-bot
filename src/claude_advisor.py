@@ -3966,6 +3966,15 @@ def format_long_run_message(advice: dict, workout: dict, stats: dict | None = No
         if not advice.get("lowered_by_recovery") or _if_rec_l in ("", "None", "null", _rec_grp_l) \
                 or _if_rec_l not in {str(i.get("group", "")).strip() for i in sorted_s}:
             _if_rec_l = ""
+        # 06.10.2026 (Антон): тест лонга через ИИ — вводная про типы перед шкалой и тип у строки
+        # с максимальным процентом. Только если ИИ отдал типы (types_today); у формульного /long их нет.
+        _types_today = advice.get("types_today") if isinstance(advice.get("types_today"), list) else []
+        if _types_today:
+            from long_ai import LONG_TYPE_NOTES
+            lines.append("Под формат лонга подходят пять типов: " + ", ".join(LONG_TYPE_NOTES) + ". "
+                         "Выбор идёт среди них.")
+            lines.append("")
+        _max_item = max(sorted_s, key=lambda i: int(i.get("percentage", 0) or 0), default=None) if _types_today else None
         lines.append("📊 <b>Подходимость групп:</b>")
         for item in sorted_s:
             g = _sanitize_group_name(str(item.get("group", "?")))
@@ -3978,7 +3987,10 @@ def format_long_run_message(advice: dict, workout: dict, stats: dict | None = No
             g_disp = g if any(c.isdigit() for c in g) else "Здоровье"
             if _plus_of(item) and any(c.isdigit() for c in g):
                 g_disp = g + "+"      # _sanitize_group_name оставляет только число — «+» возвращаем
-            lines.append(f"<code>Гр.{g_disp:<4} {bar} {pct:>3}%{comment_str}</code>")
+            _type_str = ""
+            if _max_item is not None and item is _max_item and item.get("type"):
+                _type_str = f" · {_html.escape(str(item['type']))}"
+            lines.append(f"<code>Гр.{g_disp:<4} {bar} {pct:>3}%{comment_str}</code>{_type_str}")
         if _if_rec_l:
             lines.append("<i>🟨 — группа при нормальном восстановлении</i>")
         lines.append(sep)
@@ -4035,6 +4047,19 @@ def format_long_run_message(advice: dict, workout: dict, stats: dict | None = No
     warning = advice.get("warning")
     if warning and str(warning).lower() not in ("null", "none", ""):
         lines.append(f"\n⚠️ <i>{_html.escape(str(warning))}</i>")
+
+    # 06.10.2026 (Антон): тест лонга через ИИ — пояснения по типам: фиксированная строка + фраза ИИ,
+    # почему сегодня этот тип или не он. Только если ИИ отдал types_today; у формульного /long их нет.
+    _types_today = advice.get("types_today") if isinstance(advice.get("types_today"), list) else []
+    if _types_today:
+        from long_ai import LONG_TYPE_NOTES
+        _ai_by_type = {str(t.get("type", "")).strip().lower(): str(t.get("today") or "").strip()
+                       for t in _types_today if isinstance(t, dict)}
+        lines += [sep, "<b>Типы длительной сегодня:</b>"]
+        for _tname, _note in LONG_TYPE_NOTES.items():
+            _today = _ai_by_type.get(_tname.lower(), "")
+            lines.append(f"• <b>{_tname}</b> — {_note}"
+                         + (f" <i>{_html.escape(_today)}</i>" if _today else ""))
 
     lines.append("\nУдачи на длительной! 🏃")
 
