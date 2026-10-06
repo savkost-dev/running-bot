@@ -3948,12 +3948,17 @@ def format_long_run_message(advice: dict, workout: dict, stats: dict | None = No
     if suitability:
         # 20.08.2026 (Антон): порядок — по НОМЕРУ группы (от быстрой к медленной),
         # а не по проценту. Группа здоровья — в конец.
+        # 06.10.2026: вариант с прогрессом — «3+» (тест лонга через ИИ, /test_long): идёт ВЫШЕ своей
+        # группы (заканчивается быстрее). Строки без «+» (боевой формульный /long) — как раньше.
+        def _plus_of(item) -> bool:
+            return str(item.get("group", "")).strip().endswith("+")
+
         def _grp_key_long(item):
-            g = str(item.get("group", "")).replace(",", ".")
+            g = str(item.get("group", "")).replace(",", ".").strip().rstrip("+")
             try:
-                return (0, float(g))
+                return (0, float(g), 0 if _plus_of(item) else 1)
             except ValueError:
-                return (1, 99.0)
+                return (1, 99.0, 1)
         sorted_s = sorted(suitability, key=_grp_key_long)
         # 20.08.2026: группа при нормальном восстановлении — синей полосой (только при занижении)
         _rec_grp_l = str(advice.get("recommended_group", "")).strip()
@@ -3971,6 +3976,8 @@ def format_long_run_message(advice: dict, workout: dict, stats: dict | None = No
             comment = _SUIT_EPITHET_MAP.get(_key, _SUIT_EPITHET_MAP.get(comment_raw, comment_raw[:10]))
             comment_str = f" — {_html.escape(comment)}" if comment else ""
             g_disp = g if any(c.isdigit() for c in g) else "Здоровье"
+            if _plus_of(item) and any(c.isdigit() for c in g):
+                g_disp = g + "+"      # _sanitize_group_name оставляет только число — «+» возвращаем
             lines.append(f"<code>Гр.{g_disp:<4} {bar} {pct:>3}%{comment_str}</code>")
         if _if_rec_l:
             lines.append("<i>🟨 — группа при нормальном восстановлении</i>")
