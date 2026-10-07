@@ -7343,13 +7343,20 @@ async def cmd_test_long(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     /test_long — на данных админа, режим ИИ из /mode;
     /test_long p — только промт и пакет данных, без вызова ИИ;
     /test_long u — выбрать пользователя кнопками (как /l_user); /test_long 39 — по id из /users;
-    /test_long smart|fast — режим ИИ на этот прогон. Аргументы можно сочетать: /test_long u p."""
+    /test_long smart|fast — режим ИИ на этот прогон. Аргументы можно сочетать: /test_long u p.
+    /test_long all [smart|fast] [N] — теневой прогон по всем с зонами (07.10.2026): один режим, никому не шлёт,
+    результат в recommendation_history (run_kind=shadow_long_ai) + сводка по вариантам и типам."""
     if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
         await update.message.reply_text("Нет доступа.")
         return
     args = [a.lower() for a in (context.args or [])]
     opts = {"prompt_only": any(a in ("p", "data", "prompt") for a in args),
             "mode": next((a for a in args if a in ("smart", "fast")), None)}
+    if any(a in ("all", "все") for a in args):
+        # /test_long all [smart|fast] [N] — теневой прогон по всем с зонами, один режим, никому не шлёт
+        _limit = next((int(a) for a in args if a.isdigit()), 0)
+        await _run_long_ai_shadow(update, context, opts["mode"] or "smart", limit=_limit)
+        return
     if any(a in ("u", "user") for a in args):
         users = get_users_list_for_b()
         if not users:
@@ -7379,48 +7386,38 @@ async def test_long_user_callback(update: Update, context: ContextTypes.DEFAULT_
     await _run_long_ai(update, context, target, **opts)
 
 
-async def _run_long_ai(update: Update, context: ContextTypes.DEFAULT_TYPE, target: int | None,
-                       prompt_only: bool = False, mode: str | None = None) -> None:
-    """Прогон тестовой рекомендации лонга через ИИ (общая часть /test_long и кнопок выбора пользователя).
-    target — id пользователя в базе или None (тогда на данных админа). Только админ, в базу не пишет."""
-    import html
+async def _long_ai_compute(db_user_id: int, mode: str, prompt_only: bool = False,
+                           analysis: dict | None = None, live: dict | None = None,
+                           status: str = "") -> dict:
+    """Расчёт тестовой рекомендации лонга через ИИ для ОДНОГО человека, без отправки сообщений
+    (07.10.2026, Антон: одна функция для /test_long <id> и прогона по всем).
+    analysis / live — можно передать готовые (прогон читает анонс один раз); иначе читаются здесь.
+    Возвращает {ok, msg?, analysis, status, workout_dict, scenario_ctx, recovery, weather_line,
+    pkg, formula, full_prompt, advice?, stats?, timeout?}. В базу ничего не пишет."""
     import json as _json
     import long_ai
     import database as _db
     from ai_package import _age
 
-    chat_id = update.effective_user.id
-    admin_db_id = get_or_create_user(update.effective_user.id, update.effective_user.full_name)
-    db_user_id = target or admin_db_id
-    who = "админ"
-    if target and target != admin_db_id:
-        u = next((x for x in get_users_list_for_b(all_users=True) if x.get("db_user_id") == target), None)
-        if not u:
-            await context.bot.send_message(chat_id, f"Пользователя с id {target} нет.")
-            return
-        who = f"{u.get('name')} (id {target})"
-
-    msg = await context.bot.send_message(chat_id, "🧪 Лонг через ИИ: собираю данные…")
-    # Анализ анонса — последний сохранённый Шаг 1 по лонгу (текущий или прошедший; заново не считаем).
-    row, status = get_latest_workout_analysis("long", None, None, None)
-    try:
-        analysis = _json.loads((row or {}).get("analyzed_json") or "{}")
-    except Exception:
-        analysis = {}
-    if not analysis:
-        await msg.edit_text("⚠️ В базе нет анализа анонса лонга (Шаг 1).")
-        return
-    analysis.setdefault("workout_date", (row or {}).get("workout_date"))
-    analysis["workout_type"] = "long"
+    if analysis is None:
+        # Анализ анонса — последний сохранённый Шаг 1 по лонгу (текущий или прошедший; заново не считаем).
+        row, status = get_latest_workout_analysis("long", None, None, None)
+        try:
+            analysis = _json.loads((row or {}).get("analyzed_json") or "{}")
+        except Exception:
+            analysis = {}
+        if not analysis:
+            return {"ok": False, "msg": "В базе нет анализа анонса лонга (Шаг 1)."}
+        analysis.setdefault("workout_date", (row or {}).get("workout_date"))
+        analysis["workout_type"] = "long"
+        # Анонс из канала — как у боевого лонга: нужен шапке сообщения, сценарию времени и погоде.
+        try:
+            live = await find_next_long_run()
+        except Exception as e:
+            logger.warning(f"/test_long find_next_long_run error: {e}")
 
     profile = get_user_profile(db_user_id) or {}
     zinfo = zones.get_pace_zones(db_user_id)
-    # Анонс из канала — как у боевого лонга: нужен шапке сообщения, сценарию времени и погоде.
-    live = None
-    try:
-        live = await find_next_long_run()
-    except Exception as e:
-        logger.warning(f"/test_long find_next_long_run error: {e}")
     workout_dict = dict(live) if live else {"workout_date": analysis.get("workout_date", "")}
     workout_dict["workout_type"] = "long"
     workout_dict["even_pace_available"] = analysis.get("even_pace_available")
@@ -7471,8 +7468,7 @@ async def _run_long_ai(update: Update, context: ContextTypes.DEFAULT_TYPE, targe
         activities=activities, age=_age(profile.get("birthdate")), weather_prompt=weather_prompt,
         scenario_text=scenario_ctx.get("prompt_text") or "")
     if not pkg.get("ok"):
-        await msg.edit_text(f"⚠️ {pkg.get('msg')}")
-        return
+        return {"ok": False, "msg": pkg.get("msg")}
 
     # Что дают формулы сейчас — только админу для сравнения, в промт НЕ идёт (чтобы не подсказывать ИИ).
     formula = "—"
@@ -7487,38 +7483,75 @@ async def _run_long_ai(update: Update, context: ContextTypes.DEFAULT_TYPE, targe
     except Exception as e:
         logger.warning(f"/test_long formula error for {db_user_id}: {e}")
 
-    if not mode:
-        mode = (get_preferences(admin_db_id) or {}).get("ai_mode", "smart")
-        mode = {"calc": "fast", "deep": "smart"}.get(mode, mode)
-    header = (f"🧪 Лонг через ИИ (тест) · {who}\n"
-              f"Анонс: {analysis.get('workout_date') or '—'} ({status}) · формулы сейчас: {formula}")
-    full_prompt = long_ai.PROMPT_LONG_AI + "\n\n" + pkg["text"]
-
+    out = {"ok": True, "analysis": analysis, "status": status, "workout_dict": workout_dict,
+           "scenario_ctx": scenario_ctx, "recovery": recovery, "weather_line": weather_line,
+           "pkg": pkg, "formula": formula, "full_prompt": long_ai.PROMPT_LONG_AI + "\n\n" + pkg["text"]}
     if prompt_only:
-        await msg.edit_text(header + "\n📦 Промт и пакет данных (ИИ не вызывался):")
-        for ch in _report_text_chunks(full_prompt):
-            await context.bot.send_message(chat_id, f"<pre>{html.escape(ch)}</pre>", parse_mode="HTML")
-        return
+        return out
 
-    await msg.edit_text(header + f"\n🤖 Спрашиваю ИИ ({_MODE_INFO.get(mode, ('', mode))[1]})…")
-    # Вызов и вид сообщения — от прежней ИИ-ветки лонга: ask_groq (JSON) + format_long_run_message,
-    # то есть админ видит рекомендацию так же, как её увидел бы пользователь.
-    result = await asyncio.to_thread(claude_advisor.ask_groq, full_prompt, mode)
+    # Вызов и вид сообщения — от прежней ИИ-ветки лонга: ask_groq (JSON) + format_long_run_message.
+    result = await asyncio.to_thread(claude_advisor.ask_groq, out["full_prompt"], mode)
     advice = (result or {}).get("advice")
-    stats = (result or {}).get("stats")
     if advice:
         # номер группы здоровья из анализа анонса — для звёздочки и сноски под шкалой
         _hg = next((g.get("number") for g in (analysis.get("groups") or []) if g.get("health_group")), None)
         if _hg is not None:
             advice["health_group"] = str(_hg)
+    out["advice"] = advice
+    out["stats"] = (result or {}).get("stats")
+    out["timeout"] = bool((result or {}).get("timeout"))
+    return out
+
+
+async def _run_long_ai(update: Update, context: ContextTypes.DEFAULT_TYPE, target: int | None,
+                       prompt_only: bool = False, mode: str | None = None) -> None:
+    """Прогон тестовой рекомендации лонга через ИИ для одного человека с отправкой админу
+    (общая часть /test_long и кнопок выбора пользователя). target — id пользователя в базе
+    или None (тогда на данных админа). Только админ, в базу не пишет."""
+    import html
+    import json as _json
+    import long_ai
+
+    chat_id = update.effective_user.id
+    admin_db_id = get_or_create_user(update.effective_user.id, update.effective_user.full_name)
+    db_user_id = target or admin_db_id
+    who = "админ"
+    if target and target != admin_db_id:
+        u = next((x for x in get_users_list_for_b(all_users=True) if x.get("db_user_id") == target), None)
+        if not u:
+            await context.bot.send_message(chat_id, f"Пользователя с id {target} нет.")
+            return
+        who = f"{u.get('name')} (id {target})"
+    if not mode:
+        mode = (get_preferences(admin_db_id) or {}).get("ai_mode", "smart")
+        mode = {"calc": "fast", "deep": "smart"}.get(mode, mode)
+
+    msg = await context.bot.send_message(
+        chat_id, "🧪 Лонг через ИИ: собираю данные…" if prompt_only
+        else f"🧪 Лонг через ИИ: собираю данные и спрашиваю ИИ ({_MODE_INFO.get(mode, ('', mode))[1]})…")
+    res = await _long_ai_compute(db_user_id, mode, prompt_only=prompt_only)
+    if not res.get("ok"):
+        await msg.edit_text(f"⚠️ {res.get('msg')}")
+        return
+    analysis, workout_dict, scenario_ctx = res["analysis"], res["workout_dict"], res["scenario_ctx"]
+    header = (f"🧪 Лонг через ИИ (тест) · {who}\n"
+              f"Анонс: {analysis.get('workout_date') or '—'} ({res.get('status')}) · формулы сейчас: {res['formula']}")
+
+    if prompt_only:
+        await msg.edit_text(header + "\n📦 Промт и пакет данных (ИИ не вызывался):")
+        for ch in _report_text_chunks(res["full_prompt"]):
+            await context.bot.send_message(chat_id, f"<pre>{html.escape(ch)}</pre>", parse_mode="HTML")
+        return
+
+    advice, stats = res.get("advice"), res.get("stats")
     if not advice:
-        await msg.edit_text(header + ("\n⏱ ИИ не уложился во время." if (result or {}).get("timeout")
+        await msg.edit_text(header + ("\n⏱ ИИ не уложился во время." if res.get("timeout")
                                       else "\n⚠️ ИИ не ответил или вернул не JSON."))
         return
     await msg.edit_text(header)
     try:
         body = claude_advisor.format_long_run_message(
-            advice, workout_dict, stats=stats, weather_line=weather_line, has_tracker=True)
+            advice, workout_dict, stats=stats, weather_line=res["weather_line"], has_tracker=True)
         _scen_hdr = scenario_ctx["user_text"] + "\n\n" if scenario_ctx.get("user_text") else ""
         await context.bot.send_message(chat_id, _scen_hdr + body, parse_mode="HTML")
     except Exception as e:
@@ -7530,8 +7563,122 @@ async def _run_long_ai(update: Update, context: ContextTypes.DEFAULT_TYPE, targe
     for ch in _report_text_chunks((extras + "\n\n" if extras else "") + "— тестовая ветка /test_long, пользователям не уходит"):
         await context.bot.send_message(chat_id, ch)
     # Админу — блок «Данные для рекомендации» (снимок на утро, синхронизация, простой), как после интервальной.
-    await _send_admin_data_block(chat_id, db_user_id, recovery, context,
+    await _send_admin_data_block(chat_id, db_user_id, res.get("recovery"), context,
                                  workout_date=workout_dict.get("workout_date"))
+
+
+LONG_AI_SHADOW_KIND = "shadow_long_ai"   # run_kind в recommendation_history для прогона /test_long all
+
+
+async def _run_long_ai_shadow(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                              mode: str, limit: int = 0) -> None:
+    """/test_long all — теневой прогон лонга через ИИ по всем с зонами (07.10.2026, Антон).
+    По образцу /shadow_run: по 5 человек параллельно, один режим для всех, никому не шлёт,
+    результат — строка на человека в recommendation_history (run_kind=shadow_long_ai; повтор — замена):
+    группа и вариант основного выбора, тип, полная таблица подходимости и вердикты по типам в advice_json.
+    В конце — сводка админу: распределение по вариантам и типам; по каждому типу — доступен в лесенке /
+    разрешён сегодня / рекомендован."""
+    import json as _json
+    import time as _time
+    import long_ai
+
+    chat_id = update.effective_user.id
+    row, status = get_latest_workout_analysis("long", None, None, None)
+    try:
+        analysis = _json.loads((row or {}).get("analyzed_json") or "{}")
+    except Exception:
+        analysis = {}
+    if not analysis:
+        await context.bot.send_message(chat_id, "⚠️ В базе нет анализа анонса лонга (Шаг 1).")
+        return
+    analysis.setdefault("workout_date", (row or {}).get("workout_date"))
+    analysis["workout_type"] = "long"
+    live = None
+    try:
+        live = await find_next_long_run()
+    except Exception as e:
+        logger.warning(f"/test_long all: find_next_long_run error: {e}")
+
+    users = get_users_list_for_b()
+    if limit:
+        users = users[:limit]
+    msg = await context.bot.send_message(
+        chat_id, f"🧪 Лонг через ИИ, прогон по всем: {len(users)} человек, анонс {analysis.get('workout_date')} "
+                 f"({status}), режим {mode}. Никому не уходит, результат в историю «{LONG_AI_SHADOW_KIND}».")
+    roman = long_ai.LONG_TYPE_ROMAN
+    _sem = asyncio.Semaphore(5)
+    by_variant: dict[str, int] = {}
+    by_type: dict[str, int] = {}
+    avail: dict[str, int] = {k: 0 for k in roman}
+    allowed: dict[str, int] = {k: 0 for k in roman}
+    chosen: dict[str, int] = {k: 0 for k in roman}
+    errors: list[str] = []
+    t_sum, done = 0.0, 0
+
+    async def _one(u: dict):
+        nonlocal t_sum, done
+        name = str(u.get("name") or u.get("db_user_id"))[:20]
+        async with _sem:
+            try:
+                _t0 = _time.time()
+                res = await _long_ai_compute(u["db_user_id"], mode, analysis=analysis, live=live, status=status)
+                if not res.get("ok"):
+                    errors.append(f"{name}: {res.get('msg')}")
+                    return
+                advice = res.get("advice")
+                if not advice:
+                    errors.append(f"{name}: " + ("ИИ не уложился во время" if res.get("timeout") else "пустой ответ"))
+                    return
+                _dt = _time.time() - _t0
+                ladder = (res.get("pkg") or {}).get("ladder") or []
+                types_in_ladder = sorted({v.get("type") for v in ladder if v.get("type") in roman},
+                                         key=lambda t: list(roman).index(t))
+                fits = {str(t.get("type", "")).strip().lower() for t in (advice.get("types_today") or [])
+                        if isinstance(t, dict) and t.get("fits") in (True, "true", "да")}
+                main_type = str(advice.get("long_type") or "").strip().lower()
+                variant = (str(advice.get("recommended_group") or "—")
+                           + ("+" if advice.get("run_strategy") == "progressive" else ""))
+                advice = dict(advice)
+                advice["_stats"], advice["_seconds"] = res.get("stats"), round(_dt, 1)
+                advice["_variant"], advice["_long_type"] = variant, main_type
+                advice["_types_in_ladder"] = [roman[t] for t in types_in_ladder]
+                advice["_formula"] = res.get("formula")
+                save_recommendation_history(u["db_user_id"], advice, res.get("workout_dict") or {},
+                                            LONG_AI_SHADOW_KIND, ai_mode=mode)
+                by_variant[variant] = by_variant.get(variant, 0) + 1
+                _mt = roman.get(main_type, "?")
+                by_type[_mt] = by_type.get(_mt, 0) + 1
+                for t in types_in_ladder:
+                    avail[t] += 1
+                for t in roman:
+                    if t in fits:
+                        allowed[t] += 1
+                if main_type in chosen:
+                    chosen[main_type] += 1
+                t_sum += _dt
+                done += 1
+            except Exception as e:  # noqa: BLE001
+                errors.append(f"{name}: {type(e).__name__}: {str(e)[:60]}")
+
+    await asyncio.gather(*[_one(u) for u in users])
+
+    def _vkey(v):
+        try:
+            return (-float(v.rstrip("+").replace(",", ".")), 0 if v.endswith("+") else 1)
+        except ValueError:
+            return (99.0, 1)
+    hist_v = "\n".join(f"{v:<4} {'█' * n} {n}" for v, n in sorted(by_variant.items(), key=lambda kv: _vkey(kv[0])))
+    hist_t = "\n".join(f"{t:<4} {'█' * n} {n}" for t, n in sorted(by_type.items(), key=lambda kv: (list(roman.values()) + ['?']).index(kv[0])))
+    table = "\n".join(f"{roman[t]:<4} {avail[t]:>3} {allowed[t]:>3} {chosen[t]:>3}" for t in roman)
+    text = (f"Прогон лонга через ИИ · {analysis.get('workout_date')} · {mode} · «{LONG_AI_SHADOW_KIND}»\n"
+            f"готово {done} из {len(users)}, среднее {t_sum / max(done, 1):.0f} с\n\n"
+            f"<b>Основной выбор, вариант</b> (медленный → быстрый):\n<pre>{hist_v}</pre>\n"
+            f"<b>Основной выбор, тип</b>:\n<pre>{hist_t}</pre>\n"
+            f"<b>По типам</b>: в лесенке / разрешён сегодня / рекомендован\n<pre>{table}</pre>\n"
+            f"Текст по человеку: /test_long &lt;id&gt;")
+    if errors:
+        text += "\n\nОшибки ({}):\n".format(len(errors)) + "\n".join(errors[:15])
+    await msg.edit_text(text[:4000], parse_mode="HTML")
 
 
 async def report_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
