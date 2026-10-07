@@ -4073,8 +4073,18 @@ def format_long_run_message(advice: dict, workout: dict, stats: dict | None = No
             _fits = _t.get("fits")
             if isinstance(_fits, str):
                 _fits = _fits.strip().lower() in ("true", "да", "yes", "1")
-            _verdict = ("" if _fits is None else
-                        ("✅ <b>Сегодня подходит.</b>" if _fits else "❌ <b>Сегодня не подходит.</b>"))
+            # 07.10.2026 (Антон): вердикт по ВАРИАНТАМ типа, а не по типу целиком — один тип накрывает
+            # варианты разной нагрузки (гр.3+ легче основного, гр.1+ тяжелее)
+            _ok = [str(v).strip() for v in (_t.get("variants_ok") or []) if str(v).strip()] \
+                if isinstance(_t.get("variants_ok"), list) else []
+            if _fits is None:
+                _verdict = ""
+            elif _fits and _ok:
+                _verdict = f"✅ <b>Сегодня: {_html.escape(', '.join(_ok))}.</b>"
+            elif _fits:
+                _verdict = "✅ <b>Сегодня подходит.</b>"
+            else:
+                _verdict = "❌ <b>Сегодня не подходит.</b>"
             lines.append(f"• <b>{LONG_TYPE_ROMAN[_tname]}. {_tname}</b> — {_note}"
                          + (f"\n   {_verdict}" if _verdict else "")
                          + (f" <i>{_html.escape(_why)}</i>" if _why else ""))
