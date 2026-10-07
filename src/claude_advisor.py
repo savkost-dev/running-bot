@@ -3992,9 +3992,12 @@ def format_long_run_message(advice: dict, workout: dict, stats: dict | None = No
             if _plus_of(item) and any(c.isdigit() for c in g):
                 g_disp = g + "+"      # _sanitize_group_name оставляет только число — «+» возвращаем
             if _types_today:
-                # тест лонга через ИИ: без эпитетов, номер типа внутри строки (вне типов — ничего)
+                # тест лонга через ИИ (Антон, 07.10): без эпитетов и без «Гр.», номер типа СЛЕВА от полоски —
+                # иначе на узком экране хвост строки переносится. Вне типов — пусто.
                 _rn = _roman.get(str(item.get("type") or "").strip().lower(), "")
-                comment_str = f" · {_rn}" if _rn else ""
+                _gd = g_disp if g_disp != "Здоровье" else "зд"
+                lines.append(f"<code>{_gd:<3} {_rn:<3} {bar} {pct:>3}%</code>")
+                continue
             lines.append(f"<code>Гр.{g_disp:<4} {bar} {pct:>3}%{comment_str}</code>")
         if _if_rec_l:
             lines.append("<i>🟨 — группа при нормальном восстановлении</i>")
