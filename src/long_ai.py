@@ -218,7 +218,7 @@ def _runs_from_strava(activities: list[dict]) -> list[dict]:
 def build_long_ai_package(*, profile: dict | None, zinfo: dict | None, recovery: dict | None,
                           fitness: dict | None, analysis: dict | None, activities: list[dict] | None,
                           age: int | None = None, today: str | None = None,
-                          weather_prompt: str = "") -> dict:
+                          weather_prompt: str = "", scenario_text: str = "") -> dict:
     """Пакет данных для PROMPT_LONG_AI текстом. Сырые данные собирает вызывающий (_run_long_ai).
     Возвращает {ok, text, ladder, msg}. В пакет идут только перечисленные поля профиля —
     словарь профиля целиком не печатать (в нём лежат учётные данные сервисов)."""
@@ -236,20 +236,15 @@ def build_long_ai_package(*, profile: dict | None, zinfo: dict | None, recovery:
     today_d = datetime.strptime(today, "%Y-%m-%d") if today else datetime.now()
     A(f"Дата расчёта: {today_d.strftime('%Y-%m-%d')}")
 
+    # 07.10.2026 (Антон, выравнивание с интервалами): о бегуне — только специализация и зоны темпа,
+    # тем же текстом, что в build_ai_b_prompt_reco_champion. Пол, возраст, МПК, ПАНО, тип бегуна
+    # модели не показываются: они уже заложены в зоны.
     A("\n[БЕГУН]")
-    A(f"  Пол: {prof.get('gender') or '—'}   Возраст: {age or '—'}")
-    A(f"  МПК: {prof.get('vo2max') or '—'}   "
-      f"ПАНО: {prof.get('lactate_threshold_pace') or '—'}/км @ {prof.get('lactate_threshold_hr') or '—'} уд/мин")
     spec = prof.get("specialization")
-    A(f"  Целевая дистанция: {SPEC_LABELS.get(spec, spec or 'не указана')}")
-    if (zinfo or {}).get("runner_type"):
-        A(f"  Тип бегуна: {zinfo['runner_type']}")
-
-    A("\n[ЛИЧНЫЕ ТЕМПЫ] (мин/км)")
-    A(f"  лёгкий: {zones_map.get('easy')}   марафонский: {zones_map.get('marathon')}   "
-      f"пороговый: {zones_map.get('threshold') or '—'}")
-    if (zinfo or {}).get("source"):
-        A(f"  источник: {zinfo['source']}")
+    A(f"  Специализация: {SPEC_LABELS.get(spec, spec or 'не указана')}")
+    A("  Зоны темпа:")
+    for _z, _p in zones_map.items():
+        A(f"    {_z}: {_p} мин/км")
 
     A("\n[ФОН]")
     rec = recovery or {}
@@ -272,6 +267,10 @@ def build_long_ai_package(*, profile: dict | None, zinfo: dict | None, recovery:
         A(f"  Восстановление: Training Readiness: {tr['score']}/100 ({tr.get('level', '?')}){tr_at_str}")
     else:
         A("  Восстановление: нет данных")
+    if scenario_text:
+        # сценарий времени (recovery._recovery_scenario), тот же текст, что у интервалов:
+        # «данные синхронизированы …, до старта N ч, прогноз к старту» / «тренировка уже состоялась»
+        A(f"  {scenario_text}")
     l48 = (fitness or {}).get("load_48h") or {}
     if l48:
         A(f"  Нагрузка за 48 ч: {l48.get('sessions_48h', 0)} трен., {l48.get('km_48h', 0)} км"

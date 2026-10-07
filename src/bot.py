@@ -7415,11 +7415,25 @@ async def _run_long_ai(update: Update, context: ContextTypes.DEFAULT_TYPE, targe
 
     profile = get_user_profile(db_user_id) or {}
     zinfo = zones.get_pace_zones(db_user_id)
+    # Анонс из канала — как у боевого лонга: нужен шапке сообщения, сценарию времени и погоде.
+    live = None
+    try:
+        live = await find_next_long_run()
+    except Exception as e:
+        logger.warning(f"/test_long find_next_long_run error: {e}")
+    workout_dict = dict(live) if live else {"workout_date": analysis.get("workout_date", "")}
+    workout_dict["workout_type"] = "long"
+    workout_dict["even_pace_available"] = analysis.get("even_pace_available")
+    # 07.10.2026 (Антон, выравнивание с интервалами): лонг впереди — живой запрос в трекер,
+    # прошёл — кэш; и тот же сценарий времени (_recovery_scenario) в промт и в шапку сообщения.
+    _is_past = _workout_is_past(workout_dict.get("workout_date", ""), workout_dict.get("schedule", "") or "")
+    workout_dict["is_past"] = _is_past
     recovery = None
     try:
-        recovery = await _get_unified_recovery(db_user_id, force_fresh=False)
+        recovery = await _get_unified_recovery(db_user_id, force_fresh=not _is_past)
     except Exception as e:
         logger.warning(f"/test_long recovery error for {db_user_id}: {e}")
+    scenario_ctx = _recovery_scenario(workout_dict, (recovery or {}).get("data_fetched_at"))
     # Нагрузка за 48 ч и последний старт — тем же порядком источников, что у боевого /long.
     fitness = None
     for getter in (get_garmin_fitness_data, get_coros_fitness_data, get_polar_fitness_data):
@@ -7441,15 +7455,7 @@ async def _run_long_ai(update: Update, context: ContextTypes.DEFAULT_TYPE, targe
     except Exception:
         activities = []
 
-    # Анонс из канала и погода — как у боевого лонга: нужны шапке сообщения и блоку [ПОГОДА].
-    live = None
-    try:
-        live = await find_next_long_run()
-    except Exception as e:
-        logger.warning(f"/test_long find_next_long_run error: {e}")
-    workout_dict = dict(live) if live else {"workout_date": analysis.get("workout_date", "")}
-    workout_dict["workout_type"] = "long"
-    workout_dict["even_pace_available"] = analysis.get("even_pace_available")
+    # Погода — как у боевого лонга: в шапку сообщения и в блок [ПОГОДА].
     weather_line = weather_prompt = ""
     try:
         _w = await get_weather_for_workout(
@@ -7462,7 +7468,8 @@ async def _run_long_ai(update: Update, context: ContextTypes.DEFAULT_TYPE, targe
 
     pkg = long_ai.build_long_ai_package(
         profile=profile, zinfo=zinfo, recovery=recovery, fitness=fitness, analysis=analysis,
-        activities=activities, age=_age(profile.get("birthdate")), weather_prompt=weather_prompt)
+        activities=activities, age=_age(profile.get("birthdate")), weather_prompt=weather_prompt,
+        scenario_text=scenario_ctx.get("prompt_text") or "")
     if not pkg.get("ok"):
         await msg.edit_text(f"⚠️ {pkg.get('msg')}")
         return
@@ -7507,7 +7514,8 @@ async def _run_long_ai(update: Update, context: ContextTypes.DEFAULT_TYPE, targe
     try:
         body = claude_advisor.format_long_run_message(
             advice, workout_dict, stats=stats, weather_line=weather_line, has_tracker=True)
-        await context.bot.send_message(chat_id, body, parse_mode="HTML")
+        _scen_hdr = scenario_ctx["user_text"] + "\n\n" if scenario_ctx.get("user_text") else ""
+        await context.bot.send_message(chat_id, _scen_hdr + body, parse_mode="HTML")
     except Exception as e:
         logger.error(f"/test_long format error: {e}", exc_info=True)
         await context.bot.send_message(
@@ -7516,6 +7524,9 @@ async def _run_long_ai(update: Update, context: ContextTypes.DEFAULT_TYPE, targe
     extras = long_ai.format_extras(advice)
     for ch in _report_text_chunks((extras + "\n\n" if extras else "") + "— тестовая ветка /test_long, пользователям не уходит"):
         await context.bot.send_message(chat_id, ch)
+    # Админу — блок «Данные для рекомендации» (снимок на утро, синхронизация, простой), как после интервальной.
+    await _send_admin_data_block(chat_id, db_user_id, recovery, context,
+                                 workout_date=workout_dict.get("workout_date"))
 
 
 async def report_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
