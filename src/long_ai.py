@@ -253,23 +253,25 @@ def build_long_ai_package(*, profile: dict | None, zinfo: dict | None, recovery:
 
     A("\n[ФОН]")
     rec = recovery or {}
+    # 07.10.2026 (Антон, выравнивание с интервалами): в промт идёт только Training Readiness с временем
+    # измерения — как в claude_advisor.build_ai_b_prompt_reco_champion. HRV, сон, батарея, процент
+    # восстановления модели не показываются (у интервалов они в промт не идут намеренно).
     tr = rec.get("training_readiness")
-    tr_score = tr.get("score") if isinstance(tr, dict) else tr
-    tr_level = tr.get("level") if isinstance(tr, dict) else None
-    bits = []
-    if tr_score is not None:
-        bits.append(f"готовность {tr_score}" + (f" ({tr_level})" if tr_level else ""))
-    if rec.get("recovery_score") is not None:
-        bits.append(f"восстановление {rec['recovery_score']}%")
-    if rec.get("hrv") is not None:
-        bits.append(f"HRV {rec['hrv']}")
-    if rec.get("sleep_hours") is not None:
-        bits.append(f"сон {round(float(rec['sleep_hours']), 1)} ч")
-    if rec.get("body_battery") is not None:
-        bits.append(f"body battery {rec['body_battery']}")
-    A("  Восстановление: " + (", ".join(bits) if bits else "нет данных"))
-    if rec.get("data_fetched_at") or rec.get("training_readiness_at"):
-        A(f"  данные на: {rec.get('training_readiness_at') or rec.get('data_fetched_at')}")
+    if isinstance(tr, dict) and tr.get("score") is not None:
+        tr_at_str = ""
+        tr_at_raw = rec.get("training_readiness_at")
+        if tr_at_raw:
+            try:
+                from datetime import timezone as _tz
+                _dt_obj = datetime.fromisoformat(str(tr_at_raw).replace("Z", "+00:00"))
+                if _dt_obj.tzinfo is None:
+                    _dt_obj = _dt_obj.replace(tzinfo=_tz.utc)
+                tr_at_str = f", измерен {(_dt_obj + timedelta(hours=3)).strftime('%H:%M %d.%m')}"
+            except Exception:
+                pass
+        A(f"  Восстановление: Training Readiness: {tr['score']}/100 ({tr.get('level', '?')}){tr_at_str}")
+    else:
+        A("  Восстановление: нет данных")
     l48 = (fitness or {}).get("load_48h") or {}
     if l48:
         A(f"  Нагрузка за 48 ч: {l48.get('sessions_48h', 0)} трен., {l48.get('km_48h', 0)} км"
