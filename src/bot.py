@@ -3837,10 +3837,12 @@ async def _send_admin_data_block(
         # время в зонах (fitness.get_recent_work). Сбор данных: в рекомендацию не входит.
         try:
             import fitness as _fitw
-            _w = _fitw.get_recent_work(db_user_id)
-            _wl = _fitw.recent_work_lines(_w)
-            _lines.append(f"\n<b>Работа за {_fitw.WORK_DAYS} дня</b>" + (f" ({_w['source']})" if _w else "") + ":\n"
-                          + ("\n".join(_wl) if _wl else ("нет пробежек в данных" if _w else "нет главного трекера / сырьё не живое")))
+            import html as _html
+            _tbl = _fitw.work_days_table(db_user_id, workout_date)
+            _when = _fitw.work_when_text(_tbl)
+            _lines.append(f"\n<b>Объём за {_fitw.WORK_TABLE_DAYS} дней</b>"
+                          + (f" ({_tbl['source']}, 0 = сегодня" + (f", {_when}" if _when else "") + ")" if _tbl else "") + ":\n"
+                          + "<pre>" + _html.escape(_fitw.work_table_text(_tbl)) + "</pre>")
         except Exception as _e3:
             logger.warning(f"admin block recent work: {_e3}")
         await context.bot.send_message(telegram_id, "\n".join(_lines), parse_mode="HTML")

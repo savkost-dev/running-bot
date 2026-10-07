@@ -174,11 +174,24 @@ def get_idle(db_user_id: int, workout_date: str | None) -> dict | None:
 #   strava    — окно strava_activities: suffer_score, dd_hr_zones (время в пульсовых зонах,
 #               только у подписчиков Strava)
 WORK_DAYS = 3
+# 07.10.2026 (Антон): не-беговая тренировка считается РАБОТОЙ (а не просто сбросом паузы) от этих
+# длительностей: плавание — от часа, велосипед и беговые лыжи — от двух часов («там это уже длительная»).
+WORK_MIN_S = {"плавание": 3600, "велосипед": 7200, "лыжи": 7200}
+
+
+def is_work_session(kind, dur_s) -> bool:
+    """Не-беговая тренировка тянет на работу: длительность ≥ WORK_MIN_S[вид]."""
+    try:
+        t = float(dur_s or 0)
+    except (TypeError, ValueError):
+        t = 0.0
+    return t >= WORK_MIN_S.get(kind, SESSION_MIN_S)
 
 
 def get_recent_work(db_user_id: int, days: int = WORK_DAYS) -> dict | None:
-    """Пробежки за последние days дней по главному трекеру.
-    {"source", "days", "items": [{date, km, dur_s, load, aerobic_te, anaerobic_te, focus, zones_s}]}
+    """Тренировки за последние days дней по главному трекеру — виды как у правила простоя
+    (07.10.2026, Антон: бег is_run; плавание от часа, велосипед и лыжи от двух часов — is_work_session).
+    {"source", "days", "items": [{date, kind, run, km, dur_s, load, aerobic_te, anaerobic_te, focus, zones_s}]}
     zones_s — [сек в зонах 1..5] или None. None — главного трекера нет или сырьё не живое."""
     from datetime import timedelta
     from database import primary_vo2max_tracker
@@ -195,14 +208,20 @@ def get_recent_work(db_user_id: int, days: int = WORK_DAYS) -> dict | None:
         if raw is None:
             return None
         for a in raw.get("activities_14d") or []:
-            if not isinstance(a, dict) or not _g.is_run_type((a.get("activityType") or {}).get("typeKey")):
+            if not isinstance(a, dict):
                 continue
+            tk = (a.get("activityType") or {}).get("typeKey")
+            kind = _g.aerobic_kind(tk)
             d = str(a.get("startTimeLocal") or a.get("startTimeGMT") or "")[:10]
-            if d < since:
+            if not kind or d < since:
+                continue
+            run = _g.is_run_type(tk)
+            dur = a.get("duration") or a.get("movingDuration")
+            if not (is_run(a.get("distance"), dur) if run else is_work_session(kind, dur)):
                 continue
             z = [a.get(f"hrTimeInZone_{i}") for i in range(1, 6)]
-            items.append({"date": d, "km": (a.get("distance") or 0) / 1000.0,
-                          "dur_s": a.get("duration") or a.get("movingDuration"),
+            items.append({"date": d, "kind": kind, "run": run, "km": (a.get("distance") or 0) / 1000.0,
+                          "dur_s": dur,
                           "load": a.get("activityTrainingLoad"),
                           "aerobic_te": a.get("aerobicTrainingEffect"), "anaerobic_te": a.get("anaerobicTrainingEffect"),
                           "focus": a.get("trainingEffectLabel"),
@@ -216,23 +235,29 @@ def get_recent_work(db_user_id: int, days: int = WORK_DAYS) -> dict | None:
             if not isinstance(det, dict) or (det.get("date") or "") < since:
                 continue
             p = _cm.parse_activity_detail(det.get("text"))
-            items.append({"date": det.get("date"), "km": (p.get("distance_m") or 0) / 1000.0,
+            st = det.get("sport_type")
+            items.append({"date": det.get("date"), "kind": det.get("kind") or _cm.AEROBIC_KINDS.get(st) or "бег",
+                          "run": st in _cm.RUN_SPORT_TYPES, "km": (p.get("distance_m") or 0) / 1000.0,
                           "dur_s": p.get("duration_s"), "load": p.get("load"),
                           "aerobic_te": p.get("aerobic_te"), "anaerobic_te": p.get("anaerobic_te"),
                           "focus": p.get("focus"), "zones_s": None})
     else:
         from database import get_strava_activities
+        from strava import _aerobic_kind_strava
         for a in get_strava_activities(db_user_id):
-            if (a.get("type") or a.get("sport_type")) not in ("Run", "TrailRun", "VirtualRun"):
-                continue
+            kind = _aerobic_kind_strava(a)
             d = str(a.get("start_date_local") or a.get("start_date") or "")[:10]
-            if d < since:
+            if not kind or d < since:
+                continue
+            run = kind == "бег"
+            if not (is_run(a.get("distance"), a.get("moving_time")) if run else is_work_session(kind, a.get("moving_time"))):
                 continue
             z = None
             for zi in a.get("dd_hr_zones") or []:
                 if isinstance(zi, dict) and zi.get("type") == "heartrate":
                     z = [b.get("time") for b in (zi.get("distribution_buckets") or [])]
-            items.append({"date": d, "km": (a.get("distance") or 0) / 1000.0, "dur_s": a.get("moving_time"),
+            items.append({"date": d, "kind": kind, "run": run, "km": (a.get("distance") or 0) / 1000.0,
+                          "dur_s": a.get("moving_time"),
                           "load": a.get("suffer_score"), "aerobic_te": None, "anaerobic_te": None,
                           "focus": None, "zones_s": z})
     items.sort(key=lambda x: x.get("date") or "", reverse=True)
@@ -244,6 +269,8 @@ def recent_work_lines(work: dict | None) -> list[str]:
     out = []
     for it in (work or {}).get("items") or []:
         parts = [f"{it['km']:.1f} км" + (f" {int(it['dur_s']) // 60} мин" if it.get("dur_s") else "")]
+        if it.get("kind") and it.get("kind") != "бег":
+            parts[0] = f"{it['kind']} " + parts[0]
         if it.get("load") is not None:
             parts.append(f"нагрузка {int(round(float(it['load'])))}")
         if it.get("aerobic_te") is not None or it.get("anaerobic_te") is not None:
@@ -255,6 +282,117 @@ def recent_work_lines(work: dict | None) -> list[str]:
             parts.append("зоны " + "/".join(str(int(round((v or 0) / 60))) for v in it["zones_s"]) + " мин")
         out.append(f"{it.get('date')}: " + " · ".join(parts))
     return out
+
+
+# 07.10.2026 (Антон): таблица объёма по дням относительно даты тренировки — для админа и для ИИ
+# («ИИ дальше сам разберётся»: формул и порогов нет). Строка — день: 0 = день тренировки, -1 = накануне…
+# км/мин/нагрузка/зоны — суммы за день; ТЭ — максимум аэробного и анаэробного; работа — ярлыки часов.
+WORK_TABLE_DAYS = 7
+_LABEL_RU = {  # Garmin trainingEffectLabel и COROS Training Focus → по-русски
+    "recovery": "восст.", "aerobic_base": "база", "base": "база", "tempo": "темповая",
+    "lactate_threshold": "порог", "threshold": "порог", "vo2max": "МПК", "anaerobic_capacity": "анаэробная",
+    "anaerobic": "анаэробная", "speed": "скорость", "sprint": "скорость", "unknown": "", "?": "", "none": "",
+}
+
+
+def label_ru(label) -> str:
+    if not label:
+        return ""
+    key = str(label).strip().lower()
+    return _LABEL_RU.get(key, key)
+
+
+def work_days_table(db_user_id: int, workout_date: str | None = None, days: int = WORK_TABLE_DAYS) -> dict | None:
+    """Дни от сегодня назад (07.10.2026, Антон: 0 = сегодня, -1 = вчера — рекомендация делается вечером
+    накануне, строка 0 от даты тренировки была бы всегда пустой). workout_date — дата тренировки,
+    в шапке «тренировка завтра / сегодня / через N дней» (work_when_text).
+    rows: [{rel, date, km, min, load, aer, ana, z45_min, n, labels[], kinds[]}]; пустые дни — n=0.
+    None — главного трекера нет / сырьё не живое."""
+    from datetime import timedelta
+    today = date.today()
+    work = get_recent_work(db_user_id, days=days)
+    if work is None:
+        return None
+    rows = {}
+    for rel in range(0, -days, -1):
+        d = (today + timedelta(days=rel)).isoformat()
+        rows[d] = {"rel": rel, "date": d, "km": 0.0, "min": 0, "load": None, "aer": None, "ana": None,
+                   "z45_min": None, "n": 0, "labels": [], "kinds": []}
+    for it in work.get("items") or []:
+        r = rows.get(it.get("date"))
+        if not r:
+            continue
+        r["n"] += 1
+        r["km"] += float(it.get("km") or 0)
+        r["min"] += int(float(it.get("dur_s") or 0) // 60)
+        if it.get("load") is not None:
+            r["load"] = (r["load"] or 0.0) + float(it["load"])
+        for k, v in (("aer", it.get("aerobic_te")), ("ana", it.get("anaerobic_te"))):
+            if v is not None:
+                r[k] = max(r[k], float(v)) if r[k] is not None else float(v)
+        z = it.get("zones_s") or []
+        if len(z) >= 5:
+            r["z45_min"] = (r["z45_min"] or 0) + int(round(((z[3] or 0) + (z[4] or 0)) / 60))
+        lab = label_ru(it.get("focus"))
+        if lab:
+            r["labels"].append(lab)
+        if it.get("kind") and it.get("kind") != "бег":
+            r["kinds"].append(it["kind"])
+    wrel = None
+    if workout_date:
+        try:
+            wrel = (date.fromisoformat(str(workout_date)[:10]) - today).days
+        except ValueError:
+            wrel = None
+    return {"source": work["source"], "today": today.isoformat(), "days": days,
+            "workout_date": str(workout_date)[:10] if workout_date else None, "workout_rel": wrel,
+            "rows": [rows[k] for k in sorted(rows, reverse=True)]}
+
+
+def work_when_text(tbl: dict | None) -> str:
+    """«тренировка завтра» / «тренировка сегодня» / «тренировка через N дней» / «тренировка была N дн. назад» / ''."""
+    wrel = (tbl or {}).get("workout_rel")
+    if wrel is None:
+        return ""
+    if wrel == 0:
+        return "тренировка сегодня"
+    if wrel == 1:
+        return "тренировка завтра"
+    if wrel > 1:
+        return f"тренировка через {wrel} {_days_word_ru(wrel)}"
+    return f"тренировка была {-wrel} {_days_word_ru(-wrel)} назад"
+
+
+def _days_word_ru(n: int) -> str:
+    n = abs(int(n))
+    if n % 10 == 1 and n % 100 != 11:
+        return "день"
+    if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14):
+        return "дня"
+    return "дней"
+
+
+def work_table_text(tbl: dict | None, zones: bool = True) -> str:
+    """Моноширинная таблица: день км мин нагр ТЭ [з4+5] работа. Пустой день — прочерки."""
+    if not tbl:
+        return "нет данных (нет главного трекера или сырьё не живое)"
+    hdr = f"{'день':>4} {'км':>5} {'мин':>4} {'нагр':>5} {'ТЭ':>7}" + (f" {'з4+5':>4}" if zones else "") + "  работа"
+    out = [hdr]
+    for r in tbl["rows"]:
+        if not r["n"]:
+            out.append(f"{r['rel']:>4} {'—':>5} {'—':>4} {'—':>5} {'—':>7}" + (f" {'—':>4}" if zones else "") + "  —")
+            continue
+        te = (f"{r['aer']:.1f}" if r["aer"] is not None else "—") + "/" + (f"{r['ana']:.1f}" if r["ana"] is not None else "—")
+        work = ", ".join(dict.fromkeys(r["labels"])) or "—"
+        if r["kinds"]:
+            work = ", ".join(dict.fromkeys(r["kinds"])) + (f"; {work}" if work != "—" else "")
+        if r["n"] > 1:
+            work += f" ({r['n']} трен.)"
+        load = f"{int(round(r['load']))}" if r["load"] is not None else "—"
+        z45 = f"{r['z45_min']}" if r["z45_min"] is not None else "—"
+        out.append(f"{r['rel']:>4} {r['km']:>5.1f} {r['min']:>4} {load:>5} {te:>7}"
+                   + (f" {z45:>4}" if zones else "") + f"  {work}")
+    return "\n".join(out)
 
 
 def idle_days(last_run_date: str | None, workout_date: str | None) -> int | None:

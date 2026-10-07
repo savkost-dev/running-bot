@@ -1351,7 +1351,7 @@ def build_ai_b_prompt_reco_champion(analysis: dict, user_data: dict, zones_map: 
         "ДАННЫЕ БЕГУНА:\n"
         "Зоны темпа:\n"
         f"{zones_text}\n"
-        + _idle_prompt_text(user_data) +
+        + _idle_prompt_text(user_data) + _work_prompt_text(user_data, analysis) +
         f"Специализация: {spec_label}\n"
         f"Восстановление: {rec_text}\n"
         # 03.09 ВРЕМЕННО отключена сводка по группам: минуты по зонам ломают интервалы с отдыхом (гр.4 optimal на 8×500).
@@ -1774,7 +1774,7 @@ def build_ai_b_prompt_reco_challenger(analysis: dict, user_data: dict, zones_map
         "ДАННЫЕ БЕГУНА:\n"
         "Зоны темпа:\n"
         f"{zones_text}\n"
-        + _idle_prompt_text(user_data) +
+        + _idle_prompt_text(user_data) + _work_prompt_text(user_data, analysis) +
         f"Специализация: {spec_label}\n"
         f"Восстановление: {rec_text}\n"
         # 03.09 ВРЕМЕННО отключена сводка по группам: минуты по зонам ломают интервалы с отдыхом (гр.4 optimal на 8×500).
@@ -2089,6 +2089,36 @@ def _idle_prompt_text(user_data: dict | None) -> str:
             f"В текстовых полях (reason, if_feeling_good, if_tired) НЕ называй числа зон и не пиши "
             f"«твой порог X:XX» — они временно сдвинуты и не совпадают с профилем бегуна; говори "
             f"«с поправкой на паузу». Совет про первый отрезок не пиши — он будет отдельной строкой.\n")
+
+
+def _work_prompt_text(user_data: dict | None, analysis: dict | None) -> str:
+    """07.10.2026 (Антон): объём за 7 дней по часам бегуна в «ДАННЫЕ БЕГУНА» — та же таблица, что в админском
+    блоке (fitness.work_days_table), 0 — сегодня, -1 — вчера, плюс как учитывать. Порогов и формул нет —
+    ИИ разбирается сам. Пусто — если главного трекера нет или в таблице ни одной тренировки."""
+    try:
+        import fitness as _fit
+        uid = (user_data or {}).get("db_user_id")
+        if not uid:
+            return ""
+        tbl = _fit.work_days_table(uid, (analysis or {}).get("workout_date"))
+        if not tbl or not any(r["n"] for r in tbl["rows"]):
+            return ""
+        when = _fit.work_when_text(tbl)
+        return (
+            f"Объём за {tbl['days']} дней по часам бегуна ({tbl['source']}). 0 — сегодня, -1 — вчера"
+            + (f"; {when}" if when else "") + ".\n"
+            "км, мин, нагрузка — сумма за день; ТЭ — максимум аэробного/анаэробного за день по шкале 0–5; "
+            "работа — ярлыки часов.\n"
+            + _fit.work_table_text(tbl) + "\n"
+            "Как учитывать: работа в два последних дня перед тренировкой (ярлыки порог, МПК, анаэробная, темповая; "
+            "длинный бег от 25 км; высокий ТЭ) — склоняйся к более спокойной из подходящих групп и назови причину "
+            "в reason. Лёгкие кроссы и дни «база», «восстановление» — обычный фон, не нагрузка. Где нагрузки и ТЭ "
+            "нет (Strava без подписки) — смотри км и минуты на фоне остальных дней. Пауза, если указана выше, уже "
+            "учтена в зонах — второй раз не сдвигай. Числа нагрузки и ТЭ между сервисами не сравнивай.\n"
+        )
+    except Exception as e:
+        logger.warning(f"work prompt text: {e}")
+        return ""
 
 
 def recommend_group(analysis_json: dict, user_data: dict) -> dict | None:

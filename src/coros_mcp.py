@@ -273,7 +273,7 @@ DETAIL_MAX_NEW = 5     # не больше стольких новых запр�
 
 
 async def _fetch_activity_details(session, token: str, records_text, prev_row) -> dict:
-    """Сводки getActivityDetail по пробежкам за DETAIL_DAYS дней: {labelId: {sport_type, date, text}}.
+    """Сводки getActivityDetail по тренировкам за DETAIL_DAYS дней: {labelId: {sport_type, date, kind, name, text}}.
     prev_row — прошлая запись raw_service_data (перенос уже полученных сводок без запроса)."""
     from datetime import date, timedelta
     import fitness as _fit
@@ -287,9 +287,13 @@ async def _fetch_activity_details(session, token: str, records_text, prev_row) -
     out, todo = {}, []
     for r in parse_sport_records(records_text):
         lid = r.get("label_id")
-        if not lid or r.get("sport_type") not in RUN_SPORT_TYPES or (r.get("date") or "") < since:
+        # 07.10.2026 (Антон): виды — как у правила простоя (бег, велосипед, плавание, беговые лыжи)
+        kind = AEROBIC_KINDS.get(r.get("sport_type"))
+        if not lid or not kind or (r.get("date") or "") < since:
             continue
-        if not _fit.is_run(r.get("distance_m"), r.get("duration_s")):
+        ok = (_fit.is_run(r.get("distance_m"), r.get("duration_s")) if r.get("sport_type") in RUN_SPORT_TYPES
+              else _fit.is_work_session(kind, r.get("duration_s")))
+        if not ok:
             continue
         if lid in prev and prev[lid].get("text"):
             out[lid] = prev[lid]
@@ -300,7 +304,7 @@ async def _fetch_activity_details(session, token: str, records_text, prev_row) -
                                 {"labelId": r["label_id"], "sportType": int(r["sport_type"])}, n)
         if text:
             out[r["label_id"]] = {"sport_type": r["sport_type"], "date": r.get("date"),
-                                  "name": r.get("name"), "text": text}
+                                  "kind": AEROBIC_KINDS.get(r["sport_type"]), "name": r.get("name"), "text": text}
     return out
 
 
