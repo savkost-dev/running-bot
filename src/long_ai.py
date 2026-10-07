@@ -279,7 +279,7 @@ def assign_types(ladder: list[dict], easy_s: int, mar_s: int, thr_s: int | None)
     пока следующий похож на вариант сильнее текущего (type_distances); назад не откатывается. Так у быстрого
     бегуна с узкой переходной зоной 1+ не перелетает с I на IV через непохожие II и III, и лесенка монотонна.
     «Слишком медленно» (вторая половина в «медленно») и «перебор» (любая половина) — как раньше, по зонам."""
-    cur = None
+    cur, used = None, set()
     for v in ladder:
         f, s = v["first_s"], v["second_s"]
         z1, z2 = half_zone(f, easy_s, mar_s, thr_s), half_zone(s, easy_s, mar_s, thr_s)
@@ -293,8 +293,14 @@ def assign_types(ladder: list[dict], easy_s: int, mar_s: int, thr_s: int | None)
         d = type_distances(f, s, easy_s, mar_s)
         if cur is None:
             cur = 0
+        # следующий тип берём, если он похож сильнее; или если он почти подходит (в допуске ZONE_BORDER_TOL —
+        # темп в жизни гуляет на ±7 с/км), а текущий тип уже достался предыдущему, более медленному варианту:
+        # так зона уже шага лесенки (30 с) не выпадает из типов. Второй шаг подряд — только по строгой похожести.
         while cur + 1 < len(_TYPE_SPANS) and d[cur + 1] < d[cur]:
             cur += 1
+        if cur + 1 < len(_TYPE_SPANS) and d[cur + 1] <= ZONE_BORDER_TOL and cur in used and d[cur + 1] >= d[cur]:
+            cur += 1   # шаг по допуску — один, дальше не идём
+        used.add(cur)
         v["type"], v["dist"] = _TYPE_SPANS[cur][0], d
 
 
