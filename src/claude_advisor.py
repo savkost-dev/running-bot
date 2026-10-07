@@ -3996,10 +3996,10 @@ def format_long_run_message(advice: dict, workout: dict, stats: dict | None = No
                 # иначе на узком экране хвост строки переносится. Вне типов — пусто.
                 _rn = _roman.get(str(item.get("type") or "").strip().lower(), "")
                 _gd = g_disp if g_disp != "Здоровье" else "зд"
-                # полоска текстовыми символами: у Telegram на Android предел ~100 значков-картинок на
-                # сообщение, 13 строк × 8 квадратиков его пробивали, и хвост шкалы рисовался другим шрифтом
-                _tbar = "█" * max(0, min(8, round(pct / 100 * 8))) + "░" * (8 - max(0, min(8, round(pct / 100 * 8))))
-                lines.append(f"<code>{_gd:<3} {_rn:<3} {_tbar}  {pct:>3}%</code>")
+                # полоска значками 🟩⬜ как в бою (Антон, 07.10): текстовые █░ на компьютере рисуются
+                # штриховкой. У Telegram на Android предел ~100 значков-картинок на сообщение — хвост
+                # длинной шкалы уходит на встроенный шрифт телефона; решено пока терпеть.
+                lines.append(f"<code>{_gd:<3} {_rn:<3} {bar} {pct:>3}%</code>")
                 continue
             lines.append(f"<code>Гр.{g_disp:<4} {bar} {pct:>3}%{comment_str}</code>")
         if _if_rec_l:
