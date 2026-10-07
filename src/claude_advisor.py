@@ -3996,6 +3996,8 @@ def format_long_run_message(advice: dict, workout: dict, stats: dict | None = No
                 # тест лонга через ИИ (Антон, 07.10): без эпитетов и без «Гр.», номер типа СЛЕВА от полоски —
                 # иначе на узком экране хвост строки переносится. Вне типов — пусто.
                 _rn = _roman.get(str(item.get("type") or "").strip().lower(), "")
+                if str(advice.get("health_group") or "") and str(item.get("group", "")).strip() == str(advice.get("health_group")):
+                    _rn = ""      # у группы здоровья типа нет, что бы ни написал ИИ
                 _gd = g_disp if g_disp != "Здоровье" else "зд"
                 # группа здоровья (номер приходит из анализа анонса через advice["health_group"]) —
                 # со звёздочкой, сноска под шкалой (Антон, 07.10)
