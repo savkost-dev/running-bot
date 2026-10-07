@@ -292,7 +292,7 @@ def _runs_from_strava(activities: list[dict]) -> list[dict]:
 def build_long_ai_package(*, profile: dict | None, zinfo: dict | None, recovery: dict | None,
                           fitness: dict | None, analysis: dict | None, activities: list[dict] | None,
                           age: int | None = None, today: str | None = None,
-                          weather_prompt: str = "", scenario_text: str = "") -> dict:
+                          weather_prompt: str = "", scenario_text: str = "", work_text: str = "") -> dict:
     """Пакет данных для PROMPT_LONG_AI текстом. Сырые данные собирает вызывающий (_run_long_ai).
     Возвращает {ok, text, ladder, msg}. В пакет идут только перечисленные поля профиля —
     словарь профиля целиком не печатать (в нём лежат учётные данные сервисов)."""
@@ -345,14 +345,14 @@ def build_long_ai_package(*, profile: dict | None, zinfo: dict | None, recovery:
         # сценарий времени (recovery._recovery_scenario), тот же текст, что у интервалов:
         # «данные синхронизированы …, до старта N ч, прогноз к старту» / «тренировка уже состоялась»
         A(f"  {scenario_text}")
-    l48 = (fitness or {}).get("load_48h") or {}
-    if l48:
-        A(f"  Нагрузка за 48 ч: {l48.get('sessions_48h', 0)} трен., {l48.get('km_48h', 0)} км"
-          + (f", ср. темп {l48['avg_pace']}" if l48.get("avg_pace") else "")
-          + (f"; последняя {l48['last_activity_hours_ago']} ч назад"
-             if l48.get("last_activity_hours_ago") is not None else ""))
+    # 07.10.2026 (Антон): вместо «нагрузка за 48 ч» (число трен., км, средний темп — восстановительный
+    # кросс выглядел как нагрузка) — таблица объёма за 7 дней по часам бегуна с ярлыками работы и абзацем
+    # «Как учитывать» под длительную (claude_advisor._work_prompt_text(kind="long")); собирает вызывающий.
+    if work_text:
+        for _ln in work_text.rstrip("\n").split("\n"):
+            A("  " + _ln)
     else:
-        A("  Нагрузка за 48 ч: нет данных")
+        A("  Нагрузка за 7 дней: нет данных")
     # Сводка нагрузки и TSB — как в прежнем ИИ-промте лонга (есть не у всех источников)
     load = (fitness or {}).get("training_load") or {}
     if load.get("summary"):

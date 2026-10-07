@@ -7475,10 +7475,12 @@ async def _long_ai_compute(db_user_id: int, mode: str, prompt_only: bool = False
     except Exception as e:
         logger.warning(f"/test_long weather error: {e}")
 
+    # Объём за 7 дней по часам бегуна с ярлыками работы — в [ФОН] вместо «нагрузки за 48 ч» (07.10.2026, Антон)
+    work_text = claude_advisor._work_prompt_text({"db_user_id": db_user_id}, analysis, kind="long")
     pkg = long_ai.build_long_ai_package(
         profile=profile, zinfo=zinfo, recovery=recovery, fitness=fitness, analysis=analysis,
         activities=activities, age=_age(profile.get("birthdate")), weather_prompt=weather_prompt,
-        scenario_text=scenario_ctx.get("prompt_text") or "")
+        scenario_text=scenario_ctx.get("prompt_text") or "", work_text=work_text)
     if not pkg.get("ok"):
         return {"ok": False, "msg": pkg.get("msg")}
 
