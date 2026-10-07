@@ -7664,7 +7664,7 @@ async def _run_long_ai_shadow(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     def _vkey(v):
         try:
-            return (-float(v.rstrip("+").replace(",", ".")), 0 if v.endswith("+") else 1)
+            return (-float(v.rstrip("+").replace(",", ".")), 1 if v.endswith("+") else 0)   # 6, 6+, 5, 5+ …
         except ValueError:
             return (99.0, 1)
     hist_v = "\n".join(f"{v:<4} {'█' * n} {n}" for v, n in sorted(by_variant.items(), key=lambda kv: _vkey(kv[0])))
