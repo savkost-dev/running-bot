@@ -5,6 +5,18 @@
 
 ---
 
+## [0.45.0] 2026-10-07 — Сбор данных о работе в зонах (уровень 2, только сбор)
+
+### Добавлено
+- **`strava.get_activity_detail`** — если в детали `available_zones` содержит `heartrate` (подписчик Strava), +1 запрос `GET /activities/{id}/zones`; ответ as is в деталь ключом `dd_hr_zones` → хранится в `strava_activities.detail_json` вместе с деталью. У неподписчиков список пуст — запрос не делается. Задним числом окно не догружается (массово за историей — только по команде Антона).
+- **`coros_mcp._fetch_activity_details`, `parse_activity_detail`, `fetch_raw`** — сводка `getActivityDetail` по пробежкам за `DETAIL_DAYS=3` дня (бег ≥3 км/≥20 мин), не больше `DETAIL_MAX_NEW=5` новых запросов за загрузку; хранится в сырье `raw_service_data` ключом `activity_details {labelId: {sport_type, date, name, text}}`, уже полученные переносятся из прошлого снимка. Разбор: distance_m, duration_s, load, aerobic_te, anaerobic_te, avg_hr, focus. Разведка 07.10: у COROS MCP 34 инструмента, времени в зонах нет нигде (есть только в веб-кабинете).
+- **`fitness.get_recent_work`, `recent_work_lines`, `WORK_DAYS=3`** — пробежки за 3 дня по главному трекеру (`primary_vo2max_tracker`: garmin → coros_mcp; иначе strava): дата, км, минуты, нагрузка, ТЭ, фокус, секунды по зонам 1..5 (Garmin из `hrTimeInZone_*`, Strava из `dd_hr_zones`). Только чтение базы.
+- **`bot`, админское «🔬 Данные для рекомендации»** — блок «Работа за 3 дня (источник)».
+
+### Не трогал
+- Формулы подходимости, правило простоя, промты, таблицы (новых нет).
+
+---
 ## [0.44.2] 2026-10-07 — /test_long: ровный вариант — полная доза
 
 ### Изменено

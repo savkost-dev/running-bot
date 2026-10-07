@@ -3833,6 +3833,16 @@ async def _send_admin_data_block(
                 _lines.append("\n<b>Последняя пробежка</b>: нет данных (фактор простоя выключен)")
         except Exception as _e2:
             logger.warning(f"admin block last run: {_e2}")
+        # 07.10.2026 (Антон): факт работы за последние дни по главному трекеру — нагрузка, эффекты,
+        # время в зонах (fitness.get_recent_work). Сбор данных: в рекомендацию не входит.
+        try:
+            import fitness as _fitw
+            _w = _fitw.get_recent_work(db_user_id)
+            _wl = _fitw.recent_work_lines(_w)
+            _lines.append(f"\n<b>Работа за {_fitw.WORK_DAYS} дня</b>" + (f" ({_w['source']})" if _w else "") + ":\n"
+                          + ("\n".join(_wl) if _wl else ("нет пробежек в данных" if _w else "нет главного трекера / сырьё не живое")))
+        except Exception as _e3:
+            logger.warning(f"admin block recent work: {_e3}")
         await context.bot.send_message(telegram_id, "\n".join(_lines), parse_mode="HTML")
     except Exception as _e:
         logger.warning(f"admin snapshot block: {_e}")

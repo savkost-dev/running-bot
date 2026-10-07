@@ -268,6 +268,57 @@ def attach_lap_starts(splits: dict, pts: list, lap_starts: list) -> None:
         t += float(lp.get("duration") or 0) * 1000.0
 
 
+DETAIL_DAYS = 3        # сводки тренировок — по пробежкам за последние N дней (массово за историей — только по команде Антона)
+DETAIL_MAX_NEW = 5     # не больше стольких новых запросов за одну загрузку
+
+
+async def _fetch_activity_details(session, token: str, records_text, prev_row) -> dict:
+    """Сводки getActivityDetail по пробежкам за DETAIL_DAYS дней: {labelId: {sport_type, date, text}}.
+    prev_row — прошлая запись raw_service_data (перенос уже полученных сводок без запроса)."""
+    from datetime import date, timedelta
+    import fitness as _fit
+    prev = {}
+    try:
+        if prev_row and prev_row.get("raw_json"):
+            prev = (json.loads(prev_row["raw_json"]).get("activity_details") or {})
+    except (TypeError, ValueError):
+        prev = {}
+    since = (date.today() - timedelta(days=DETAIL_DAYS)).isoformat()
+    out, todo = {}, []
+    for r in parse_sport_records(records_text):
+        lid = r.get("label_id")
+        if not lid or r.get("sport_type") not in RUN_SPORT_TYPES or (r.get("date") or "") < since:
+            continue
+        if not _fit.is_run(r.get("distance_m"), r.get("duration_s")):
+            continue
+        if lid in prev and prev[lid].get("text"):
+            out[lid] = prev[lid]
+        else:
+            todo.append(r)
+    for n, r in enumerate(todo[:DETAIL_MAX_NEW], start=50):
+        text = await _call_tool(session, token, "getActivityDetail",
+                                {"labelId": r["label_id"], "sportType": int(r["sport_type"])}, n)
+        if text:
+            out[r["label_id"]] = {"sport_type": r["sport_type"], "date": r.get("date"),
+                                  "name": r.get("name"), "text": text}
+    return out
+
+
+def parse_activity_detail(text) -> dict:
+    """Текст getActivityDetail → {distance_m, duration_s, load, aerobic_te, anaerobic_te, focus, avg_hr}."""
+    t = _decode(text) or ""
+    def num(label):
+        m = re.search(label + r":\s*([\d.]+)", t)
+        return float(m.group(1)) if m else None
+    m_d = re.search(r"Distance:\s*([\d.]+)\s*(km|m)\b", t)
+    m_t = re.search(r"Workout Time:\s*([\d:]+)", t)
+    m_f = re.search(r"Training Focus:\s*(.+)", t)
+    return {"distance_m": (float(m_d.group(1)) * (1000 if m_d.group(2) == "km" else 1)) if m_d else None,
+            "duration_s": _time_sec(m_t.group(1)) if m_t else None,
+            "load": num("Training Load"), "aerobic_te": num("Aerobic TE"), "anaerobic_te": num("Anaerobic TE"),
+            "avg_hr": num("Average Heart Rate"), "focus": m_f.group(1).strip() if m_f else None}
+
+
 async def fetch_raw(db_user_id: int) -> dict | None:
     """Слой 1: сырые ответы COROS MCP as is, БЕЗ парсинга.
 
@@ -286,12 +337,20 @@ async def fetch_raw(db_user_id: int) -> dict | None:
                 _call_tool(session, token, name, args, n)
                 for n, (name, args) in enumerate(TOOLS, start=2)
             ], return_exceptions=True)
+            for (name, _), value in zip(TOOLS, results):
+                raw[name] = None if isinstance(value, Exception) else value
+            # 07.10.2026 (Антон): сводка по каждой свежей пробежке — getActivityDetail
+            # (нагрузка, аэробный/анаэробный эффект, фокус). Времени в зонах MCP не отдаёт.
+            # Хранится в том же сырье ключом activity_details {labelId: {...}}; уже полученные
+            # переносятся из прошлого снимка — запрос только на новые. Сбор данных, в рекомендацию не входит.
+            try:
+                raw["activity_details"] = await _fetch_activity_details(
+                    session, token, raw.get("querySportRecords"), db.get_raw_service_data(db_user_id, SERVICE))
+            except Exception as e:
+                logger.warning(f"COROS MCP activity_details user_id={db_user_id}: {e}")
     except Exception as e:
         logger.error(f"COROS MCP fetch_raw error user_id={db_user_id}: {e}")
         return None
-
-    for (name, _), value in zip(TOOLS, results):
-        raw[name] = None if isinstance(value, Exception) else value
 
     # В ответе про HRV после сводки идёт ряд замеров каждые 10 минут за неделю —
     # это десятки килобайт, которые мы не используем. Обрезаем до сводки.

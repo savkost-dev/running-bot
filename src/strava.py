@@ -196,7 +196,22 @@ async def get_activity_detail(access_token: str, activity_id: int) -> dict | Non
                 return RATE_LIMITED
             if resp.status != 200:
                 return None
-            return await resp.json()
+            detail = await resp.json()
+        # 07.10.2026 (Антон): время в пульсовых зонах — готовая сводка Strava, +1 запрос
+        # GET /activities/{id}/zones, только если деталь говорит, что зоны доступны
+        # (available_zones; у неподписчиков список пуст — запрос не делаем). Ответ as is
+        # в деталь под своим ключом dd_hr_zones → хранится в окне strava_activities вместе с ней.
+        # Сбор данных: в рекомендацию не входит.
+        if isinstance(detail, dict) and "heartrate" in (detail.get("available_zones") or []):
+            try:
+                async with session.get(f"{STRAVA_API_BASE}/activities/{activity_id}/zones",
+                                       headers=headers) as zresp:
+                    _log_rate_limit(zresp, f"activities/{activity_id}/zones")
+                    if zresp.status == 200:
+                        detail["dd_hr_zones"] = await zresp.json()
+            except Exception as e:
+                print(f"Strava zones {activity_id}: {e}")
+        return detail
 
 
 # ── Окно тренировок (strava_activities, 90 дней) ─────────────────

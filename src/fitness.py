@@ -163,6 +163,100 @@ def get_idle(db_user_id: int, workout_date: str | None) -> dict | None:
             "until": str(workout_date)[:10] if workout_date else date.today().isoformat()}
 
 
+# ── ФАКТ РАБОТЫ ЗА ПОСЛЕДНИЕ ДНИ (07.10.2026, Антон) ──────────
+# Второй уровень поправок («тяжёлая работа накануне»), пока ТОЛЬКО СБОР И ПОКАЗ АДМИНУ:
+# в рекомендацию не входит. Один источник — главный трекер (как у VO2max), секунды не важны,
+# нужен факт работы в зонах. Читает только базу: сырьё ночной загрузки и окно Strava.
+#   garmin    — список activities_14d: activityTrainingLoad, aerobic/anaerobicTrainingEffect,
+#               trainingEffectLabel, hrTimeInZone_1..5 (сек) — всё уже в сырье
+#   coros_mcp — activity_details (getActivityDetail по свежим пробежкам): нагрузка, два эффекта, фокус;
+#               времени в зонах MCP не отдаёт (есть только в веб-кабинете)
+#   strava    — окно strava_activities: suffer_score, dd_hr_zones (время в пульсовых зонах,
+#               только у подписчиков Strava)
+WORK_DAYS = 3
+
+
+def get_recent_work(db_user_id: int, days: int = WORK_DAYS) -> dict | None:
+    """Пробежки за последние days дней по главному трекеру.
+    {"source", "days", "items": [{date, km, dur_s, load, aerobic_te, anaerobic_te, focus, zones_s}]}
+    zones_s — [сек в зонах 1..5] или None. None — главного трекера нет или сырьё не живое."""
+    from datetime import timedelta
+    from database import primary_vo2max_tracker
+    src = primary_vo2max_tracker(db_user_id)
+    if src not in ("garmin", "coros_mcp"):
+        src = "strava" if get_token(db_user_id, "strava") else None
+    if not src:
+        return None
+    since = (date.today() - timedelta(days=days)).isoformat()
+    items = []
+    if src == "garmin":
+        import garmin as _g
+        raw = _raw_of(db_user_id, "garmin")
+        if raw is None:
+            return None
+        for a in raw.get("activities_14d") or []:
+            if not isinstance(a, dict) or not _g.is_run_type((a.get("activityType") or {}).get("typeKey")):
+                continue
+            d = str(a.get("startTimeLocal") or a.get("startTimeGMT") or "")[:10]
+            if d < since:
+                continue
+            z = [a.get(f"hrTimeInZone_{i}") for i in range(1, 6)]
+            items.append({"date": d, "km": (a.get("distance") or 0) / 1000.0,
+                          "dur_s": a.get("duration") or a.get("movingDuration"),
+                          "load": a.get("activityTrainingLoad"),
+                          "aerobic_te": a.get("aerobicTrainingEffect"), "anaerobic_te": a.get("anaerobicTrainingEffect"),
+                          "focus": a.get("trainingEffectLabel"),
+                          "zones_s": z if any(v is not None for v in z) else None})
+    elif src == "coros_mcp":
+        import coros_mcp as _cm
+        raw = _raw_of(db_user_id, _cm.SERVICE)
+        if raw is None:
+            return None
+        for lid, det in (raw.get("activity_details") or {}).items():
+            if not isinstance(det, dict) or (det.get("date") or "") < since:
+                continue
+            p = _cm.parse_activity_detail(det.get("text"))
+            items.append({"date": det.get("date"), "km": (p.get("distance_m") or 0) / 1000.0,
+                          "dur_s": p.get("duration_s"), "load": p.get("load"),
+                          "aerobic_te": p.get("aerobic_te"), "anaerobic_te": p.get("anaerobic_te"),
+                          "focus": p.get("focus"), "zones_s": None})
+    else:
+        from database import get_strava_activities
+        for a in get_strava_activities(db_user_id):
+            if (a.get("type") or a.get("sport_type")) not in ("Run", "TrailRun", "VirtualRun"):
+                continue
+            d = str(a.get("start_date_local") or a.get("start_date") or "")[:10]
+            if d < since:
+                continue
+            z = None
+            for zi in a.get("dd_hr_zones") or []:
+                if isinstance(zi, dict) and zi.get("type") == "heartrate":
+                    z = [b.get("time") for b in (zi.get("distribution_buckets") or [])]
+            items.append({"date": d, "km": (a.get("distance") or 0) / 1000.0, "dur_s": a.get("moving_time"),
+                          "load": a.get("suffer_score"), "aerobic_te": None, "anaerobic_te": None,
+                          "focus": None, "zones_s": z})
+    items.sort(key=lambda x: x.get("date") or "", reverse=True)
+    return {"source": src, "days": days, "items": items}
+
+
+def recent_work_lines(work: dict | None) -> list[str]:
+    """Строки для админа: «2026-10-06: 9.4 км 43 мин · нагрузка 115 · ТЭ 4.1/2.7 · зоны 0/11/9/24/0 мин»."""
+    out = []
+    for it in (work or {}).get("items") or []:
+        parts = [f"{it['km']:.1f} км" + (f" {int(it['dur_s']) // 60} мин" if it.get("dur_s") else "")]
+        if it.get("load") is not None:
+            parts.append(f"нагрузка {int(round(float(it['load'])))}")
+        if it.get("aerobic_te") is not None or it.get("anaerobic_te") is not None:
+            _te = lambda v: f"{float(v):.1f}" if v is not None else "—"
+            parts.append(f"ТЭ {_te(it.get('aerobic_te'))}/{_te(it.get('anaerobic_te'))}")
+        if it.get("focus"):
+            parts.append(str(it["focus"]).lower())
+        if it.get("zones_s"):
+            parts.append("зоны " + "/".join(str(int(round((v or 0) / 60))) for v in it["zones_s"]) + " мин")
+        out.append(f"{it.get('date')}: " + " · ".join(parts))
+    return out
+
+
 def idle_days(last_run_date: str | None, workout_date: str | None) -> int | None:
     """Полные дни без бега между последней пробежкой и днём работы.
     Последняя в воскресенье, работа в пятницу → пн, вт, ср, чт = 4.
