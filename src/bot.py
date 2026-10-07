@@ -7614,6 +7614,7 @@ async def _run_long_ai_shadow(update: Update, context: ContextTypes.DEFAULT_TYPE
     chosen: dict[str, int] = {k: 0 for k in roman}
     errors: list[str] = []
     t_sum, done = 0.0, 0
+    _t_run0 = _time.time()
 
     async def _one(u: dict):
         nonlocal t_sum, done
@@ -7671,7 +7672,8 @@ async def _run_long_ai_shadow(update: Update, context: ContextTypes.DEFAULT_TYPE
     hist_t = "\n".join(f"{t:<4} {'█' * n} {n}" for t, n in sorted(by_type.items(), key=lambda kv: (list(roman.values()) + ['?']).index(kv[0])))
     table = "\n".join(f"{roman[t]:<4} {avail[t]:>3} {allowed[t]:>3} {chosen[t]:>3}" for t in roman)
     text = (f"Прогон лонга через ИИ · {analysis.get('workout_date')} · {mode} · «{LONG_AI_SHADOW_KIND}»\n"
-            f"готово {done} из {len(users)}, среднее {t_sum / max(done, 1):.0f} с\n\n"
+            f"готово {done} из {len(users)}, среднее {t_sum / max(done, 1):.0f} с на человека, "
+            f"весь прогон {(_time.time() - _t_run0) / 60:.0f} мин\n\n"
             f"<b>Основной выбор, вариант</b> (медленный → быстрый):\n<pre>{hist_v}</pre>\n"
             f"<b>Основной выбор, тип</b>:\n<pre>{hist_t}</pre>\n"
             f"<b>По типам</b>: в лесенке / разрешён сегодня / рекомендован\n<pre>{table}</pre>\n"
