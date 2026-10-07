@@ -350,7 +350,7 @@ def work_days_table(db_user_id: int, workout_date: str | None = None, days: int 
 
 
 def work_when_text(tbl: dict | None) -> str:
-    """«тренировка завтра» / «тренировка сегодня» / «тренировка через N дней» / «тренировка была N дн. назад» / ''."""
+    """«тренировка завтра» / «тренировка сегодня» / «тренировка через N дней» / прошла — «считаем как если бы сегодня» / ''."""
     wrel = (tbl or {}).get("workout_rel")
     if wrel is None:
         return ""
@@ -360,7 +360,8 @@ def work_when_text(tbl: dict | None) -> str:
         return "тренировка завтра"
     if wrel > 1:
         return f"тренировка через {wrel} {_days_word_ru(wrel)}"
-    return f"тренировка была {-wrel} {_days_word_ru(-wrel)} назад"
+    # 07.10.2026 (Антон): прошедшая тренировка считается как если бы она была сегодня (как у простоя)
+    return "тренировка уже прошла — считаем как если бы она была сегодня"
 
 
 def _days_word_ru(n: int) -> str:
