@@ -7506,6 +7506,11 @@ async def _run_long_ai(update: Update, context: ContextTypes.DEFAULT_TYPE, targe
     result = await asyncio.to_thread(claude_advisor.ask_groq, full_prompt, mode)
     advice = (result or {}).get("advice")
     stats = (result or {}).get("stats")
+    if advice:
+        # номер группы здоровья из анализа анонса — для звёздочки и сноски под шкалой
+        _hg = next((g.get("number") for g in (analysis.get("groups") or []) if g.get("health_group")), None)
+        if _hg is not None:
+            advice["health_group"] = str(_hg)
     if not advice:
         await msg.edit_text(header + ("\n⏱ ИИ не уложился во время." if (result or {}).get("timeout")
                                       else "\n⚠️ ИИ не ответил или вернул не JSON."))

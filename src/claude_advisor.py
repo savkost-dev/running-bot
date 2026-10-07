@@ -3970,6 +3970,7 @@ def format_long_run_message(advice: dict, workout: dict, stats: dict | None = No
         # с максимальным процентом. Только если ИИ отдал типы (types_today); у формульного /long их нет.
         _types_today = advice.get("types_today") if isinstance(advice.get("types_today"), list) else []
         _roman = {}
+        _health_note = False
         if _types_today:
             # 06.10.2026 (Антон): список типов с римскими номерами и разделителем; в шкале — номер типа
             # у каждой строки вместо эпитета, чтобы не ломать выравнивание.
@@ -3996,12 +3997,20 @@ def format_long_run_message(advice: dict, workout: dict, stats: dict | None = No
                 # иначе на узком экране хвост строки переносится. Вне типов — пусто.
                 _rn = _roman.get(str(item.get("type") or "").strip().lower(), "")
                 _gd = g_disp if g_disp != "Здоровье" else "зд"
+                # группа здоровья (номер приходит из анализа анонса через advice["health_group"]) —
+                # со звёздочкой, сноска под шкалой (Антон, 07.10)
+                if str(advice.get("health_group") or "") and str(item.get("group", "")).strip() == str(advice.get("health_group")):
+                    _gd = f"{g_disp}*"
+                    _health_note = True
                 # полоска значками 🟩⬜ как в бою (Антон, 07.10): текстовые █░ на компьютере рисуются
                 # штриховкой. У Telegram на Android предел ~100 значков-картинок на сообщение — хвост
                 # длинной шкалы уходит на встроенный шрифт телефона; решено пока терпеть.
                 lines.append(f"<code>{_gd:<3} {_rn:<3} {bar} {pct:>3}%</code>")
                 continue
             lines.append(f"<code>Гр.{g_disp:<4} {bar} {pct:>3}%{comment_str}</code>")
+        if _types_today and _health_note:
+            lines.append(f"<i>* {advice.get('health_group')} — группа здоровья, бег с ходьбой. Подходит всем и всегда: "
+                         "если сегодня не хочется задачи, а хочется просто побегать в компании.</i>")
         if _if_rec_l:
             lines.append("<i>🟨 — группа при нормальном восстановлении</i>")
         lines.append(sep)
