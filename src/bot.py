@@ -3756,6 +3756,11 @@ def _user_has_data(db_user_id: int) -> bool:
     return any(get_token(db_user_id, s) for s in ("strava", "garmin", "coros", "coros_mcp", "polar"))
 
 
+# 07.10.2026 (Антон): блок «🔬 Данные для рекомендации» выключен — приходил после каждой рекомендации.
+# Вернуть: ADMIN_DATA_BLOCK = True. Сам блок и вызовы не трогались.
+ADMIN_DATA_BLOCK = False
+
+
 async def _send_admin_data_block(
     telegram_id: int,
     db_user_id: int,
@@ -3767,7 +3772,7 @@ async def _send_admin_data_block(
     + последняя пробежка и дни простоя до даты тренировки (02.10.2026, шаг 1 простоя).
     Вызывается в конце каждой рекомендации (A и B). Только для админа.
     """
-    if telegram_id not in ADMIN_TELEGRAM_IDS:
+    if not ADMIN_DATA_BLOCK or telegram_id not in ADMIN_TELEGRAM_IDS:
         return
     # 15.09.2026 сообщение было отключено заглушкой return; 02.10.2026 (Антон) возвращено.
     try:
