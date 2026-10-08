@@ -3846,7 +3846,7 @@ async def _send_admin_data_block(
             _tbl = _fitw.work_days_table(db_user_id, workout_date)
             _when = _fitw.work_when_text(_tbl)
             _lines.append(f"\n<b>Объём за {_fitw.WORK_TABLE_DAYS} дней</b>"
-                          + (f" ({_tbl['source']}, 0 = сегодня" + (f", {_when}" if _when else "") + ")" if _tbl else "") + ":\n"
+                          + (f" ({_tbl['source']}" + (f"; {_when}" if _when else "") + ")" if _tbl else "") + ":\n"
                           + "<pre>" + _html.escape(_fitw.work_table_text(_tbl)) + "</pre>")
         except Exception as _e3:
             logger.warning(f"admin block recent work: {_e3}")

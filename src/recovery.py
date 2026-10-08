@@ -327,12 +327,18 @@ def _recovery_scenario(workout_dict: dict, data_fetched_at: str | None) -> dict:
             except Exception:
                 pass
         cache_note = f" Данные восстановления из кэша на {time_str}." if time_str else ""
+        # 08.10.2026 (Антон): в ретро бегун «бежит эту тренировку сегодня» — календарной датой с днём недели
+        # (общая для интервальной: time_context, прозы Шага 2 и лонга: [ФОН]); user_text не меняется.
+        from fitness import date_ru as _date_ru
+        today_str = _date_ru(datetime.now(MSK).date())
         return {
             "scenario": 3,
             "hours_until": None,
             "workout_time_str": None,
             "user_text": f"📅 Тренировка уже состоялась — рекомендация ознакомительная.{cache_note}",
-            "prompt_text": f"Тренировка уже состоялась — расчёт ретроспективный.{cache_note}",
+            "prompt_text": (f"Тренировка уже состоялась — расчёт ретроспективный: считай, что бегун бежит эту "
+                            f"тренировку сегодня, {today_str}, по сегодняшним данным; даты в таблице объёма и в истории — "
+                            f"календарные.{cache_note}"),
             "needs_forecast": False,
         }
 

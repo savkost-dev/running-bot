@@ -349,19 +349,32 @@ def work_days_table(db_user_id: int, workout_date: str | None = None, days: int 
             "rows": [rows[k] for k in sorted(rows, reverse=True)]}
 
 
+_WD_RU = ("пн", "вт", "ср", "чт", "пт", "сб", "вс")
+
+
+def date_ru(d) -> str:
+    """08.10.2026 (Антон): даты в промте и таблице — календарные, с днём недели: «чт 08.10».
+    День недели считается из даты. Принимает date или 'YYYY-MM-DD…'; иначе — строка как есть."""
+    try:
+        dd = d if isinstance(d, date) else date.fromisoformat(str(d)[:10])
+    except (TypeError, ValueError):
+        return str(d or "")
+    return f"{_WD_RU[dd.weekday()]} {dd.strftime('%d.%m')}"
+
+
 def work_when_text(tbl: dict | None) -> str:
-    """«тренировка завтра» / «тренировка сегодня» / «тренировка через N дней» / прошла — «считаем как если бы сегодня» / ''."""
-    wrel = (tbl or {}).get("workout_rel")
-    if wrel is None:
+    """Шапка: «сегодня чт 08.10, тренировка пт 09.10»; прошла — «тренировка была вс 04.10 — считай,
+    что бегун бежит её сегодня, чт 08.10» (как у простоя: прошедшая считается до сегодня). Без «завтра/вчера»."""
+    if not tbl:
         return ""
-    if wrel == 0:
-        return "тренировка сегодня"
-    if wrel == 1:
-        return "тренировка завтра"
-    if wrel > 1:
-        return f"тренировка через {wrel} {_days_word_ru(wrel)}"
-    # 07.10.2026 (Антон): прошедшая тренировка считается как если бы она была сегодня (как у простоя)
-    return "тренировка уже прошла — считаем как если бы она была сегодня"
+    today = date_ru(tbl.get("today"))
+    wrel = tbl.get("workout_rel")
+    if wrel is None or not tbl.get("workout_date"):
+        return f"сегодня {today}"
+    wd = date_ru(tbl["workout_date"])
+    if wrel < 0:
+        return f"тренировка была {wd} — считай, что бегун бежит её сегодня, {today}"
+    return f"сегодня {today}, тренировка {wd}"
 
 
 def _days_word_ru(n: int) -> str:
@@ -374,14 +387,14 @@ def _days_word_ru(n: int) -> str:
 
 
 def work_table_text(tbl: dict | None, zones: bool = True) -> str:
-    """Моноширинная таблица: день км мин нагр ТЭ [з4+5] работа. Пустой день — прочерки."""
+    """Моноширинная таблица: дата км мин нагр ТЭ [з4+5] работа. Пустой день — прочерки. Даты — date_ru."""
     if not tbl:
         return "нет данных (нет главного трекера или сырьё не живое)"
-    hdr = f"{'день':>4} {'км':>5} {'мин':>4} {'нагр':>5} {'ТЭ':>7}" + (f" {'з4+5':>4}" if zones else "") + "  работа"
+    hdr = f"{'дата':<8} {'км':>5} {'мин':>4} {'нагр':>5} {'ТЭ':>7}" + (f" {'з4+5':>4}" if zones else "") + "  работа"
     out = [hdr]
     for r in tbl["rows"]:
         if not r["n"]:
-            out.append(f"{r['rel']:>4} {'—':>5} {'—':>4} {'—':>5} {'—':>7}" + (f" {'—':>4}" if zones else "") + "  —")
+            out.append(f"{date_ru(r['date']):<8} {'—':>5} {'—':>4} {'—':>5} {'—':>7}" + (f" {'—':>4}" if zones else "") + "  —")
             continue
         te = (f"{r['aer']:.1f}" if r["aer"] is not None else "—") + "/" + (f"{r['ana']:.1f}" if r["ana"] is not None else "—")
         work = ", ".join(dict.fromkeys(r["labels"])) or "—"
@@ -391,7 +404,7 @@ def work_table_text(tbl: dict | None, zones: bool = True) -> str:
             work += f" ({r['n']} трен.)"
         load = f"{int(round(r['load']))}" if r["load"] is not None else "—"
         z45 = f"{r['z45_min']}" if r["z45_min"] is not None else "—"
-        out.append(f"{r['rel']:>4} {r['km']:>5.1f} {r['min']:>4} {load:>5} {te:>7}"
+        out.append(f"{date_ru(r['date']):<8} {r['km']:>5.1f} {r['min']:>4} {load:>5} {te:>7}"
                    + (f" {z45:>4}" if zones else "") + f"  {work}")
     return "\n".join(out)
 
