@@ -2137,7 +2137,7 @@ def _work_prompt_text(user_data: dict | None, analysis: dict | None, kind: str =
             f"Объём за {tbl['days']} дней по часам бегуна ({tbl['source']}). 0 — сегодня, -1 — вчера"
             + (f"; {when}" if when else "") + ".\n"
             "км, мин, нагрузка — сумма за день; ТЭ — максимум аэробного/анаэробного за день по шкале 0–5; "
-            "работа — ярлыки часов.\n"
+            "работа — ярлыки часов; прочерк — в этот день тренировок не было.\n"
             + _fit.work_table_text(tbl) + "\n"
             + (_WORK_HOWTO_LONG if kind == "long" else _WORK_HOWTO_INTERVAL)
         )
