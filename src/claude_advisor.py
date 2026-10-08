@@ -4032,8 +4032,8 @@ def format_long_run_message(advice: dict, workout: dict, stats: dict | None = No
             from long_ai import LONG_TYPE_NOTES, LONG_TYPE_ROMAN
             _roman = {k.lower(): v for k, v in LONG_TYPE_ROMAN.items()}
             lines.append("Под формат лонга подходят пять типов:")
-            for _tname in LONG_TYPE_NOTES:
-                lines.append(f"• {LONG_TYPE_ROMAN[_tname]} — {_tname}")
+            for _tname, _legend in LONG_TYPE_NOTES.items():   # 08.10.2026 (Антон): смысл и цена типа одной фразой
+                lines.append(f"• {LONG_TYPE_ROMAN[_tname]} — {_tname}: {_legend}")
             lines += ["Выбор идёт среди них.", sep]
         lines.append("📊 <b>Подходимость групп:</b>")
         for item in sorted_s:
@@ -4142,8 +4142,9 @@ def format_long_run_message(advice: dict, workout: dict, stats: dict | None = No
                 _verdict = "✅ <b>Сегодня подходит.</b>"
             else:
                 _verdict = "❌ <b>Сегодня не подходит.</b>"
-            lines.append(f"• <b>{LONG_TYPE_ROMAN[_tname]}. {_tname}</b> — {_note}"
-                         + (f"\n   {_verdict}" if _verdict else "")
+            # 08.10.2026 (Антон): пояснение типа переехало в легенду шапки — здесь только вердикт и фраза ИИ
+            lines.append(f"• <b>{LONG_TYPE_ROMAN[_tname]}. {_tname}</b>"
+                         + (f" — {_verdict}" if _verdict else "")
                          + (f" <i>{_html.escape(_why)}</i>" if _why else ""))
 
     tips = [_html.escape(t) for t in (advice.get("preparation_tips") or [])]
