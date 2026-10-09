@@ -4010,6 +4010,60 @@ async def _send_ai_variant_b(
         logger.error(f"_send_ai_variant_b error: {e}")
 
 
+async def _send_recommendation_tail(telegram_id: int, db_user_id: int, context: ContextTypes.DEFAULT_TYPE, *,
+                                    long: bool, advice: dict, workout_dict: dict, scenario_ctx: dict, body: str,
+                                    banner: str = "", rec_mode: str = "", analysis_mode: str = "",
+                                    recovery: dict | None = None, is_broadcast: bool = False,
+                                    run_kind: str = "manual", out=None) -> None:
+    """Хвост рекомендации после собранного сообщения — один для формульной ветки (/long, /workout, рассылка)
+    и для ветки лонга через ИИ (/test_long на своих данных; 09.10.2026, Антон, шаг 1 к боевому лонгу через ИИ):
+    кнопки оценки и обратной связи по темпу, запись в историю при рассылке, отправка, окно «Загрузить лонг в Garmin».
+    out — как отправлять основное сообщение (у /long это редактирование «⏳»), иначе новое сообщение."""
+    _rating_data[telegram_id] = {
+        "workout_date": workout_dict.get("workout_date", ""),
+        "ai_mode": analysis_mode,
+        "rec_group": advice.get("recommended_group"),
+    }
+    rating_markup = InlineKeyboardMarkup([
+        _pace_feedback_row(),
+        [InlineKeyboardButton("⭐ Оценить рекомендацию", callback_data="rate_show")]
+        + ([] if long else
+           [InlineKeyboardButton("📖 Как получить разбор", callback_data="howto_garmin")]),
+    ])
+    final_markup = _merge_keyboards(rating_markup, get_main_keyboard(from_recommendation=True))
+    # Сохранять для утренней — только при плановой рассылке (is_broadcast=True)
+    if is_broadcast:
+        try:
+            _eve_rec = claude_advisor._recovery_value(recovery)
+            _eve_rs = int(_eve_rec) if _eve_rec is not None else None
+            save_last_recommendation(
+                db_user_id, advice, workout_dict, ai_mode=rec_mode,
+                evening_recovery_score=_eve_rs,
+                lowered_by_recovery=False,
+                run_kind=run_kind,
+            )
+        except Exception as _e:
+            logger.error(f"save_last_recommendation (A): {_e}")
+    scenario_header = scenario_ctx["user_text"] + "\n\n" if scenario_ctx.get("user_text") else ""
+    text = scenario_header + banner + body
+    if out is not None:
+        await out(text, final_markup, parse_mode="HTML")
+    else:
+        await context.bot.send_message(telegram_id, text, reply_markup=final_markup, parse_mode="HTML",
+                                       disable_web_page_preview=bool(long))
+    # 13.09.2026: лонг — отдельное окно «Загрузить в Garmin» (эталоны DDLong-N / N+), только с подключённым Garmin
+    if long and get_token(db_user_id, "garmin"):
+        _lfd = _long_fit_data(workout_dict, advice)
+        if _lfd:
+            _fit_data[telegram_id] = _lfd
+            await context.bot.send_message(
+                telegram_id,
+                "🏃 Загрузить лонг в Garmin — выбери группу:",
+                reply_markup=_garmin_upload_markup(_lfd),
+            )
+
+
+
 async def _send_recommendation(
     telegram_id: int, name: str,
     context: ContextTypes.DEFAULT_TYPE,
@@ -4168,18 +4222,6 @@ async def _send_recommendation(
         await _out(banner + note)
         return
 
-    _rating_data[telegram_id] = {
-        "workout_date": analysis.get("workout_date", ""),
-        "ai_mode": row.get("analysis_mode", ""),
-        "rec_group": (rec or {}).get("recommended_group"),
-    }
-    rating_markup = InlineKeyboardMarkup([
-        _pace_feedback_row(),
-        [InlineKeyboardButton("⭐ Оценить рекомендацию", callback_data="rate_show")]
-        + ([] if long else
-           [InlineKeyboardButton("📖 Как получить разбор", callback_data="howto_garmin")]),
-    ])
-    final_markup = _merge_keyboards(rating_markup, get_main_keyboard(from_recommendation=True))
 
     # Шапка/погода из live (для current/past совпадает с кэшем)
     workout_dict = dict(live) if live else {"workout_date": analysis.get("workout_date", "")}
@@ -4272,34 +4314,15 @@ async def _send_recommendation(
             advice | {"athlete_line": _athlete_line(db_user_id)}, workout_dict,
             stats=stats2, weather_line=weather_line, has_tracker=has_tracker)
 
-    # Сохранять для утренней — только при плановой рассылке (is_broadcast=True)
-    if is_broadcast:
-        try:
-            _eve_rec = claude_advisor._recovery_value(user_data.get("recovery"))
-            _eve_rs = int(_eve_rec) if _eve_rec is not None else None
-            save_last_recommendation(
-                db_user_id, advice, workout_dict, ai_mode=rec_mode,
-                evening_recovery_score=_eve_rs,
-                lowered_by_recovery=False,
-                run_kind="mailing" if is_broadcast else "manual",
-            )
-        except Exception as _e:
-            logger.error(f"save_last_recommendation (A): {_e}")
     # Админу — снимок на утро (из базы) + текущие данные (на лету), отдельным сообщением
     await _send_admin_data_block(telegram_id, db_user_id, user_data.get("recovery"), context,
                                  workout_date=((user_data.get("idle") or {}).get("until") or _wd))
-    scenario_header = scenario_ctx["user_text"] + "\n\n" if scenario_ctx.get("user_text") else ""
-    await _out(scenario_header + banner + body, final_markup, parse_mode="HTML")
-    # 13.09.2026: лонг — отдельное окно «Загрузить в Garmin» (эталоны DDLong-N / N+), только с подключённым Garmin
-    if long and get_token(db_user_id, "garmin"):
-        _lfd = _long_fit_data(workout_dict, advice)
-        if _lfd:
-            _fit_data[telegram_id] = _lfd
-            await context.bot.send_message(
-                telegram_id,
-                "🏃 Загрузить лонг в Garmin — выбери группу:",
-                reply_markup=_garmin_upload_markup(_lfd),
-            )
+    # Хвост общий с веткой лонга через ИИ (/test_long): оценка, запись в историю при рассылке, отправка, окно FIT
+    await _send_recommendation_tail(
+        telegram_id, db_user_id, context, long=long, advice=advice, workout_dict=workout_dict,
+        scenario_ctx=scenario_ctx, body=body, banner=banner, rec_mode=rec_mode,
+        analysis_mode=row.get("analysis_mode", ""), recovery=user_data.get("recovery"),
+        is_broadcast=is_broadcast, run_kind="mailing" if is_broadcast else "manual", out=_out)
 
 
 
@@ -7571,8 +7594,15 @@ async def _run_long_ai(update: Update, context: ContextTypes.DEFAULT_TYPE, targe
     try:
         body = claude_advisor.format_long_run_message(
             advice, workout_dict, stats=stats, weather_line=res["weather_line"], has_tracker=True)
-        _scen_hdr = scenario_ctx["user_text"] + "\n\n" if scenario_ctx.get("user_text") else ""
-        await context.bot.send_message(chat_id, _scen_hdr + body, parse_mode="HTML")
+        if db_user_id == admin_db_id:
+            # 09.10.2026 (Антон, шаг 1 к боевому лонгу через ИИ): на своих данных — боевой хвост, тот же,
+            # что у /long: кнопки оценки и окно «Загрузить лонг в Garmin»; в историю не пишем (не рассылка)
+            await _send_recommendation_tail(
+                chat_id, db_user_id, context, long=True, advice=advice, workout_dict=workout_dict,
+                scenario_ctx=scenario_ctx, body=body, rec_mode=mode, recovery=res.get("recovery"))
+        else:
+            _scen_hdr = scenario_ctx["user_text"] + "\n\n" if scenario_ctx.get("user_text") else ""
+            await context.bot.send_message(chat_id, _scen_hdr + body, parse_mode="HTML")
     except Exception as e:
         logger.error(f"/test_long format error: {e}", exc_info=True)
         await context.bot.send_message(
