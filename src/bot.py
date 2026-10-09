@@ -168,7 +168,7 @@ def _build_screen1_keyboard() -> InlineKeyboardMarkup:
         # 17.08.2026 (Антон): Разбор на место Утра, Утро на место Профиля,
         # Профиль в третью строку вместе с новой кнопкой Уведомлений.
         [InlineKeyboardButton("📊 Разбор тренировки", callback_data="get_report"),
-         InlineKeyboardButton("☀️ Утро",       callback_data="get_morning")],
+         InlineKeyboardButton("📈 Разбор лонга", callback_data="get_report_long")],   # 09.10.2026 (Антон): вместо «Утро», Утро — в профиле
         [InlineKeyboardButton("👤 Профиль",   callback_data="my_profile"),
          InlineKeyboardButton("🔔 Уведомления", callback_data="notifications")],
         [InlineKeyboardButton("💬 Обратная связь", callback_data="feedback_show"),
@@ -1074,6 +1074,7 @@ def _build_profile_keyboard(profile: dict | None = None) -> InlineKeyboardMarkup
         [InlineKeyboardButton("📊 Указать VO2max",   callback_data="profile_set_vo2max"),
          InlineKeyboardButton("🏃 Лактатный порог", callback_data="profile_set_lactate")],
         [InlineKeyboardButton("🏁 Пороги из результатов забега", callback_data="profile_set_race")],
+        [InlineKeyboardButton("☀️ Утро — проверить восстановление", callback_data="get_morning")],   # 09.10.2026: из главного меню
     ]
     lock_row = []
     if p.get("vo2max") is not None:
@@ -6607,6 +6608,7 @@ _BTN_TO_CMD = {
     "get_long_run": "/long",
     "get_morning":  "/morning",
     "get_report":   "/report",
+    "get_report_long": "/report_long",
 }
 
 
@@ -7316,9 +7318,7 @@ async def cmd_report_long(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await context.bot.send_message(
             chat_id, "Для разбора тренировки нужен подключённый Garmin, COROS без пароля или Strava.")
         return
-    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
-        await update.message.reply_text("Нет доступа.")
-        return
+    # 09.10.2026 (Антон): разбор лонга открыт всем (раньше только админ) — кнопка «Разбор лонга» в главном меню
     args = list(context.args or [])
     raw_mode = bool(args) and args[0].lower() in ("data", "raw", "данные")
     if raw_mode:
@@ -7808,6 +7808,14 @@ async def report_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await cmd_report(update, context)
 
 
+async def report_long_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Кнопка меню «Разбор лонга» → тот же разбор, что /report_long (без аргументов). 09.10.2026 (Антон)."""
+    query = update.callback_query
+    await query.answer()
+    context.args = []
+    await cmd_report_long(update, context)
+
+
 def _rcfg_panel(uid: int, act_id: str, cut: int, skip: int, simple: int, cache: dict | None):
     """02.10.2026: текст и клавиатура панели «⚙️ Настроить разбор».
     Каждая кнопка несёт ПОЛНОЕ новое состояние — панель не зависит от памяти бота;
@@ -8001,6 +8009,7 @@ def main():
     app.add_handler(CallbackQueryHandler(pa_user_callback,  pattern=r"^pa_user_\d+$"))
     app.add_handler(CallbackQueryHandler(panalyze_callback, pattern=r"^panalyze_(interval|long)$"))
     app.add_handler(CallbackQueryHandler(report_callback,   pattern=r"^get_report$"))
+    app.add_handler(CallbackQueryHandler(report_long_callback, pattern=r"^get_report_long$"))
     app.add_handler(CallbackQueryHandler(report_cut_callback, pattern=r"^report_cut:"))
     app.add_handler(CallbackQueryHandler(report_cfg_callback, pattern=r"^rcfg:"))
     app.add_handler(CallbackQueryHandler(button_handler))

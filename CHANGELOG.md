@@ -5,6 +5,12 @@
 
 ---
 
+## [0.47.4] 2026-10-09 — Меню: «Разбор лонга» вместо «Утро», разбор лонга открыт всем
+
+### Изменено
+- **`bot._build_screen1_keyboard`** — кнопка «📈 Разбор лонга» (`get_report_long`) на месте «☀️ Утро»; **`_build_profile_keyboard`** — строка «☀️ Утро — проверить восстановление» (`get_morning`). **`cmd_report_long`** — снята проверка `ADMIN_TELEGRAM_IDS`. Новый **`report_long_callback`** (`^get_report_long$`) → `cmd_report_long` с пустыми `context.args`; `_BTN_TO_CMD["get_report_long"] = "/report_long"`.
+
+---
 ## [0.47.3] 2026-10-09 — Лонг через ИИ в бою: LONG_ENGINE
 
 ### Изменено
