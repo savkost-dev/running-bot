@@ -1193,7 +1193,11 @@ BG_EXTS = (".webp", ".png", ".jpg", ".jpeg")
 # Подложка под зоны карточки: тёмная, полупрозрачная. Прозрачность по зонам:
 # шапка и итоги — фон виднее, таблица — плотнее (мелкие цифры поверх луж не читаются).
 CARD_PLATE_RGB = (0.07, 0.07, 0.09)
-CARD_PLATE_ALPHA = {"header": 0.60, "table": 0.76, "footer": 0.52, "chart": 0.70}
+CARD_PLATE_ALPHA = {"header": 0.60, "table": 0.55, "footer": 0.52, "chart": 0.70}
+# Строки таблицы при фоне (RGBA): обычная строка, шапка, строка «ср.» — полупрозрачные,
+# чтобы картинка читалась сквозь таблицу (Антон, 09.10.2026).
+CARD_ROW_RGBA = {"row": (0.16, 0.16, 0.18, 0.45), "hdr": (0.22, 0.22, 0.24, 0.80),
+                 "avg": (0.13, 0.13, 0.15, 0.70)}
 # Фон сам по себе тёмный (средняя яркость ~8%), чуть поднимаем, чтобы сцена читалась.
 CARD_BG_BRIGHTNESS = 1.25
 
@@ -1301,7 +1305,7 @@ def _apply_card_background(fig, bg_path: str, zone_axes, pad: float = 0.012) -> 
 
         renderer = None
         inv = fig.transFigure.inverted()
-        for zone in zone_axes:
+        for zi, zone in enumerate(zone_axes):
             axes = zone.get("axes") or []
             alpha = float(zone.get("alpha", CARD_PLATE_ALPHA["table"]))
             if zone.get("tight"):
@@ -1319,12 +1323,17 @@ def _apply_card_background(fig, bg_path: str, zone_axes, pad: float = 0.012) -> 
                 boxes = [a.get_position() for a in axes if a is not None]
             if not boxes:
                 continue
-            x0 = min(b.x0 for b in boxes) - pad
-            x1 = max(b.x1 for b in boxes) + pad
+            # 09.10.2026 (Антон): без открытых краёв — плашки на всю ширину, первая до верха,
+            # последняя до низа; картинка видна только в зазорах между зонами и сквозь строки.
+            x0, x1 = -0.02, 1.02
             y0 = min(b.y0 for b in boxes) - pad
             y1 = max(b.y1 for b in boxes) + pad
+            if zi == 0:
+                y1 = 1.02
+            if zi == len(zone_axes) - 1:
+                y0 = -0.02
             fig.patches.append(FancyBboxPatch(
-                (x0, y0), x1 - x0, y1 - y0, boxstyle="round,pad=0.004,rounding_size=0.012",
+                (x0, y0), x1 - x0, y1 - y0, boxstyle="square,pad=0",
                 facecolor=(*CARD_PLATE_RGB, alpha), edgecolor="none", transform=fig.transFigure,
                 zorder=-1, figure=fig))
         return True
@@ -1928,6 +1937,13 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
         # Зона 2: секции-таблицы по блокам (bbox на всю под-зону)
         zebra = "#2a2a2a" if dark else "#f2f2f2"
         hdr_bg = "#333333" if not dark else "#3a3a3a"
+        avg_bg = th["box_face"]
+        if bg_path:
+            # 09.10.2026 (Антон): с фоном строки полупрозрачные, чтобы картинка была видна сквозь
+            # таблицу; заливки отклонений (цветные) остаются плотными — это сигнал.
+            zebra, hdr_bg, avg_bg = CARD_ROW_RGBA["row"], CARD_ROW_RGBA["hdr"], CARD_ROW_RGBA["avg"]
+        row_text = "#ffffff" if bg_path else th["text"]   # цифры при фоне — чисто белые
+        sub_no = "#bbbbbb" if bg_path else "#777777"      # номер куска (1·2) при фоне светлее
         table_axes = []
         for si, sec in enumerate(sections):
             ax_t = fig.add_subplot(sub[si]); ax_t.axis("off")
@@ -1949,16 +1965,16 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
                         cell.get_text().set_rotation(90)
                         cell.get_text().set_fontsize(9)
                 elif r == sec["avg_r"]:
-                    cell.set_facecolor(th["box_face"])
-                    cell.set_text_props(fontweight="bold", color=th["text"])
+                    cell.set_facecolor(avg_bg)
+                    cell.set_text_props(fontweight="bold", color=row_text)
                 elif r in sec["main_rows"]:
                     # Строка повтора: жирный шрифт на серой подложке.
                     cell.set_facecolor(zebra)
-                    cell.set_text_props(fontweight="bold", color=th["text"])
+                    cell.set_text_props(fontweight="bold", color=row_text)
                 else:
                     # Строка-кусок (400 м): мельче, на белом, номер серым.
                     cell.set_facecolor("none")
-                    cell.set_text_props(color="#777777" if c == 0 else th["text"], fontsize=9)
+                    cell.set_text_props(color=sub_no if c == 0 else row_text, fontsize=9)
             for (r, c), fill in sec["fill"].items():
                 tbl[r, c].set_facecolor(fill)
                 tbl[r, c].set_text_props(color="white", fontweight="bold")

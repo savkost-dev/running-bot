@@ -6,6 +6,7 @@
 from ai_package import (
     PROMPT,
     CARD_PLATE_ALPHA,
+    CARD_ROW_RGBA,
     _apply_card_background,
     card_theme_for,
     _age,
@@ -1082,6 +1083,13 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
         # Зона 2: секции-таблицы по блокам (bbox на всю под-зону)
         zebra = "#2a2a2a" if dark else "#f2f2f2"
         hdr_bg = "#333333" if not dark else "#3a3a3a"
+        avg_bg = th["box_face"]
+        if bg_path:
+            # 09.10.2026 (Антон): с фоном строки полупрозрачные, чтобы картинка была видна сквозь
+            # таблицу; заливки отклонений (цветные) остаются плотными — это сигнал.
+            zebra, hdr_bg, avg_bg = CARD_ROW_RGBA["row"], CARD_ROW_RGBA["hdr"], CARD_ROW_RGBA["avg"]
+        row_text = "#ffffff" if bg_path else th["text"]   # цифры при фоне — чисто белые
+        sub_no = "#bbbbbb" if bg_path else "#777777"      # номер куска (1·2) при фоне светлее
         table_axes = []
         for si, sec in enumerate(sections):
             ax_t = fig.add_subplot(sub[si]); ax_t.axis("off")
@@ -1103,16 +1111,16 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
                         cell.get_text().set_rotation(90)
                         cell.get_text().set_fontsize(9)
                 elif r == sec["avg_r"]:
-                    cell.set_facecolor(th["box_face"])
-                    cell.set_text_props(fontweight="bold", color=th["text"])
+                    cell.set_facecolor(avg_bg)
+                    cell.set_text_props(fontweight="bold", color=row_text)
                 elif r in sec["main_rows"]:
                     # Строка повтора: жирный шрифт на серой подложке.
                     cell.set_facecolor(zebra)
-                    cell.set_text_props(fontweight="bold", color=th["text"])
+                    cell.set_text_props(fontweight="bold", color=row_text)
                 else:
                     # Строка-кусок (400 м): мельче, на белом, номер серым.
                     cell.set_facecolor("none")
-                    cell.set_text_props(color="#777777" if c == 0 else th["text"], fontsize=9)
+                    cell.set_text_props(color=sub_no if c == 0 else row_text, fontsize=9)
             for (r, c), fill in sec["fill"].items():
                 tbl[r, c].set_facecolor(fill)
                 tbl[r, c].set_text_props(color="white", fontweight="bold")
