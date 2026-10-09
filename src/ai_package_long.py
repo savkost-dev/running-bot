@@ -5,6 +5,9 @@
 """
 from ai_package import (
     PROMPT,
+    CARD_PLATE_ALPHA,
+    _apply_card_background,
+    card_theme_for,
     _age,
     _avg,
     _choose_candidate,
@@ -426,7 +429,7 @@ async def build_charts(splits, plan_steps, name: str, out_dir: str,
 # после правок интервального разбора проверять /report_long s.
 async def build_charts_stacked(splits, plan_steps, name: str, out_dir: str,
                                tag: str, dark: bool = False,
-                               source: str = "", splits_fine=None) -> str | None:
+                               source: str = "", splits_fine=None, wdate=None) -> str | None:
     """Оба графика (работа + отдых) на ОДНОЙ вертикальной картинке под телефон:
     сверху интервалы (сегменты/эталон/тренд/дельты), снизу отдых (коридоры).
     Логика отрисовки повторяет activity_review._plot_work_segmented/_plot_rest,
@@ -435,6 +438,11 @@ async def build_charts_stacked(splits, plan_steps, name: str, out_dir: str,
     import numpy as np
     import matplotlib.pyplot as plt
     from matplotlib.ticker import FuncFormatter
+
+    # 09.10.2026: тот же фон, что у карточки лонга (как в интервалах с 0.42.0). wdate=None — как раньше.
+    bg_path = card_theme_for(wdate).get("bg") if wdate else None
+    if bg_path:
+        dark = True
 
     ar.DARK_MODE = dark
     ordered = ar._ordered_laps(splits)
@@ -625,6 +633,13 @@ async def build_charts_stacked(splits, plan_steps, name: str, out_dir: str,
         _sig = "DoDick · @DD_adviser_bot · dodick.run" + (" · Powered by Strava" if source == "strava" else "")
         fig.text(0.985, 0.005, _sig, fontsize=8, alpha=0.6,
                  ha="right", va="bottom")
+        if bg_path:
+            fig.canvas.draw()   # нужны реальные размеры подписей для tight bbox
+            zones = [{"axes": [ax], "alpha": CARD_PLATE_ALPHA["chart"], "tight": True,
+                      "texts": [fig._suptitle]}]
+            if has_rest:
+                zones.append({"axes": [ax2], "alpha": CARD_PLATE_ALPHA["chart"], "tight": True})
+            _apply_card_background(fig, bg_path, zones)
         out_path = os.path.join(out_dir, f"charts_{tag}.png")
         fig.savefig(out_path, dpi=120)
         plt.close(fig)
@@ -814,6 +829,14 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
     import textwrap
     import matplotlib.pyplot as plt
     from matplotlib.patches import FancyBboxPatch, Rectangle
+
+    # 09.10.2026: праздник дня + фон на дату (assets/), как в интервальной карточке с 0.42.0.
+    # С фоном карточка тёмная. Нет фона — всё как раньше. CARD_THEME=0 — откат.
+    theme = card_theme_for(wdate)
+    holiday_ln = theme.get("holiday")
+    bg_path = theme.get("bg")
+    if bg_path:
+        dark = True
 
     ar.DARK_MODE = dark
     ordered = ar._ordered_laps(splits)
@@ -1011,7 +1034,7 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
     # ── Компоновка: портрет, три зоны ──
     th = ar._theme()
     accent = "#ff8c00"
-    n_hdr_lines = 2 + len(rcs_lines) + (1 if plan_line else 0)
+    n_hdr_lines = 2 + len(rcs_lines) + (1 if plan_line else 0) + (1 if holiday_ln else 0)
     hdr_in = 0.26 * n_hdr_lines + 0.18
     tbl_in = sum(0.46 * s["n_rows"] for s in sections) + \
         (0.14 * len(sections) if len(sections) > 1 else 0)
@@ -1042,6 +1065,10 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
         ax_h.text(0, y, meta_line, fontsize=10.5, alpha=0.8,
                   va="top", ha="left", transform=ax_h.transAxes)
         y -= dy
+        if holiday_ln:
+            ax_h.text(0, y, holiday_ln, fontsize=11, fontweight="bold", color=accent,
+                      va="top", ha="left", transform=ax_h.transAxes)
+            y -= dy
         for ln, st in rcs_lines:
             ax_h.text(0, y, ln, fontsize=10.5,
                       style="italic" if st == "italic" else "normal",
@@ -1055,8 +1082,10 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
         # Зона 2: секции-таблицы по блокам (bbox на всю под-зону)
         zebra = "#2a2a2a" if dark else "#f2f2f2"
         hdr_bg = "#333333" if not dark else "#3a3a3a"
+        table_axes = []
         for si, sec in enumerate(sections):
             ax_t = fig.add_subplot(sub[si]); ax_t.axis("off")
+            table_axes.append(ax_t)
             if len(sections) > 1:
                 ax_t.set_title(sec["title"], fontsize=10.5, fontweight="bold", pad=3)
             tbl = ax_t.table(cellText=sec["rows"], colLabels=sec["headers"],
@@ -1109,6 +1138,13 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
         _sig = "DoDick · @DD_adviser_bot · dodick.run" + (" · Powered by Strava" if source == "strava" else "")
         ax_b.text(0.99, 0.0, _sig, fontsize=8.5, alpha=0.6,
                   ha="right", va="bottom", transform=ax_b.transAxes)
+
+        if bg_path:
+            # Плашки: шапка+схема, таблицы, итоги — между ними виден фон.
+            _apply_card_background(fig, bg_path, [
+                {"axes": [ax_h, ax_d], "alpha": CARD_PLATE_ALPHA["header"]},
+                {"axes": table_axes, "alpha": CARD_PLATE_ALPHA["table"]},
+                {"axes": [ax_b], "alpha": CARD_PLATE_ALPHA["footer"]}])
 
         out_path = os.path.join(out_dir, f"card_{tag}.png")
         fig.savefig(out_path, dpi=120)
