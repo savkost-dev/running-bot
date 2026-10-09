@@ -3377,6 +3377,17 @@ def recommendation_to_long_advice(rec: dict, analysis: dict, recovery: dict | No
     }
 
 
+def _holiday_line_html(raw_date) -> str:
+    """09.10.2026 (Антон): праздник дня из assets/holidays.txt — строка «🎉 13 октября · Михаил Соломенный»
+    в шапке вечерней рекомендации, лонга и брифа. Нет записи или ошибка — пустая строка."""
+    try:
+        import ai_package
+        h = ai_package._holiday_line(raw_date)
+    except Exception:
+        return ""
+    return f"🎉 {_html.escape(h)}" if h else ""
+
+
 def format_evening_message(advice: dict, workout: dict, stats: dict | None = None, weather_line: str = "", profile_only: bool = False, has_tracker: bool = True) -> str:
     if not advice:
         return "Не удалось получить рекомендацию. Попробуй позже."
@@ -3422,6 +3433,8 @@ def format_evening_message(advice: dict, workout: dict, stats: dict | None = Non
             f"{type_emoji} <b>Тренировка {date_fmt}</b>",
             f"📍 {location}",
         ]
+        if _holiday_line_html(raw_date):
+            lines.append(_holiday_line_html(raw_date))
         if schedule:
             lines.append(f"⏰ {_html.escape(schedule)}")
         if weather_line:
@@ -3994,6 +4007,8 @@ def format_long_run_message(advice: dict, workout: dict, stats: dict | None = No
     schedule_raw = (workout.get("schedule") or "").replace('\n', '  |  ')
 
     lines = [f"🕐 <b>Long Run{weekday_str} {date_fmt}</b>" + (" ⏳" if is_past else "")]
+    if not is_past and _holiday_line_html(workout.get("workout_date", "")):
+        lines.append(_holiday_line_html(workout.get("workout_date", "")))
     loc_parts = []
     if location:
         loc_parts.append(f"📍 {location}")
@@ -4017,7 +4032,7 @@ def format_long_run_message(advice: dict, workout: dict, stats: dict | None = No
     if suitability:
         # 20.08.2026 (Антон): порядок — по НОМЕРУ группы (от быстрой к медленной),
         # а не по проценту. Группа здоровья — в конец.
-        # 06.10.2026: вариант с прогрессом — «3+» (тест лонга через ИИ, /test_long): идёт ВЫШЕ своей
+        # 06.10.2026: вариант с прогрессом — «3+» (тест лонга через ИИ, /long2): идёт ВЫШЕ своей
         # группы (заканчивается быстрее). Строки без «+» (боевой формульный /long) — как раньше.
         def _plus_of(item) -> bool:
             return str(item.get("group", "")).strip().endswith("+")
@@ -4044,7 +4059,7 @@ def format_long_run_message(advice: dict, workout: dict, stats: dict | None = No
         if _types_today:
             # 06.10.2026 (Антон): список типов с римскими номерами и разделителем; в шкале — номер типа
             # у каждой строки вместо эпитета, чтобы не ломать выравнивание.
-            from long_ai import LONG_TYPE_NOTES, LONG_TYPE_ROMAN
+            from long2 import LONG_TYPE_NOTES, LONG_TYPE_ROMAN
             _roman = {k.lower(): v for k, v in LONG_TYPE_ROMAN.items()}
             lines.append("Под формат лонга подходят пять типов:")
             for _tname, _legend in LONG_TYPE_NOTES.items():   # 08.10.2026 (Антон): смысл и цена типа одной фразой
@@ -4141,7 +4156,7 @@ def format_long_run_message(advice: dict, workout: dict, stats: dict | None = No
     # Только если ИИ отдал types_today; у формульного /long их нет.
     _types_today = advice.get("types_today") if isinstance(advice.get("types_today"), list) else []
     if _types_today:
-        from long_ai import LONG_TYPE_NOTES, LONG_TYPE_ROMAN
+        from long2 import LONG_TYPE_NOTES, LONG_TYPE_ROMAN
         _ai_by_type = {str(t.get("type", "")).strip().lower(): t for t in _types_today if isinstance(t, dict)}
         lines += [sep, "<b>Типы длительной сегодня:</b>"]
         for _tname, _note in LONG_TYPE_NOTES.items():

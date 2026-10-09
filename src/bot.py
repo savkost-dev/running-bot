@@ -1284,7 +1284,7 @@ def _build_help_text(is_admin: bool) -> str:
             "/analyze_test — тестовый разбор анонса (без записи в базу)\n"
             "/preprocess_mode — режим анализа тренировок (deep/smart)\n"
             "/test_workout — тест Шага 2 (рекомендация группы) на твоих данных\n"
-            "/test_long — тест лонга через ИИ (тестовая ветка, в базу не пишет): p — промт и данные без ИИ, u — выбрать пользователя, 39 — по id, smart|fast — режим\n"
+            "/long2 — лонг2 (ветка ИИ, тот же движок, что у /long) на своих данных, в базу не пишет: p — промт и данные без ИИ, u — выбрать пользователя, 39 — по id, smart|fast — режим, all [N] — прогон по всем в историю (shadow_long2)\n"
             "/reanalyze — боевой переразбор анонса (запись в базу + эталоны + бриф)\n"
             "/show_analyze — показать последний Шаг 1 из базы\n"
             "/holiday — выбор праздника дня с кнопками (без даты — на завтра; /holiday 1103, 20261103 или 2026-11-03)\n"
@@ -1849,7 +1849,7 @@ async def _collect_admin_user_data(db_user_id: int) -> tuple[dict, list[str]]:
 
 
 async def _run_test_step2(update, context, *, long: bool):
-    """Общая логика /test_workout и /test_long."""
+    """Общая логика /test_workout и /long2."""
     if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
         await update.message.reply_text("Нет доступа.")
         return
@@ -3771,11 +3771,12 @@ def _user_has_data(db_user_id: int) -> bool:
 # 07.10.2026 (Антон): блок «🔬 Данные для рекомендации» выключен — приходил после каждой рекомендации.
 # Вернуть: ADMIN_DATA_BLOCK = True. Сам блок и вызовы не трогались.
 ADMIN_DATA_BLOCK = False
-# 09.10.2026 (Антон, шаг 2 к боевому лонгу через ИИ): движок лонга для пользователей — кнопка «Long Run»
-# и вечерняя рассылка. "ai" — ветка long_ai (_long_ai_compute: типы I–V, промт PROMPT_LONG_AI);
-# "formula" — прежний recommend_long + проза Шага 2. При ошибке или таймауте ИИ — откат на формулу
-# для этого человека. Откат целиком: LONG_ENGINE = "formula". Админские /test_workout и /p_a не затронуты.
-LONG_ENGINE = "ai"
+# 09.10.2026 (Антон): движок лонга для пользователей — кнопка «Long Run», /long, /l_user и субботняя рассылка.
+# "long2" — src/long2.py (_long2_compute: типы I–V, промт PROMPT_LONG2), в бою с 0.47.3;
+# "long1" — прежняя формула: recommend_long + recommendation_to_long_advice + проза Шага 2.
+# При ошибке или таймауте long2 человек получает long1. Откат целиком: LONG_ENGINE = "long1".
+# Админские /long2 (с ключами), /test_workout и /p_a от переключателя не зависят.
+LONG_ENGINE = "long2"
 # 09.10.2026 (Антон, шаг 2 автоматизации темы дня): накануне тренировки (пн/чт/сб 18:00 МСК) админу
 # уходит праздник завтрашнего дня из assets/holidays.txt с кнопками — основной, запасные, «без праздника».
 # Нажатие пишет выбор в календарь (выбранный — первым, пометка done:ГГГГ). Молчание = основной.
@@ -4256,7 +4257,7 @@ async def _send_recommendation_tail(telegram_id: int, db_user_id: int, context: 
                                     recovery: dict | None = None, is_broadcast: bool = False,
                                     run_kind: str = "manual", out=None) -> None:
     """Хвост рекомендации после собранного сообщения — один для формульной ветки (/long, /workout, рассылка)
-    и для ветки лонга через ИИ (/test_long на своих данных; 09.10.2026, Антон, шаг 1 к боевому лонгу через ИИ):
+    и для ветки лонга через ИИ (/long2 на своих данных; 09.10.2026, Антон, шаг 1 к боевому лонгу через ИИ):
     кнопки оценки и обратной связи по темпу, запись в историю при рассылке, отправка, окно «Загрузить лонг в Garmin».
     out — как отправлять основное сообщение (у /long это редактирование «⏳»), иначе новое сообщение."""
     _rating_data[telegram_id] = {
@@ -4488,12 +4489,12 @@ async def _send_recommendation(
         # 15.09.2026: рассылка — только «умный» (см. выше) — для calc/long-пути
         rec_mode = "smart"
 
-    # 09.10.2026 (Антон, шаг 2): лонг — через ИИ (LONG_ENGINE="ai"), при сбое — формула, как раньше
+    # 09.10.2026 (Антон): лонг — long2 (LONG_ENGINE="long2"), при сбое — long1 (формула), как раньше
     _ai_long, stats2 = False, None
-    if long and LONG_ENGINE == "ai":
+    if long and LONG_ENGINE == "long2":
         try:
             _ai_mode = {"calc": "fast", "deep": "smart"}.get(rec_mode, rec_mode)
-            _res_ai = await _long_ai_compute(db_user_id, _ai_mode, analysis=analysis, live=live, status=status,
+            _res_ai = await _long2_compute(db_user_id, _ai_mode, analysis=analysis, live=live, status=status,
                                              recovery=user_data["recovery"])
             if _res_ai.get("ok") and _res_ai.get("advice"):
                 advice, stats2, _ai_long = _res_ai["advice"], _res_ai.get("stats"), True
@@ -4504,10 +4505,10 @@ async def _send_recommendation(
                     advice["recommended_pace"] = (f"{_fp} → {_sp}" if advice.get("run_strategy") == "progressive" and _sp
                                                   else (_fp or ""))
             else:
-                logger.warning(f"long_ai → откат на формулу для user {db_user_id}: "
+                logger.warning(f"long2 → откат на long1 для user {db_user_id}: "
                                f"{_res_ai.get('msg') or ('таймаут' if _res_ai.get('timeout') else 'нет advice')}")
         except Exception as e:
-            logger.error(f"long_ai → откат на формулу для user {db_user_id}: {e}", exc_info=True)
+            logger.error(f"long2 → откат на long1 для user {db_user_id}: {e}", exc_info=True)
 
     # Числа/структура — формулами (детерминированно)
     if long and _ai_long:
@@ -4582,7 +4583,7 @@ async def _send_recommendation(
     # Админу — снимок на утро (из базы) + текущие данные (на лету), отдельным сообщением
     await _send_admin_data_block(telegram_id, db_user_id, user_data.get("recovery"), context,
                                  workout_date=((user_data.get("idle") or {}).get("until") or _wd))
-    # Хвост общий с веткой лонга через ИИ (/test_long): оценка, запись в историю при рассылке, отправка, окно FIT
+    # Хвост общий с веткой лонга через ИИ (/long2): оценка, запись в историю при рассылке, отправка, окно FIT
     await _send_recommendation_tail(
         telegram_id, db_user_id, context, long=long, advice=advice, workout_dict=workout_dict,
         scenario_ctx=scenario_ctx, body=body, banner=banner, rec_mode=rec_mode,
@@ -7638,18 +7639,18 @@ async def cmd_report_long(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await _report_send(context, chat_id, msg, res, chart_items, ai_chunks, _ai_stats, title=_long_title(res))
 
 
-async def cmd_test_long(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/test_long (admin) — ТЕСТОВАЯ рекомендация длительной через ИИ (с 05.10.2026; до этого команда
+async def cmd_long2(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/long2 (admin) — ТЕСТОВАЯ рекомендация длительной через ИИ (с 05.10.2026; до этого команда
     считала лонг формулами — это делает /long и /l_user).
     Изолированная ветка: боевую формульную (/long, рассылка, recommend_long) не трогает,
     в базу ничего не пишет, другим пользователям ничего не шлёт — ответ уходит только админу.
-    Промт и сборка пакета данных — src/test_long.py (PROMPT_LONG_AI, build_long_ai_package).
-    /test_long — на данных админа, режим ИИ из /mode;
-    /test_long p — только промт и пакет данных, без вызова ИИ;
-    /test_long u — выбрать пользователя кнопками (как /l_user); /test_long 39 — по id из /users;
-    /test_long smart|fast — режим ИИ на этот прогон. Аргументы можно сочетать: /test_long u p.
-    /test_long all [smart|fast] [N] — теневой прогон по всем с зонами (07.10.2026): один режим, никому не шлёт,
-    результат в recommendation_history (run_kind=shadow_long_ai) + сводка по вариантам и типам."""
+    Промт и сборка пакета данных — src/long2.py (PROMPT_LONG2, build_long2_package).
+    /long2 — на данных админа, режим ИИ из /mode;
+    /long2 p — только промт и пакет данных, без вызова ИИ;
+    /long2 u — выбрать пользователя кнопками (как /l_user); /long2 39 — по id из /users;
+    /long2 smart|fast — режим ИИ на этот прогон. Аргументы можно сочетать: /long2 u p.
+    /long2 all [smart|fast] [N] — теневой прогон по всем с зонами (07.10.2026): один режим, никому не шлёт,
+    результат в recommendation_history (run_kind=shadow_long2) + сводка по вариантам и типам."""
     if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
         await update.message.reply_text("Нет доступа.")
         return
@@ -7657,49 +7658,49 @@ async def cmd_test_long(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     opts = {"prompt_only": any(a in ("p", "data", "prompt") for a in args),
             "mode": next((a for a in args if a in ("smart", "fast")), None)}
     if any(a in ("all", "все") for a in args):
-        # /test_long all [smart|fast] [N] — теневой прогон по всем с зонами, один режим, никому не шлёт
+        # /long2 all [smart|fast] [N] — теневой прогон по всем с зонами, один режим, никому не шлёт
         _limit = next((int(a) for a in args if a.isdigit()), 0)
-        await _run_long_ai_shadow(update, context, opts["mode"] or "smart", limit=_limit)
+        await _run_long2_shadow(update, context, opts["mode"] or "smart", limit=_limit)
         return
     if any(a in ("u", "user") for a in args):
         users = get_users_list_for_b()
         if not users:
             await update.message.reply_text("Нет пользователей в базе.")
             return
-        context.user_data["test_long_opts"] = opts
+        context.user_data["long2_opts"] = opts
         keyboard = [[InlineKeyboardButton(
             u["name"] + (f" (@{u['username']})" if u.get("username") else ""),
             callback_data=f"tlong_{u['db_user_id']}")] for u in users]
         await update.message.reply_text(
-            "🧪 Лонг через ИИ — выбери пользователя" + (" (только промт и данные):" if opts["prompt_only"] else ":"),
+            "Лонг2 — выбери пользователя" + (" (только промт и данные):" if opts["prompt_only"] else ":"),
             reply_markup=InlineKeyboardMarkup(keyboard))
         return
     target = next((int(a) for a in args if a.isdigit()), None)
-    await _run_long_ai(update, context, target, **opts)
+    await _run_long2(update, context, target, **opts)
 
 
-async def test_long_user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Кнопка с пользователем из /test_long u → тестовый лонг через ИИ на его данных (ответ админу)."""
+async def long2_user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Кнопка с пользователем из /long2 u → лонг2 на его данных (ответ админу)."""
     query = update.callback_query
     if query.from_user.id not in ADMIN_TELEGRAM_IDS:
         await query.answer("Нет доступа.")
         return
     await query.answer()
     target = int(query.data.rsplit("_", 1)[1])
-    opts = context.user_data.pop("test_long_opts", None) or {"prompt_only": False, "mode": None}
-    await _run_long_ai(update, context, target, **opts)
+    opts = context.user_data.pop("long2_opts", None) or {"prompt_only": False, "mode": None}
+    await _run_long2(update, context, target, **opts)
 
 
-async def _long_ai_compute(db_user_id: int, mode: str, prompt_only: bool = False,
+async def _long2_compute(db_user_id: int, mode: str, prompt_only: bool = False,
                            analysis: dict | None = None, live: dict | None = None,
                            status: str = "", recovery: dict | None = None) -> dict:
-    """Расчёт тестовой рекомендации лонга через ИИ для ОДНОГО человека, без отправки сообщений
-    (07.10.2026, Антон: одна функция для /test_long <id> и прогона по всем).
+    """Расчёт лонг2 (рекомендация длительной через ИИ) для ОДНОГО человека, без отправки сообщений
+    (07.10.2026, Антон: одна функция для /long2 <id> и прогона по всем).
     analysis / live — можно передать готовые (прогон читает анонс один раз); иначе читаются здесь.
     Возвращает {ok, msg?, analysis, status, workout_dict, scenario_ctx, recovery, weather_line,
     pkg, formula, full_prompt, advice?, stats?, timeout?}. В базу ничего не пишет."""
     import json as _json
-    import long_ai
+    import long2
     import database as _db
     from ai_package import _age
 
@@ -7718,7 +7719,7 @@ async def _long_ai_compute(db_user_id: int, mode: str, prompt_only: bool = False
         try:
             live = await find_next_long_run()
         except Exception as e:
-            logger.warning(f"/test_long find_next_long_run error: {e}")
+            logger.warning(f"/long2 find_next_long_run error: {e}")
 
     profile = get_user_profile(db_user_id) or {}
     zinfo = zones.get_pace_zones(db_user_id)
@@ -7734,7 +7735,7 @@ async def _long_ai_compute(db_user_id: int, mode: str, prompt_only: bool = False
         if not _rec_given:
             recovery = await _get_unified_recovery(db_user_id, force_fresh=not _is_past)
     except Exception as e:
-        logger.warning(f"/test_long recovery error for {db_user_id}: {e}")
+        logger.warning(f"/long2 recovery error for {db_user_id}: {e}")
     scenario_ctx = _recovery_scenario(workout_dict, (recovery or {}).get("data_fetched_at"))
     # Нагрузка за 48 ч и последний старт — тем же порядком источников, что у боевого /long.
     fitness = None
@@ -7742,7 +7743,7 @@ async def _long_ai_compute(db_user_id: int, mode: str, prompt_only: bool = False
         try:
             fitness = await getter(db_user_id)
         except Exception as e:
-            logger.warning(f"/test_long fitness error for {db_user_id}: {e}")
+            logger.warning(f"/long2 fitness error for {db_user_id}: {e}")
         if fitness:
             break
     if not fitness:
@@ -7751,7 +7752,7 @@ async def _long_ai_compute(db_user_id: int, mode: str, prompt_only: bool = False
             if _tok:
                 fitness = await get_fitness_data(db_user_id, _tok)
         except Exception as e:
-            logger.warning(f"/test_long strava fitness error for {db_user_id}: {e}")
+            logger.warning(f"/long2 strava fitness error for {db_user_id}: {e}")
     try:
         activities = _db.get_strava_activities(db_user_id)
     except Exception:
@@ -7766,11 +7767,11 @@ async def _long_ai_compute(db_user_id: int, mode: str, prompt_only: bool = False
         if _w:
             weather_line, weather_prompt = format_weather_for_message(_w), format_weather_for_prompt(_w)
     except Exception as e:
-        logger.warning(f"/test_long weather error: {e}")
+        logger.warning(f"/long2 weather error: {e}")
 
     # Объём за 7 дней по часам бегуна с ярлыками работы — в [ФОН] вместо «нагрузки за 48 ч» (07.10.2026, Антон)
     work_text = claude_advisor._work_prompt_text({"db_user_id": db_user_id}, analysis, kind="long")
-    pkg = long_ai.build_long_ai_package(
+    pkg = long2.build_long2_package(
         profile=profile, zinfo=zinfo, recovery=recovery, fitness=fitness, analysis=analysis,
         activities=activities, age=_age(profile.get("birthdate")), weather_prompt=weather_prompt,
         scenario_text=scenario_ctx.get("prompt_text") or "", work_text=work_text)
@@ -7788,11 +7789,11 @@ async def _long_ai_compute(db_user_id: int, mode: str, prompt_only: bool = False
             _strat = {"progressive": "прогресс", "even": "ровно"}.get(_adv.get("run_strategy"), "")
             formula = f"гр.{_rec['main_group'].get('number')} {_strat}".strip()
     except Exception as e:
-        logger.warning(f"/test_long formula error for {db_user_id}: {e}")
+        logger.warning(f"/long2 formula error for {db_user_id}: {e}")
 
     out = {"ok": True, "analysis": analysis, "status": status, "workout_dict": workout_dict,
            "scenario_ctx": scenario_ctx, "recovery": recovery, "weather_line": weather_line,
-           "pkg": pkg, "formula": formula, "full_prompt": long_ai.PROMPT_LONG_AI + "\n\n" + pkg["text"]}
+           "pkg": pkg, "formula": formula, "full_prompt": long2.PROMPT_LONG2 + "\n\n" + pkg["text"]}
     if prompt_only:
         return out
 
@@ -7810,14 +7811,14 @@ async def _long_ai_compute(db_user_id: int, mode: str, prompt_only: bool = False
     return out
 
 
-async def _run_long_ai(update: Update, context: ContextTypes.DEFAULT_TYPE, target: int | None,
+async def _run_long2(update: Update, context: ContextTypes.DEFAULT_TYPE, target: int | None,
                        prompt_only: bool = False, mode: str | None = None) -> None:
-    """Прогон тестовой рекомендации лонга через ИИ для одного человека с отправкой админу
-    (общая часть /test_long и кнопок выбора пользователя). target — id пользователя в базе
+    """Лонг2 для одного человека с отправкой админу
+    (общая часть /long2 и кнопок выбора пользователя). target — id пользователя в базе
     или None (тогда на данных админа). Только админ, в базу не пишет."""
     import html
     import json as _json
-    import long_ai
+    import long2
 
     chat_id = update.effective_user.id
     admin_db_id = get_or_create_user(update.effective_user.id, update.effective_user.full_name)
@@ -7834,14 +7835,14 @@ async def _run_long_ai(update: Update, context: ContextTypes.DEFAULT_TYPE, targe
         mode = {"calc": "fast", "deep": "smart"}.get(mode, mode)
 
     msg = await context.bot.send_message(
-        chat_id, "🧪 Лонг через ИИ: собираю данные…" if prompt_only
-        else f"🧪 Лонг через ИИ: собираю данные и спрашиваю ИИ ({_MODE_INFO.get(mode, ('', mode))[1]})…")
-    res = await _long_ai_compute(db_user_id, mode, prompt_only=prompt_only)
+        chat_id, "Лонг2: собираю данные…" if prompt_only
+        else f"Лонг2: собираю данные и спрашиваю ИИ ({_MODE_INFO.get(mode, ('', mode))[1]})…")
+    res = await _long2_compute(db_user_id, mode, prompt_only=prompt_only)
     if not res.get("ok"):
         await msg.edit_text(f"⚠️ {res.get('msg')}")
         return
     analysis, workout_dict, scenario_ctx = res["analysis"], res["workout_dict"], res["scenario_ctx"]
-    header = (f"🧪 Лонг через ИИ (тест) · {who}\n"
+    header = (f"Лонг2 · {who}\n"
               f"Анонс: {analysis.get('workout_date') or '—'} ({res.get('status')}) · формулы сейчас: {res['formula']}")
 
     if prompt_only:
@@ -7869,32 +7870,32 @@ async def _run_long_ai(update: Update, context: ContextTypes.DEFAULT_TYPE, targe
             _scen_hdr = scenario_ctx["user_text"] + "\n\n" if scenario_ctx.get("user_text") else ""
             await context.bot.send_message(chat_id, _scen_hdr + body, parse_mode="HTML")
     except Exception as e:
-        logger.error(f"/test_long format error: {e}", exc_info=True)
+        logger.error(f"/long2 format error: {e}", exc_info=True)
         await context.bot.send_message(
             chat_id, "⚠️ Боевой вид сообщения не собрался, сырой ответ ИИ:\n"
             + _json.dumps(advice, ensure_ascii=False, indent=1)[:3500])
-    extras = long_ai.format_extras(advice)
-    for ch in _report_text_chunks((extras + "\n\n" if extras else "") + "— тестовая ветка /test_long, пользователям не уходит"):
+    extras = long2.format_extras(advice)
+    for ch in (_report_text_chunks(extras) if extras else []):
         await context.bot.send_message(chat_id, ch)
     # Админу — блок «Данные для рекомендации» (снимок на утро, синхронизация, простой), как после интервальной.
     await _send_admin_data_block(chat_id, db_user_id, res.get("recovery"), context,
                                  workout_date=workout_dict.get("workout_date"))
 
 
-LONG_AI_SHADOW_KIND = "shadow_long_ai"   # run_kind в recommendation_history для прогона /test_long all
+LONG2_SHADOW_KIND = "shadow_long2"   # run_kind в recommendation_history для прогона /long2 all
 
 
-async def _run_long_ai_shadow(update: Update, context: ContextTypes.DEFAULT_TYPE,
+async def _run_long2_shadow(update: Update, context: ContextTypes.DEFAULT_TYPE,
                               mode: str, limit: int = 0) -> None:
-    """/test_long all — теневой прогон лонга через ИИ по всем с зонами (07.10.2026, Антон).
+    """/long2 all — теневой прогон лонга через ИИ по всем с зонами (07.10.2026, Антон).
     По образцу /shadow_run: по 5 человек параллельно, один режим для всех, никому не шлёт,
-    результат — строка на человека в recommendation_history (run_kind=shadow_long_ai; повтор — замена):
+    результат — строка на человека в recommendation_history (run_kind=shadow_long2; повтор — замена):
     группа и вариант основного выбора, тип, полная таблица подходимости и вердикты по типам в advice_json.
     В конце — сводка админу: распределение по вариантам и типам; по каждому типу — доступен в лесенке /
     разрешён сегодня / рекомендован."""
     import json as _json
     import time as _time
-    import long_ai
+    import long2
 
     chat_id = update.effective_user.id
     row, status = get_latest_workout_analysis("long", None, None, None)
@@ -7911,15 +7912,15 @@ async def _run_long_ai_shadow(update: Update, context: ContextTypes.DEFAULT_TYPE
     try:
         live = await find_next_long_run()
     except Exception as e:
-        logger.warning(f"/test_long all: find_next_long_run error: {e}")
+        logger.warning(f"/long2 all: find_next_long_run error: {e}")
 
     users = get_users_list_for_b()
     if limit:
         users = users[:limit]
     msg = await context.bot.send_message(
-        chat_id, f"🧪 Лонг через ИИ, прогон по всем: {len(users)} человек, анонс {analysis.get('workout_date')} "
-                 f"({status}), режим {mode}. Никому не уходит, результат в историю «{LONG_AI_SHADOW_KIND}».")
-    roman = long_ai.LONG_TYPE_ROMAN
+        chat_id, f"Лонг2, прогон по всем: {len(users)} человек, анонс {analysis.get('workout_date')} "
+                 f"({status}), режим {mode}. Никому не уходит, результат в историю «{LONG2_SHADOW_KIND}».")
+    roman = long2.LONG_TYPE_ROMAN
     _sem = asyncio.Semaphore(5)
     by_variant: dict[str, int] = {}
     by_type: dict[str, int] = {}
@@ -7936,7 +7937,7 @@ async def _run_long_ai_shadow(update: Update, context: ContextTypes.DEFAULT_TYPE
         async with _sem:
             try:
                 _t0 = _time.time()
-                res = await _long_ai_compute(u["db_user_id"], mode, analysis=analysis, live=live, status=status)
+                res = await _long2_compute(u["db_user_id"], mode, analysis=analysis, live=live, status=status)
                 if not res.get("ok"):
                     errors.append(f"{name}: {res.get('msg')}")
                     return
@@ -7959,7 +7960,7 @@ async def _run_long_ai_shadow(update: Update, context: ContextTypes.DEFAULT_TYPE
                 advice["_types_in_ladder"] = [roman[t] for t in types_in_ladder]
                 advice["_formula"] = res.get("formula")
                 save_recommendation_history(u["db_user_id"], advice, res.get("workout_dict") or {},
-                                            LONG_AI_SHADOW_KIND, ai_mode=mode)
+                                            LONG2_SHADOW_KIND, ai_mode=mode)
                 by_variant[variant] = by_variant.get(variant, 0) + 1
                 _mt = roman.get(main_type, "?")
                 by_type[_mt] = by_type.get(_mt, 0) + 1
@@ -7985,13 +7986,13 @@ async def _run_long_ai_shadow(update: Update, context: ContextTypes.DEFAULT_TYPE
     hist_v = "\n".join(f"{v:<4} {'█' * n} {n}" for v, n in sorted(by_variant.items(), key=lambda kv: _vkey(kv[0])))
     hist_t = "\n".join(f"{t:<4} {'█' * n} {n}" for t, n in sorted(by_type.items(), key=lambda kv: (list(roman.values()) + ['?']).index(kv[0])))
     table = "\n".join(f"{roman[t]:<4} {avail[t]:>3} {allowed[t]:>3} {chosen[t]:>3}" for t in roman)
-    text = (f"Прогон лонга через ИИ · {analysis.get('workout_date')} · {mode} · «{LONG_AI_SHADOW_KIND}»\n"
+    text = (f"Прогон лонг2 · {analysis.get('workout_date')} · {mode} · «{LONG2_SHADOW_KIND}»\n"
             f"готово {done} из {len(users)}, среднее {t_sum / max(done, 1):.0f} с на человека, "
             f"весь прогон {(_time.time() - _t_run0) / 60:.0f} мин\n\n"
             f"<b>Основной выбор, вариант</b> (медленный → быстрый):\n<pre>{hist_v}</pre>\n"
             f"<b>Основной выбор, тип</b>:\n<pre>{hist_t}</pre>\n"
             f"<b>По типам</b>: в лесенке / разрешён сегодня / рекомендован\n<pre>{table}</pre>\n"
-            f"Текст по человеку: /test_long &lt;id&gt;")
+            f"Текст по человеку: /long2 &lt;id&gt;")
     if errors:
         text += "\n\nОшибки ({}):\n".format(len(errors)) + "\n".join(errors[:15])
     await msg.edit_text(text[:4000], parse_mode="HTML")
@@ -8203,7 +8204,7 @@ def main():
     app.add_handler(CommandHandler("resend_evening", cmd_resend_evening))
     app.add_handler(CommandHandler("preprocess_mode", cmd_preprocess_mode))
     app.add_handler(CommandHandler("test_workout", cmd_test_workout))
-    app.add_handler(CommandHandler("test_long",    cmd_test_long))
+    app.add_handler(CommandHandler("long2",    cmd_long2))
     app.add_handler(CommandHandler("reanalyze",    cmd_reanalyze))
     app.add_handler(CommandHandler("show_analyze",  cmd_show_analyze))
     app.add_handler(CommandHandler("holiday",       cmd_holiday))
@@ -8242,7 +8243,7 @@ def main():
     app.add_handler(CallbackQueryHandler(w_user_light_callback, pattern=r"^wul_\d+$"))
     app.add_handler(CallbackQueryHandler(report_user_callback, pattern=r"^report_user_\d+$"))
     app.add_handler(CallbackQueryHandler(l_user_callback,   pattern=r"^l_user_\d+$"))
-    app.add_handler(CallbackQueryHandler(test_long_user_callback, pattern=r"^tlong_\d+$"))
+    app.add_handler(CallbackQueryHandler(long2_user_callback, pattern=r"^tlong_\d+$"))
     app.add_handler(CallbackQueryHandler(pb_user_callback,  pattern=r"^pb_user_\d+(_\d{8})?$"))
     app.add_handler(CallbackQueryHandler(pa_user_callback,  pattern=r"^pa_user_\d+$"))
     app.add_handler(CallbackQueryHandler(panalyze_callback, pattern=r"^panalyze_(interval|long)$"))

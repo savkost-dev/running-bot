@@ -170,6 +170,13 @@ def format_brief(result: dict, modes: list | None) -> str:
     lines = []
     wdate = result.get("workout_date") or "—"
     lines.append(f"🧭 Режимы тренировки {wdate}")
+    try:   # 09.10.2026: праздник дня, как в карточке и вечерней рекомендации
+        import ai_package
+        _h = ai_package._holiday_line(wdate)
+        if _h:
+            lines.append(f"🎉 {_h}")
+    except Exception:
+        pass
     if result.get("work_text"):
         import claude_advisor as _ca_l
         lines.append(f"\n🚪 Работа: {_ca_l.strip_links(result['work_text'])}")

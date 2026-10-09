@@ -1,11 +1,12 @@
-"""long_ai.py — ЭКСПЕРИМЕНТАЛЬНАЯ рекомендация длительной через ИИ (с 05.10.2026). Только для админа.
-
-Изолированная тестовая ветка: команда /test_long в bot.py (cmd_test_long, _run_long_ai). Боевую формульную ветку
-(/long, вечерняя рассылка, claude_advisor.recommend_long) НЕ трогает и ничего в базу не пишет.
+"""long2.py — рекомендация длительной через ИИ (long2). Начата 05.10.2026 как тестовая ветка /test_long,
+с 0.47.3 (09.10.2026) — боевой движок лонга: кнопка «Long Run», /long, /l_user и субботняя рассылка
+(bot.LONG_ENGINE = "long2"; "long1" — прежняя формула claude_advisor.recommend_long, откат).
+Админская команда /long2 в bot.py (cmd_long2, _run_long2, _run_long2_shadow) — тот же движок на своих
+или чужих данных, промт без ИИ, прогон по всем в историю (run_kind shadow_long2).
 
 Здесь только чистые функции без похода в сервисы и без импорта bot.py:
-  • PROMPT_LONG_AI      — промт: формат длительной, типы, ограничения, вид ответа;
-  • build_long_ai_package — пакет данных о бегуне текстом (сбор сырых данных — в _run_long_ai);
+  • PROMPT_LONG2      — промт: формат длительной, типы, ограничения, вид ответа;
+  • build_long2_package — пакет данных о бегуне текстом (сбор сырых данных — в _run_long2);
   • build_ladder        — лесенка вариантов «группа × ровно/прогресс» с расстояниями до личных зон.
 Правка промта или пакета = правка этого файла; боевых рекомендаций она не касается.
 
@@ -40,7 +41,7 @@ SPEC_LABELS = {
     "marathon": "марафон", "health": "бег для здоровья",
 }
 
-PROMPT_LONG_AI = (
+PROMPT_LONG2 = (
     "Ты тренер бегового клуба. Нужно посоветовать бегуну, какой вариант воскресной длительной выбрать.\n\n"
     "ФОРМАТ ДЛИТЕЛЬНОЙ (менять нельзя)\n"
     "— всегда 100 минут по городу: две половины по 50 минут;\n"
@@ -354,11 +355,11 @@ def _runs_from_strava(activities: list[dict]) -> list[dict]:
     return out
 
 
-def build_long_ai_package(*, profile: dict | None, zinfo: dict | None, recovery: dict | None,
+def build_long2_package(*, profile: dict | None, zinfo: dict | None, recovery: dict | None,
                           fitness: dict | None, analysis: dict | None, activities: list[dict] | None,
                           age: int | None = None, today: str | None = None,
                           weather_prompt: str = "", scenario_text: str = "", work_text: str = "") -> dict:
-    """Пакет данных для PROMPT_LONG_AI текстом. Сырые данные собирает вызывающий (_run_long_ai).
+    """Пакет данных для PROMPT_LONG2 текстом. Сырые данные собирает вызывающий (_run_long2).
     Возвращает {ok, text, ladder, msg}. В пакет идут только перечисленные поля профиля —
     словарь профиля целиком не печатать (в нём лежат учётные данные сервисов)."""
     prof = profile or {}
