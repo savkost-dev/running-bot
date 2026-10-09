@@ -4040,6 +4040,7 @@ def format_long_run_message(advice: dict, workout: dict, stats: dict | None = No
         _types_today = advice.get("types_today") if isinstance(advice.get("types_today"), list) else []
         _roman = {}
         _health_note = False
+        _v_note = False   # 09.10.2026 (Антон): тип V в шкале жёлтым, сноска под шкалой
         if _types_today:
             # 06.10.2026 (Антон): список типов с римскими номерами и разделителем; в шкале — номер типа
             # у каждой строки вместо эпитета, чтобы не ломать выравнивание.
@@ -4053,7 +4054,10 @@ def format_long_run_message(advice: dict, workout: dict, stats: dict | None = No
         for item in sorted_s:
             g = _sanitize_group_name(str(item.get("group", "?")))
             pct = int(item.get("percentage", 0))
-            bar = _pct_bar(pct, color=("🟨" if (_if_rec_l and str(item.get("group", "")).strip() == _if_rec_l) else "🟩"))
+            _is_v = _types_today and str(item.get("type") or "").strip().lower() == "ровная марафонская"
+            if _is_v:
+                _v_note = True
+            bar = _pct_bar(pct, color=("🟨" if (_is_v or (_if_rec_l and str(item.get("group", "")).strip() == _if_rec_l)) else "🟩"))
             comment_raw = (item.get('comment') or '').strip()
             _key = comment_raw.split(':')[0].strip().lower()
             comment = _SUIT_EPITHET_MAP.get(_key, _SUIT_EPITHET_MAP.get(comment_raw, comment_raw[:10]))
@@ -4082,6 +4086,9 @@ def format_long_run_message(advice: dict, workout: dict, stats: dict | None = No
         if _types_today and _health_note:
             lines.append(f"<i>* {advice.get('health_group')} — группа здоровья, бег с ходьбой. Подходит всем и всегда: "
                          "если сегодня не хочется задачи, а хочется просто побегать в компании.</i>")
+        if _types_today and _v_note:
+            lines.append("<i>🟨 V — марафонская работа: особый случай, не еженедельный выбор. "
+                         "По плану, не чаще раза в две-три недели, на свежем фоне.</i>")
         if _if_rec_l:
             lines.append("<i>🟨 — группа при нормальном восстановлении</i>")
         lines.append(sep)
