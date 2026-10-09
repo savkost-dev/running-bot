@@ -1288,6 +1288,7 @@ def _build_help_text(is_admin: bool) -> str:
             "/reanalyze — боевой переразбор анонса (запись в базу + эталоны + бриф)\n"
             "/show_analyze — показать последний Шаг 1 из базы\n"
             "/holiday — выбор праздника дня с кнопками (без даты — на завтра; /holiday 2026-11-03)\n"
+            "/bg — нарисовать фон на дату (/bg 2026-11-03; p — только задание без картинки; свой текст — рисовать по нему)\n"
             "/b — вариант B для себя\n"
             "/b_user — вариант B для выбранного пользователя\n"
             "/a_user — вариант A для выбранного пользователя\n"
@@ -3771,6 +3772,113 @@ LONG_ENGINE = "ai"
 # Нажатие пишет выбор в календарь (выбранный — первым, пометка done:ГГГГ). Молчание = основной.
 # Выключить целиком: HOLIDAY_PICK = False (задача и кнопки молчат, /holiday для админа работает).
 HOLIDAY_PICK = True
+# 09.10.2026 (шаги 3–4): после выбора праздника и в 21:00 МСК накануне (если фона ещё нет) бот сам пишет
+# задание через DeepSeek, рисует фон (Gemini → Kandinsky) и шлёт админу превью с кнопками
+# «Оставить / Перерисовать / Без фона». Картинка уже сохранена в assets/bg/ — молчание = остаётся.
+# Выключить: BG_AUTO = False (/bg для админа работает).
+BG_AUTO = True
+
+
+def _bg_kind(date_str: str) -> str:
+    return "лонг" if datetime.strptime(date_str, "%Y-%m-%d").weekday() == 6 else "интервалы"
+
+
+async def bg_make_and_preview(context, date_str: str, shift: int = 0, prompt: str | None = None,
+                              only_prompt: bool = False) -> None:
+    """Задание (DeepSeek или заданное) → картинка → assets/bg/ → превью админу с кнопками."""
+    import ai_package
+    holiday = ai_package._holiday_for(date_str)
+    kind = _bg_kind(date_str)
+    if not prompt:
+        prompt = await asyncio.to_thread(ai_package.bg_build_prompt, date_str, holiday, kind, shift)
+    head = f"🖼 Фон на {date_str} ({kind}) · {holiday or 'без праздника'} · стиль {shift + 1}"
+    if only_prompt:
+        await _notify_admin(context.bot, f"{head}\n\n{prompt}")
+        return
+    data, ext, info = await asyncio.to_thread(ai_package.bg_generate, prompt)
+    if not data:
+        await _notify_admin(context.bot, f"{head}\n❌ Не нарисовалось: {info}\n\nЗадание было:\n{prompt}")
+        return
+    path = ai_package.bg_save(date_str, data, ext)
+    context.bot_data.setdefault("bg_shift", {})[date_str] = shift
+    context.bot_data.setdefault("bg_prompt", {})[date_str] = prompt
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Оставить", callback_data=f"bg:{date_str}:keep"),
+                                InlineKeyboardButton("🔁 Перерисовать", callback_data=f"bg:{date_str}:redo"),
+                                InlineKeyboardButton("🚫 Без фона", callback_data=f"bg:{date_str}:none")]])
+    caption = f"{head} · {info}\nСохранено, без ответа останется.\n\n{prompt}"[:1000]
+    try:
+        with open(path, "rb") as f:
+            await context.bot.send_photo(ADMIN_ID, photo=f, caption=caption, reply_markup=kb)
+    except Exception as e:
+        logger.warning(f"bg preview send failed: {e}")
+        await _notify_admin(context.bot, f"{head}: картинка сохранена ({path}), превью не отправилось: {e}")
+
+
+async def bg_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Кнопки под превью фона: оставить / перерисовать (следующий стиль) / без фона."""
+    query = update.callback_query
+    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+        await query.answer()
+        return
+    import ai_package
+    try:
+        _, date_str, action = query.data.split(":", 2)
+    except ValueError:
+        await query.answer()
+        return
+    if action == "keep":
+        await query.answer("Оставляю")
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except BadRequest:
+            pass
+        return
+    if action == "none":
+        ai_package.bg_remove(date_str)
+        await query.answer("Фон убран")
+        try:
+            await query.edit_message_caption(caption=f"🚫 {date_str}: фон убран, карточка выйдет без картинки.")
+        except BadRequest:
+            pass
+        return
+    if action == "redo":
+        await query.answer("Рисую заново…")
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except BadRequest:
+            pass
+        shift = int((context.bot_data.get("bg_shift") or {}).get(date_str, 0)) + 1
+        context.application.create_task(bg_make_and_preview(context, date_str, shift=shift))
+
+
+async def scheduled_bg_fallback(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Пн/чт/сб 21:00 МСК: если на завтра есть праздник, а фона ещё нет — нарисовать и показать админу."""
+    if not BG_AUTO:
+        return
+    import ai_package
+    tomorrow = (datetime.now(timezone(timedelta(hours=3))) + timedelta(days=1)).strftime("%Y-%m-%d")
+    if ai_package._background_for(tomorrow) or not ai_package._holiday_for(tomorrow):
+        return
+    await bg_make_and_preview(context, tomorrow)
+
+
+async def cmd_bg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/bg [YYYY-MM-DD] [p | текст задания] (admin): нарисовать фон на дату (без даты — завтра).
+    p — только показать задание от DeepSeek, не рисовать; свой текст — рисовать по нему."""
+    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+        return
+    args = list(context.args or [])
+    date_str = (datetime.now(timezone(timedelta(hours=3))) + timedelta(days=1)).strftime("%Y-%m-%d")
+    if args:
+        try:
+            date_str = datetime.strptime(args[0], "%Y-%m-%d").strftime("%Y-%m-%d")
+            args = args[1:]
+        except ValueError:
+            pass
+    only_prompt = bool(args) and args[0].lower() == "p"
+    custom = None if (only_prompt or not args) else " ".join(args)
+    await update.message.reply_text(f"⏳ Фон на {date_str}: " + ("пишу задание…" if only_prompt else "задание и картинка, 1–2 мин…"))
+    context.application.create_task(bg_make_and_preview(context, date_str, prompt=custom, only_prompt=only_prompt))
 
 
 def _holiday_pick_message(date_str: str):
@@ -3853,6 +3961,10 @@ async def holiday_pick_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await query.edit_message_text(f"🎉 {date_str}: выбрано — {shown}" + ("" if ok else " (ОШИБКА записи)"))
     except BadRequest:
         pass
+    if ok and BG_AUTO and name != ai_package.HOLIDAY_NONE:
+        context.application.create_task(bg_make_and_preview(context, date_str))
+    elif ok and name == ai_package.HOLIDAY_NONE and ai_package._background_for(date_str):
+        ai_package.bg_remove(date_str)
 
 
 async def cmd_holiday(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -8079,6 +8191,7 @@ def main():
     app.add_handler(CommandHandler("reanalyze",    cmd_reanalyze))
     app.add_handler(CommandHandler("show_analyze",  cmd_show_analyze))
     app.add_handler(CommandHandler("holiday",       cmd_holiday))
+    app.add_handler(CommandHandler("bg",            cmd_bg))
     app.add_handler(CommandHandler("b",         b_self_command))
     app.add_handler(CommandHandler("b_user",    b_command))
     app.add_handler(CommandHandler("a_user",    a_user_command))
@@ -8086,6 +8199,7 @@ def main():
     app.add_handler(CommandHandler("news",      news_command))
     app.add_handler(CallbackQueryHandler(news_vote_callback, pattern=r"^news:"))
     app.add_handler(CallbackQueryHandler(holiday_pick_callback, pattern=r"^hol:"))
+    app.add_handler(CallbackQueryHandler(bg_callback, pattern=r"^bg:"))
     app.add_handler(CommandHandler("w_user_light", w_user_light_command))
     app.add_handler(CommandHandler("l_user",    l_user_command))
     app.add_handler(CommandHandler("p_b",       p_b_self_command))
@@ -8139,6 +8253,7 @@ def main():
     job_queue.run_repeating(check_new_users, interval=300, first=90)                                     # каждые 5 мин — новые записи в users
     job_queue.run_daily(scheduled_brief_comment, time=time(hour=16, minute=0))                           # 19:00 МСК — бриф до рассылки
     job_queue.run_daily(scheduled_holiday_pick,  time=time(hour=15, minute=0), days=(1, 4, 6))          # 18:00 МСК пн/чт/сб — праздник на завтра админу
+    job_queue.run_daily(scheduled_bg_fallback,   time=time(hour=18, minute=0), days=(1, 4, 6))          # 21:00 МСК пн/чт/сб — фон на завтра, если админ молчал
 
     import oauth_server as _oauth
     _oauth.set_telegram_app(app)

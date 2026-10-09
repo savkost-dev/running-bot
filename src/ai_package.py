@@ -1417,6 +1417,188 @@ def _apply_card_background(fig, bg_path: str, zone_axes, pad: float = 0.012) -> 
         return False
 
 
+# ── Фон картинкой (09.10.2026, шаги 3–4 автоматизации темы дня) ──
+# Промт пишет DeepSeek по правилам Антона (утро 7–8, тёмная гамма, без героя в центре, детали по краям,
+# без текста, стиль чередуется по датам), картинку рисует Gemini (платно, ~4 цента) или Kandinsky через
+# fusionbrain.ai (бесплатно, запасной). Провайдер: BG_PROVIDER в .env — auto (по умолчанию: Gemini, при
+# ошибке Kandinsky) | gemini | kandinsky | off. Ключи: GEMINI_API_KEY, FUSIONBRAIN_API_KEY + FUSIONBRAIN_SECRET.
+BG_STYLES = [
+    "фотореалистичный кадр, кинематографичный свет, лёгкое зерно плёнки",
+    "мягкая акварель с тонкой прорисовкой, как фон полнометражного аниме",
+    "ретро-киноплакат, приглушённые цвета, зернистая печать",
+    "рисунок цветными карандашами и тушью, лёгкая штриховка",
+    "масляная живопись широкими мазками, импрессионизм",
+    "плоская векторная иллюстрация, тёмная палитра, мягкие градиенты",
+]
+BG_PROMPT_RULES = (
+    "Ты пишешь задание для нейросети, рисующей фон под карточку бегового клуба. "
+    "Тренировка проходит утром в 7–8 часов в Москве, время года — по дате. "
+    "Тема дня — праздник из календаря, его нужно передать тонко: через общее настроение сцены и "
+    "одну-две небольшие детали по краям кадра, а не через героя или предмет крупно в центре. "
+    "В сцене есть бег: дорожка, стадион, набережная или парк, вдали силуэты бегунов. "
+    "Обязательно: общая тональность тёмная, без ярких пятен в центре кадра (там ляжет таблица); "
+    "без текста, надписей, логотипов; вертикальный формат 9:16. "
+    "Стиль картинки задан отдельно, впиши его в задание. "
+    "Ответь ТОЛЬКО текстом задания на русском языке, 60–110 слов, без заголовков, кавычек и пояснений."
+)
+BG_KANDINSKY_SIZE = (576, 1024)      # 9:16, стороны кратны 64
+BG_GEMINI_MODEL = "gemini-2.5-flash-image"
+
+
+def bg_style_for(wdate, shift: int = 0) -> str:
+    """Стиль дня: чередуется по порядковому номеру даты; shift — следующий стиль при перерисовке."""
+    d = _theme_date(wdate) or date.today()
+    return BG_STYLES[(d.toordinal() + shift) % len(BG_STYLES)]
+
+
+def bg_build_prompt(wdate, holiday: str | None, kind: str = "интервалы", shift: int = 0,
+                    mode: str = "smart") -> str:
+    """Задание для картинки через DeepSeek (ask_text). При сбое — шаблон без ИИ."""
+    d = _theme_date(wdate)
+    style = bg_style_for(wdate, shift)
+    when = d.strftime("%d.%m.%Y") if d else str(wdate)
+    theme = holiday or "без праздника, просто утренняя беговая сцена"
+    ask = (f"{BG_PROMPT_RULES}\n\nДата: {when}. Тренировка: {kind}. Праздник дня: {theme}. "
+           f"Стиль картинки: {style}.")
+    text = ""
+    try:
+        import claude_advisor
+        text = (claude_advisor.ask_text(ask, mode) or "").strip().strip('"«»')
+    except Exception as e:
+        logger.warning(f"bg prompt: DeepSeek error: {e}")
+    if len(text) < 40:
+        text = (f"Раннее осеннее утро, беговая дорожка в парке, туман, фонари ещё горят, вдали силуэты бегунов. "
+                f"Тема дня — {theme}: передать настроением и небольшими деталями по краям кадра. {style}. "
+                f"Общая тональность тёмная, без ярких пятен в центре кадра. Без текста и надписей. "
+                f"Вертикальный формат 9:16.")
+    return text
+
+
+def _bg_gemini(prompt: str) -> tuple[bytes | None, str, str]:
+    """Gemini: (данные, расширение, сообщение). Ключ GEMINI_API_KEY, модель GEMINI_IMAGE_MODEL."""
+    import json, base64, requests
+    key = os.getenv("GEMINI_API_KEY", "").strip()
+    if not key:
+        return None, "", "нет GEMINI_API_KEY"
+    model = os.getenv("GEMINI_IMAGE_MODEL", BG_GEMINI_MODEL).strip() or BG_GEMINI_MODEL
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
+    body = {"contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"responseModalities": ["IMAGE"], "imageConfig": {"aspectRatio": "9:16"}}}
+    try:
+        r = requests.post(url, json=body, timeout=180)
+    except Exception as e:
+        return None, "", f"Gemini: {type(e).__name__}: {e}"
+    if r.status_code != 200:
+        msg = ""
+        try:
+            msg = r.json().get("error", {}).get("message", "")[:160]
+        except Exception:
+            pass
+        return None, "", f"Gemini HTTP {r.status_code}: {msg or r.text[:160]}"
+    try:
+        parts = r.json()["candidates"][0]["content"]["parts"]
+        img = next(pt["inlineData"] for pt in parts if "inlineData" in pt)
+    except Exception:
+        return None, "", "Gemini: в ответе нет картинки"
+    ext = "jpg" if "jpeg" in (img.get("mimeType") or "") else "png"
+    return base64.b64decode(img["data"]), ext, f"Gemini {model}"
+
+
+def _bg_kandinsky(prompt: str) -> tuple[bytes | None, str, str]:
+    """Kandinsky через fusionbrain.ai: (данные, расширение, сообщение). Ключи FUSIONBRAIN_API_KEY/SECRET."""
+    import json, base64, time as _t, requests
+    key, secret = os.getenv("FUSIONBRAIN_API_KEY", "").strip(), os.getenv("FUSIONBRAIN_SECRET", "").strip()
+    if not (key and secret):
+        return None, "", "нет FUSIONBRAIN_API_KEY/SECRET"
+    base = "https://api-key.fusionbrain.ai/key/api/v1/"
+    hdr = {"X-Key": f"Key {key}", "X-Secret": f"Secret {secret}"}
+    try:
+        pl = requests.get(base + "pipelines", headers=hdr, timeout=30)
+        if pl.status_code != 200:
+            return None, "", f"Kandinsky pipelines HTTP {pl.status_code}: {pl.text[:120]}"
+        pipes = pl.json()
+        pid = next((x["id"] for x in pipes if str(x.get("type", "")).upper() in ("TEXT2IMAGE", "")), pipes[0]["id"])
+        w, h = BG_KANDINSKY_SIZE
+        params = {"type": "GENERATE", "numImages": 1, "width": w, "height": h,
+                  "negativePromptDecoder": "текст, надписи, буквы, логотипы, яркое пятно в центре",
+                  "generateParams": {"query": prompt[:1000]}}
+        run = requests.post(base + "pipeline/run", headers=hdr, timeout=60,
+                            files={"pipeline_id": (None, pid),
+                                   "params": (None, json.dumps(params, ensure_ascii=False), "application/json")})
+        if run.status_code not in (200, 201):
+            return None, "", f"Kandinsky run HTTP {run.status_code}: {run.text[:160]}"
+        uuid = run.json().get("uuid")
+        if not uuid:
+            return None, "", f"Kandinsky run: нет uuid ({run.text[:120]})"
+        deadline = _t.time() + 180
+        while _t.time() < deadline:
+            _t.sleep(6)
+            st = requests.get(base + f"pipeline/status/{uuid}", headers=hdr, timeout=30).json()
+            status = st.get("status")
+            if status == "DONE":
+                res = st.get("result") or {}
+                if res.get("censored"):
+                    return None, "", "Kandinsky: картинка отклонена цензурой"
+                files = res.get("files") or []
+                if not files:
+                    return None, "", "Kandinsky: DONE без файла"
+                return base64.b64decode(files[0]), "jpg", "Kandinsky (fusionbrain)"
+            if status in ("FAIL", "DISABLED_BY_QUEUE"):
+                return None, "", f"Kandinsky: {status} {st.get('errorDescription') or ''}"
+        return None, "", "Kandinsky: не дождались за 3 мин"
+    except Exception as e:
+        return None, "", f"Kandinsky: {type(e).__name__}: {e}"
+
+
+def bg_generate(prompt: str, provider: str | None = None) -> tuple[bytes | None, str, str]:
+    """Картинка по заданию: (данные, расширение, кто нарисовал | текст ошибки). provider: auto|gemini|kandinsky|off."""
+    prov = (provider or os.getenv("BG_PROVIDER", "auto") or "auto").strip().lower()
+    if prov == "off":
+        return None, "", "BG_PROVIDER=off"
+    order = {"gemini": [_bg_gemini], "kandinsky": [_bg_kandinsky]}.get(prov, [_bg_gemini, _bg_kandinsky])
+    errors = []
+    for fn in order:
+        data, ext, info = fn(prompt)
+        if data:
+            return data, ext, info
+        errors.append(info)
+        logger.warning(f"bg generate: {info}")
+    return None, "", "; ".join(errors)
+
+
+def bg_save(wdate, data: bytes, ext: str) -> str | None:
+    """Сохраняет фон в assets/bg/YYYY-MM-DD.<ext>, другие расширения на эту дату убирает."""
+    d = _theme_date(wdate)
+    if not d or not data:
+        return None
+    os.makedirs(BG_DIR, exist_ok=True)
+    stem = d.strftime("%Y-%m-%d")
+    for e in BG_EXTS:
+        q = os.path.join(BG_DIR, stem + e)
+        if os.path.exists(q) and e != "." + ext:
+            os.remove(q)
+    path = os.path.join(BG_DIR, f"{stem}.{ext}")
+    tmp = path + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(data)
+    os.replace(tmp, path)
+    return path
+
+
+def bg_remove(wdate) -> bool:
+    """Убирает фон на дату (все расширения). True, если что-то удалено."""
+    d = _theme_date(wdate)
+    if not d:
+        return False
+    removed = False
+    for e in BG_EXTS:
+        q = os.path.join(BG_DIR, d.strftime("%Y-%m-%d") + e)
+        if os.path.exists(q):
+            os.remove(q)
+            removed = True
+    return removed
+
+
 async def build_charts_stacked(splits, plan_steps, name: str, out_dir: str,
                                tag: str, dark: bool = False,
                                source: str = "", splits_fine=None, wdate=None) -> str | None:
