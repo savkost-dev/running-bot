@@ -1,7 +1,7 @@
 import os
 import asyncio
 import logging
-from datetime import datetime, time, timedelta
+from datetime import datetime, time, timedelta, timezone
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import BadRequest, TimedOut, NetworkError, Forbidden
 from telegram.ext import (
@@ -1287,6 +1287,7 @@ def _build_help_text(is_admin: bool) -> str:
             "/test_long — тест лонга через ИИ (тестовая ветка, в базу не пишет): p — промт и данные без ИИ, u — выбрать пользователя, 39 — по id, smart|fast — режим\n"
             "/reanalyze — боевой переразбор анонса (запись в базу + эталоны + бриф)\n"
             "/show_analyze — показать последний Шаг 1 из базы\n"
+            "/holiday — выбор праздника дня с кнопками (без даты — на завтра; /holiday 2026-11-03)\n"
             "/b — вариант B для себя\n"
             "/b_user — вариант B для выбранного пользователя\n"
             "/a_user — вариант A для выбранного пользователя\n"
@@ -3765,6 +3766,111 @@ ADMIN_DATA_BLOCK = False
 # "formula" — прежний recommend_long + проза Шага 2. При ошибке или таймауте ИИ — откат на формулу
 # для этого человека. Откат целиком: LONG_ENGINE = "formula". Админские /test_workout и /p_a не затронуты.
 LONG_ENGINE = "ai"
+# 09.10.2026 (Антон, шаг 2 автоматизации темы дня): накануне тренировки (пн/чт/сб 18:00 МСК) админу
+# уходит праздник завтрашнего дня из assets/holidays.txt с кнопками — основной, запасные, «без праздника».
+# Нажатие пишет выбор в календарь (выбранный — первым, пометка done:ГГГГ). Молчание = основной.
+# Выключить целиком: HOLIDAY_PICK = False (задача и кнопки молчат, /holiday для админа работает).
+HOLIDAY_PICK = True
+
+
+def _holiday_pick_message(date_str: str):
+    """Текст и клавиатура выбора праздника на дату. (None, None) — даты нет в календаре."""
+    import ai_package
+    opts = [o for o in ai_package._holiday_options(date_str) if o != ai_package.HOLIDAY_NONE]
+    if not opts:
+        return None, None
+    d = datetime.strptime(date_str, "%Y-%m-%d")
+    kind = "лонг" if d.weekday() == 6 else "интервалы"
+    wd = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"][d.weekday()]
+    done = ai_package._holiday_done(date_str)
+    lines = [f"🎉 Праздник дня на {wd} {d.day:02d}.{d.month:02d} ({kind})",
+             f"Основной: {opts[0]}" + ("  ✅ выбрано" if done else "")]
+    if len(opts) > 1:
+        lines.append("Запасные: " + " · ".join(opts[1:]))
+    lines.append("\nНажми вариант — он пойдёт в шапку карточки. Без ответа пойдёт основной.")
+    rows = [[InlineKeyboardButton(f"{'✅ ' if i == 0 and done else ''}{i + 1}. {o[:48]}",
+                                  callback_data=f"hol:{date_str}:{i}")] for i, o in enumerate(opts)]
+    rows.append([InlineKeyboardButton("🚫 Без праздника", callback_data=f"hol:{date_str}:none")])
+    return "\n".join(lines), InlineKeyboardMarkup(rows)
+
+
+async def send_holiday_pick(bot, context, date_str: str) -> bool:
+    """Шлёт админу выбор праздника на дату; варианты запоминаются в bot_data под эту дату,
+    чтобы кнопка указывала на тот же список даже после перестановки в файле."""
+    text, kb = _holiday_pick_message(date_str)
+    if not text:
+        return False
+    import ai_package
+    context.bot_data.setdefault("hol_opts", {})[date_str] = [
+        o for o in ai_package._holiday_options(date_str) if o != ai_package.HOLIDAY_NONE]
+    try:
+        await bot.send_message(ADMIN_ID, text, reply_markup=kb)
+    except Exception as e:
+        logger.warning(f"holiday pick send failed: {e}")
+        return False
+    return True
+
+
+async def scheduled_holiday_pick(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Пн/чт/сб 18:00 МСК: праздник на завтра админу с кнопками. Выбор уже сделан — молчим."""
+    if not HOLIDAY_PICK:
+        return
+    import ai_package
+    tomorrow = (datetime.now(timezone(timedelta(hours=3))) + timedelta(days=1)).strftime("%Y-%m-%d")
+    if ai_package._holiday_done(tomorrow):
+        return
+    if not await send_holiday_pick(context.bot, context, tomorrow):
+        await _notify_admin(context.bot, f"🎉 На {tomorrow} праздника в календаре нет — карточка выйдет без строки праздника.")
+
+
+async def holiday_pick_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Кнопка выбора праздника: пишет выбор в assets/holidays.txt и убирает кнопки."""
+    query = update.callback_query
+    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+        await query.answer()
+        return
+    import ai_package
+    try:
+        _, date_str, which = query.data.split(":", 2)
+    except ValueError:
+        await query.answer()
+        return
+    if which == "none":
+        name = ai_package.HOLIDAY_NONE
+        shown = "без праздника"
+    else:
+        opts = (context.bot_data.get("hol_opts") or {}).get(date_str) or \
+            [o for o in ai_package._holiday_options(date_str) if o != ai_package.HOLIDAY_NONE]
+        try:
+            name = opts[int(which)]
+        except (ValueError, IndexError):
+            await query.answer("Вариант не найден, пришли /holiday ещё раз")
+            return
+        shown = name
+    ok = ai_package._holiday_set_choice(date_str, name)
+    await query.answer("Записал" if ok else "Не записалось, см. лог")
+    try:
+        await query.edit_message_text(f"🎉 {date_str}: выбрано — {shown}" + ("" if ok else " (ОШИБКА записи)"))
+    except BadRequest:
+        pass
+
+
+async def cmd_holiday(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/holiday [YYYY-MM-DD] (admin) — прислать выбор праздника на дату (без даты — на завтра).
+    Шлёт и для уже выбранных дат — можно перевыбрать."""
+    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+        return
+    arg = (context.args or [""])[0].strip()
+    if arg:
+        try:
+            date_str = datetime.strptime(arg, "%Y-%m-%d").strftime("%Y-%m-%d")
+        except ValueError:
+            await update.message.reply_text("Дата в виде 2026-11-03")
+            return
+    else:
+        date_str = (datetime.now(timezone(timedelta(hours=3))) + timedelta(days=1)).strftime("%Y-%m-%d")
+    if not await send_holiday_pick(context.bot, context, date_str):
+        await update.message.reply_text(f"На {date_str} праздника в календаре нет (assets/holidays.txt).")
 
 
 async def _send_admin_data_block(
@@ -7972,12 +8078,14 @@ def main():
     app.add_handler(CommandHandler("test_long",    cmd_test_long))
     app.add_handler(CommandHandler("reanalyze",    cmd_reanalyze))
     app.add_handler(CommandHandler("show_analyze",  cmd_show_analyze))
+    app.add_handler(CommandHandler("holiday",       cmd_holiday))
     app.add_handler(CommandHandler("b",         b_self_command))
     app.add_handler(CommandHandler("b_user",    b_command))
     app.add_handler(CommandHandler("a_user",    a_user_command))
     app.add_handler(CommandHandler("w_user",    w_user_command))
     app.add_handler(CommandHandler("news",      news_command))
     app.add_handler(CallbackQueryHandler(news_vote_callback, pattern=r"^news:"))
+    app.add_handler(CallbackQueryHandler(holiday_pick_callback, pattern=r"^hol:"))
     app.add_handler(CommandHandler("w_user_light", w_user_light_command))
     app.add_handler(CommandHandler("l_user",    l_user_command))
     app.add_handler(CommandHandler("p_b",       p_b_self_command))
@@ -8030,6 +8138,7 @@ def main():
     job_queue.run_repeating(scheduled_wakeup_poll, interval=900, first=120)                              # каждые 15 мин (окно 06:00–09:00 МСК внутри)
     job_queue.run_repeating(check_new_users, interval=300, first=90)                                     # каждые 5 мин — новые записи в users
     job_queue.run_daily(scheduled_brief_comment, time=time(hour=16, minute=0))                           # 19:00 МСК — бриф до рассылки
+    job_queue.run_daily(scheduled_holiday_pick,  time=time(hour=15, minute=0), days=(1, 4, 6))          # 18:00 МСК пн/чт/сб — праздник на завтра админу
 
     import oauth_server as _oauth
     _oauth.set_telegram_app(app)

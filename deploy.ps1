@@ -46,6 +46,29 @@ scp -i $SSH_KEY "D:/running-bot/CHANGELOG.md" "${REMOTE}:/opt/running-bot/"
 Stop-IfFailed "scp CHANGELOG.md"
 scp -i $SSH_KEY "D:/running-bot/CLAUDE.md"    "${REMOTE}:/opt/running-bot/"
 Stop-IfFailed "scp CLAUDE.md"
+# 09.10.2026: vybor prazdnika, zapisannyj botom na servere (stroki s done:), vazhnee lokalnogo kalendarya -
+# zabiraem ego v lokalnyj fajl pered kopirovaniem, inache scp -r ego zatrjot
+$holLocal = "D:/running-bot/assets/holidays.txt"
+$holTmp   = Join-Path $env:TEMP "holidays_server.txt"
+if (Test-Path $holTmp) { Remove-Item $holTmp -Force }
+scp -i $SSH_KEY "${REMOTE}:/opt/running-bot/assets/holidays.txt" $holTmp
+if (Test-Path $holTmp) {
+    $srv = @{}
+    foreach ($l in [System.IO.File]::ReadAllLines($holTmp, $enc)) {
+        if ($l -match "^(\d\d-\d\d)\t.*\tdone:\d{4}\s*$") { $srv[$matches[1]] = $l }
+    }
+    if ($srv.Count -gt 0) {
+        $out = New-Object System.Collections.Generic.List[string]
+        foreach ($l in [System.IO.File]::ReadAllLines($holLocal, $enc)) {
+            if ($l -match "^(\d\d-\d\d)\t" -and $srv.ContainsKey($matches[1])) { $out.Add($srv[$matches[1]]); $srv.Remove($matches[1]) }
+            else { $out.Add($l) }
+        }
+        foreach ($k in @($srv.Keys)) { $out.Add($srv[$k]) }
+        [System.IO.File]::WriteAllText($holLocal, (($out -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding $false))
+        Write-Host "    holidays.txt: vybor admina s servera perenesjon v lokalnyj fajl" -ForegroundColor Yellow
+    }
+    Remove-Item $holTmp -Force
+}
 # 06.10.2026: fony kartochki i kalendar prazdnikov (assets/) - *.py ikh ne lovit
 scp -r -i $SSH_KEY "D:/running-bot/assets"    "${REMOTE}:/opt/running-bot/"
 Stop-IfFailed "scp assets/"

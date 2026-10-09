@@ -1292,7 +1292,7 @@ def _holiday_set_choice(wdate, name: str) -> bool:
     for line in lines:
         rec = _holiday_parse_line(line)
         if rec and rec[0] == key and not found:
-            opts = [x for x in rec[1] if x != name]
+            opts = [x for x in rec[1] if x != name and x != HOLIDAY_NONE]   # «-» не тащим в запасные
             out.append(f"{key}\t{' | '.join([name] + opts)}\tdone:{d.year}")
             found = True
         else:
@@ -1310,10 +1310,13 @@ def _holiday_set_choice(wdate, name: str) -> bool:
     return True
 
 
+HOLIDAY_NONE = "-"   # первый вариант «-» = админ выбрал «без праздника» (строка в шапку не идёт)
+
+
 def _holiday_for(wdate) -> str | None:
-    """Основной праздник на дату (первый вариант строки) или None."""
+    """Основной праздник на дату (первый вариант строки) или None; «-» — без праздника."""
     opts = _holiday_options(wdate)
-    return opts[0] if opts else None
+    return opts[0] if opts and opts[0] != HOLIDAY_NONE else None
 
 
 def _holiday_line(wdate) -> str | None:
