@@ -2,7 +2,7 @@ import os
 import asyncio
 import logging
 from datetime import datetime, time, timedelta, timezone
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from telegram.error import BadRequest, TimedOut, NetworkError, Forbidden
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, CallbackQueryHandler,
@@ -7354,14 +7354,25 @@ async def _report_send(context, user_id: int, msg, res: dict, chart_items: list,
         menu_btn = InlineKeyboardMarkup(list(top_rows) + list(menu_btn.inline_keyboard))
     btn_on_last_photo = not ai_chunks
     menu_sent = False
-    for idx, (png, cap) in enumerate(chart_items):
-        attach = btn_on_last_photo and idx == len(chart_items) - 1
-        with open(png, "rb") as f:
-            await context.bot.send_photo(
-                user_id, photo=f, caption=cap,
-                reply_markup=menu_btn if attach else None)
-        if attach:
-            menu_sent = True
+    if len(chart_items) >= 2:
+        # 09.10.2026 (Антон): картинки разбора одним альбомом — листаются в одном сообщении, у каждой
+        # своя подпись. К альбому кнопки не вешаются: без текста ИИ меню уходит отдельным «Готово.».
+        files = [open(png, "rb") for png, _ in chart_items]
+        try:
+            await context.bot.send_media_group(
+                user_id, media=[InputMediaPhoto(f, caption=cap) for f, (_, cap) in zip(files, chart_items)])
+        finally:
+            for f in files:
+                f.close()
+    else:
+        for idx, (png, cap) in enumerate(chart_items):
+            attach = btn_on_last_photo and idx == len(chart_items) - 1
+            with open(png, "rb") as f:
+                await context.bot.send_photo(
+                    user_id, photo=f, caption=cap,
+                    reply_markup=menu_btn if attach else None)
+            if attach:
+                menu_sent = True
     if ai_chunks:
         for i, ch in enumerate(ai_chunks):
             attach = i == len(ai_chunks) - 1

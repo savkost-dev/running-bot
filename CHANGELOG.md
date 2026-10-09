@@ -5,6 +5,13 @@
 
 ---
 
+## [0.49.5] 2026-10-09 — Разбор: картинки альбомом; long2 — записи о переименовании
+
+### Изменено
+- **`bot._report_send`** (общая для `/report` и `/report_long`) — при двух и более картинках `send_media_group` с `InputMediaPhoto(caption=…)`; одна картинка — `send_photo` как раньше; кнопки на последнем текстовом чанке или на «Готово.». Импорт `InputMediaPhoto`.
+- **Переименование в long2** (код ушёл с 0.49.4 выкладкой чата интервальной): `src/long_ai.py` → `src/long2.py`; `cmd_test_long` → `cmd_long2` (`/long2`), `_long_ai_compute` → `_long2_compute`, `_run_long_ai` → `_run_long2`, `_run_long_ai_shadow` → `_run_long2_shadow`, `test_long_user_callback` → `long2_user_callback`, `LONG_AI_SHADOW_KIND` → `LONG2_SHADOW_KIND = "shadow_long2"`, `PROMPT_LONG_AI` → `PROMPT_LONG2`, `build_long_ai_package` → `build_long2_package`, `LONG_ENGINE` `"long2"`/`"long1"`; `claude_advisor`: `from long2 import …`. База: 68 строк `recommendation_history.run_kind` `shadow_long_ai` → `shadow_long2`. На сервере удалён устаревший `src/long_ai.py`.
+
+---
 ## [0.49.4] 2026-10-09 — Праздник дня в рекомендации, лонге и брифе
 
 ### Изменено
