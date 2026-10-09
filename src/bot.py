@@ -1287,8 +1287,8 @@ def _build_help_text(is_admin: bool) -> str:
             "/test_long — тест лонга через ИИ (тестовая ветка, в базу не пишет): p — промт и данные без ИИ, u — выбрать пользователя, 39 — по id, smart|fast — режим\n"
             "/reanalyze — боевой переразбор анонса (запись в базу + эталоны + бриф)\n"
             "/show_analyze — показать последний Шаг 1 из базы\n"
-            "/holiday — выбор праздника дня с кнопками (без даты — на завтра; /holiday 2026-11-03)\n"
-            "/bg — нарисовать фон на дату (/bg 2026-11-03; p — только задание без картинки; свой текст — рисовать по нему)\n"
+            "/holiday — выбор праздника дня с кнопками (без даты — на завтра; /holiday 1103, 20261103 или 2026-11-03)\n"
+            "/bg — нарисовать фон на дату (/bg 1103; p — только задание без картинки; свой текст — рисовать по нему)\n"
             "/b — вариант B для себя\n"
             "/b_user — вариант B для выбранного пользователя\n"
             "/a_user — вариант A для выбранного пользователя\n"
@@ -3888,11 +3888,10 @@ async def cmd_bg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     args = list(context.args or [])
     date_str = (datetime.now(timezone(timedelta(hours=3))) + timedelta(days=1)).strftime("%Y-%m-%d")
     if args:
-        try:
-            date_str = datetime.strptime(args[0], "%Y-%m-%d").strftime("%Y-%m-%d")
+        parsed = _parse_cmd_date(args[0])   # 09.10.2026: 1103 / 20261103 / 2026-11-03, как у остальных команд
+        if parsed:
+            date_str = parsed
             args = args[1:]
-        except ValueError:
-            pass
     only_prompt = bool(args) and args[0].lower() == "p"
     custom = None if (only_prompt or not args) else " ".join(args)
     await update.message.reply_text(f"⏳ Фон на {date_str}: " + ("пишу задание…" if only_prompt else "задание и картинка, 1–2 мин…"))
@@ -3992,10 +3991,9 @@ async def cmd_holiday(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
     arg = (context.args or [""])[0].strip()
     if arg:
-        try:
-            date_str = datetime.strptime(arg, "%Y-%m-%d").strftime("%Y-%m-%d")
-        except ValueError:
-            await update.message.reply_text("Дата в виде 2026-11-03")
+        date_str = _parse_cmd_date(arg)   # 09.10.2026: общий разбор дат — 1103 / 20261103 / 2026-11-03
+        if not date_str:
+            await update.message.reply_text("Не понял дату. Формат: /holiday 1103, 20261103 или 2026-11-03")
             return
     else:
         date_str = (datetime.now(timezone(timedelta(hours=3))) + timedelta(days=1)).strftime("%Y-%m-%d")
