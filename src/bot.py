@@ -1,4 +1,5 @@
 import os
+import uuid
 import asyncio
 import logging
 from datetime import datetime, time, timedelta, timezone
@@ -7384,6 +7385,11 @@ async def _report_send(context, user_id: int, msg, res: dict, chart_items: list,
     if not menu_sent:
         await context.bot.send_message(
             user_id, "Готово.", reply_markup=menu_btn)
+    for png, _ in chart_items:   # 09.10.2026: PNG разового разбора больше не нужны
+        try:
+            os.remove(png)
+        except OSError:
+            pass
 
 
 async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
@@ -7478,6 +7484,9 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
         context.user_data["report_cand"] = {"db_user_id": db_user_id, "act_id": str(res.get("act_id")),
                                             "cand": res["cand"]}
 
+    # 09.10.2026 (Антон): имена PNG уникальны на запуск — два разбора подряд (интервал и лонг) писали в одни
+    # и те же /tmp/card_<id>.png и charts_<id>.png, и второй затирал первый до отправки
+    _tag = f"{db_user_id}_{uuid.uuid4().hex[:6]}"
     # Картинки: карточка разбора + графики одной вертикальной PNG.
     # Фолбэк на старые 3 PNG, если карточка не построилась.
     chart_items = []
@@ -7486,7 +7495,7 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
         card = await build_report_card(
             res.get("splits"), res.get("plan_steps"), res["name"],
             res.get("wdate"), res.get("wgroup"), res.get("source"),
-            res.get("s4"), "/tmp", str(db_user_id), dark=False,
+            res.get("s4"), "/tmp", _tag, dark=False,
             splits400=res.get("splits400"),
             no_gps=bool(res.get("no_gps")), by_watch_plan=bool(res.get("by_watch_plan")),
             by_stryd=bool(res.get("by_stryd")), cut_by_plan=bool(res.get("cut_by_plan")),
@@ -7494,7 +7503,7 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
         if card:
             stacked = await build_charts_stacked(
                 res.get("splits"), res.get("plan_steps"), res["name"],
-                "/tmp", str(db_user_id), dark=False, source=res.get("source") or "",
+                "/tmp", _tag, dark=False, source=res.get("source") or "",
                 splits_fine=res.get("splits100"), wdate=res.get("wdate"))
             chart_items = [(p, c) for p, c in (
                 (card, "@DD_adviser_bot · dodick.run"),
@@ -7505,7 +7514,7 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
         try:
             from ai_package import build_charts
             charts = await build_charts(res.get("splits"), res.get("plan_steps"),
-                                        res["name"], "/tmp", str(db_user_id), dark=False)
+                                        res["name"], "/tmp", _tag, dark=False)
         except Exception as e:
             logger.error(f"/report charts error: {e}", exc_info=True)
             charts = {}
@@ -7611,6 +7620,9 @@ async def cmd_report_long(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await msg.edit_text(f"⚠️ {res.get('msg')}")
         return
 
+    # 09.10.2026 (Антон): имена PNG уникальны на запуск — два разбора подряд (интервал и лонг) писали в одни
+    # и те же /tmp/card_<id>.png и charts_<id>.png, и второй затирал первый до отправки
+    _tag = f"{db_user_id}_{uuid.uuid4().hex[:6]}"
     # Картинки: карточка лонга + графики одной вертикальной PNG.
     # Фолбэк на старые 3 PNG, если карточка не построилась.
     chart_items = []
@@ -7618,14 +7630,14 @@ async def cmd_report_long(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         card = await build_long_card(
             res.get("splits"), res.get("plan_steps"), res["name"],
             res.get("wdate"), res.get("wgroup"), res.get("source"),
-            res.get("s4"), "/tmp", str(db_user_id), dark=False,
+            res.get("s4"), "/tmp", _tag, dark=False,
             splits400=res.get("splits400"),
             no_gps=bool(res.get("no_gps")), by_watch_plan=bool(res.get("by_watch_plan")),
             by_stryd=bool(res.get("by_stryd")))
         if card:
             stacked = await build_long_charts_stacked(
                 res.get("splits"), res.get("plan_steps"), res["name"],
-                "/tmp", str(db_user_id), dark=False, source=res.get("source") or "",
+                "/tmp", _tag, dark=False, source=res.get("source") or "",
                 splits_fine=res.get("splits100"), wdate=res.get("wdate"))
             chart_items = [(p, c) for p, c in (
                 (card, "@DD_adviser_bot · dodick.run"),
@@ -7635,7 +7647,7 @@ async def cmd_report_long(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if not chart_items:
         try:
             charts = await build_long_charts(res.get("splits"), res.get("plan_steps"),
-                                             res["name"], "/tmp", str(db_user_id), dark=False)
+                                             res["name"], "/tmp", _tag, dark=False)
         except Exception as e:
             logger.error(f"/report_long charts error: {e}", exc_info=True)
             charts = {}
