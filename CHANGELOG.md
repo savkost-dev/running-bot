@@ -5,6 +5,12 @@
 
 ---
 
+## [0.47.3] 2026-10-09 — Лонг через ИИ в бою: LONG_ENGINE
+
+### Изменено
+- **`bot.LONG_ENGINE = "ai"`** — в `_send_recommendation` при `long`: `rec_mode` считается до advice; ветка `_long_ai_compute(db_user_id, mode, analysis=, live=, status=, recovery=user_data["recovery"])` → `advice`, `stats2`; при `not ok`/нет advice/исключении — `logger.warning/error` и прежний путь `recommendation_to_long_advice` + `generate_step2_prose` (обёрнут в `if not _ai_long`). В advice ИИ добавляются `reason` (= `strategy_reason`) и `recommended_pace` для `build_morning_prompt`. **`_long_ai_compute`** — параметр `recovery`, при передаче не ходит в `_get_unified_recovery`. Проверено на сервере копией кода с подменённой отправкой на админе: ai → тело с типами, окно FIT, `_rating_data`; formula → прежнее тело.
+
+---
 ## [0.47.2] 2026-10-09 — Тест лонга через ИИ: тип V в шкале жёлтым со сноской
 
 ### Изменено

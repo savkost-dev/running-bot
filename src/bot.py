@@ -3759,6 +3759,11 @@ def _user_has_data(db_user_id: int) -> bool:
 # 07.10.2026 (Антон): блок «🔬 Данные для рекомендации» выключен — приходил после каждой рекомендации.
 # Вернуть: ADMIN_DATA_BLOCK = True. Сам блок и вызовы не трогались.
 ADMIN_DATA_BLOCK = False
+# 09.10.2026 (Антон, шаг 2 к боевому лонгу через ИИ): движок лонга для пользователей — кнопка «Long Run»
+# и вечерняя рассылка. "ai" — ветка long_ai (_long_ai_compute: типы I–V, промт PROMPT_LONG_AI);
+# "formula" — прежний recommend_long + проза Шага 2. При ошибке или таймауте ИИ — откат на формулу
+# для этого человека. Откат целиком: LONG_ENGINE = "formula". Админские /test_workout и /p_a не затронуты.
+LONG_ENGINE = "ai"
 
 
 async def _send_admin_data_block(
@@ -4242,8 +4247,37 @@ async def _send_recommendation(
     weather_line = format_weather_for_message(weather) if weather else ""
     has_tracker = any(get_token(db_user_id, s) for s in ("garmin", "coros", "coros_mcp", "polar", "strava"))
 
+    # Режим рекомендации (Шаг 2) из настроек пользователя; анализ (Шаг 1) всегда deep
+    rec_mode = force_mode or (get_preferences(db_user_id) or {}).get("ai_mode", "smart")
+    if is_broadcast and not force_mode:
+        # 15.09.2026: рассылка — только «умный» (см. выше) — для calc/long-пути
+        rec_mode = "smart"
+
+    # 09.10.2026 (Антон, шаг 2): лонг — через ИИ (LONG_ENGINE="ai"), при сбое — формула, как раньше
+    _ai_long, stats2 = False, None
+    if long and LONG_ENGINE == "ai":
+        try:
+            _ai_mode = {"calc": "fast", "deep": "smart"}.get(rec_mode, rec_mode)
+            _res_ai = await _long_ai_compute(db_user_id, _ai_mode, analysis=analysis, live=live, status=status,
+                                             recovery=user_data["recovery"])
+            if _res_ai.get("ok") and _res_ai.get("advice"):
+                advice, stats2, _ai_long = _res_ai["advice"], _res_ai.get("stats"), True
+                # поля, которые читает утренняя проверка (build_morning_prompt): обоснование и темп
+                advice.setdefault("reason", advice.get("strategy_reason") or "")
+                if not advice.get("recommended_pace"):
+                    _fp, _sp = advice.get("first_half_pace"), advice.get("second_half_pace")
+                    advice["recommended_pace"] = (f"{_fp} → {_sp}" if advice.get("run_strategy") == "progressive" and _sp
+                                                  else (_fp or ""))
+            else:
+                logger.warning(f"long_ai → откат на формулу для user {db_user_id}: "
+                               f"{_res_ai.get('msg') or ('таймаут' if _res_ai.get('timeout') else 'нет advice')}")
+        except Exception as e:
+            logger.error(f"long_ai → откат на формулу для user {db_user_id}: {e}", exc_info=True)
+
     # Числа/структура — формулами (детерминированно)
-    if long:
+    if long and _ai_long:
+        pass   # advice уже от ИИ
+    elif long:
         advice = claude_advisor.recommendation_to_long_advice(rec, analysis, user_data["recovery"])
     else:
         advice = claude_advisor.recommendation_to_advice(rec, analysis, user_data["recovery"])
@@ -4261,49 +4295,45 @@ async def _send_recommendation(
     advice["rec_group_pace_start"], advice["rec_group_pace_end"], \
         advice["rec_group_progression"] = _extract_group_pace(_adv_grp)
 
-    # Режим рекомендации (Шаг 2) из настроек пользователя; анализ (Шаг 1) всегда deep
-    rec_mode = force_mode or (get_preferences(db_user_id) or {}).get("ai_mode", "smart")
-    if is_broadcast and not force_mode:
-        # 15.09.2026: рассылка — только «умный» (см. выше) — для calc/long-пути
-        rec_mode = "smart"
-    main = rec.get("main_group") or {}
-    _profile = get_user_profile(db_user_id) or {}
-    _rec_group_num = str(advice.get("recommended_group") or "")
-    _rec_grp = next(
-        (g for g in analysis.get("groups", []) if str(g.get("number", "")) == _rec_group_num),
-        None,
-    )
-    _rg_ps, _rg_pe, _rg_prog = _extract_group_pace(_rec_grp or {})
-    facts = {
-        "group": advice.get("recommended_group"),
-        "pace": advice.get("recommended_pace") or advice.get("first_half_pace"),
-        "zone": main.get("zone_disp") or main.get("zone_label"),
-        "pct": main.get("pct"),
-        "suitability": advice.get("suitability_percentages"),
-        "specialization": rec.get("specialization_label") or user_data.get("specialization"),
-        "character": rec.get("workout_character"),
-        "recovery": claude_advisor._recovery_descriptor(user_data["recovery"]),
-        "overall_purpose": analysis.get("overall_purpose"),
-        "block_contrast": analysis.get("block_contrast"),
-        "strategy": advice.get("run_strategy"),
-        "first_half_pace": advice.get("first_half_pace"),
-        "second_half_pace": advice.get("second_half_pace"),
-        "athlete_name": name or None,
-        "gender":                _profile.get("gender"),
-        "birth_year":            _profile.get("birth_year"),
-        "rec_group_pace_start":  _rg_ps,
-        "rec_group_pace_end":    _rg_pe,
-        "rec_group_progression": _rg_prog,
-        "recovery_scenario":     scenario_ctx["prompt_text"],
-    }
-    import functools
-    prose, stats2 = await asyncio.get_event_loop().run_in_executor(
-        None, functools.partial(claude_advisor.generate_step2_prose, facts, rec_mode, long))
-    # ИИ-проза поверх посчитанного (фолбэк на шаблон, если модель не ответила)
-    if prose.get("reason"):
-        advice["reason"] = prose["reason"]
-    if long and prose.get("strategy_reason"):
-        advice["strategy_reason"] = prose["strategy_reason"]
+    if not _ai_long:
+        main = rec.get("main_group") or {}
+        _profile = get_user_profile(db_user_id) or {}
+        _rec_group_num = str(advice.get("recommended_group") or "")
+        _rec_grp = next(
+            (g for g in analysis.get("groups", []) if str(g.get("number", "")) == _rec_group_num),
+            None,
+        )
+        _rg_ps, _rg_pe, _rg_prog = _extract_group_pace(_rec_grp or {})
+        facts = {
+            "group": advice.get("recommended_group"),
+            "pace": advice.get("recommended_pace") or advice.get("first_half_pace"),
+            "zone": main.get("zone_disp") or main.get("zone_label"),
+            "pct": main.get("pct"),
+            "suitability": advice.get("suitability_percentages"),
+            "specialization": rec.get("specialization_label") or user_data.get("specialization"),
+            "character": rec.get("workout_character"),
+            "recovery": claude_advisor._recovery_descriptor(user_data["recovery"]),
+            "overall_purpose": analysis.get("overall_purpose"),
+            "block_contrast": analysis.get("block_contrast"),
+            "strategy": advice.get("run_strategy"),
+            "first_half_pace": advice.get("first_half_pace"),
+            "second_half_pace": advice.get("second_half_pace"),
+            "athlete_name": name or None,
+            "gender":                _profile.get("gender"),
+            "birth_year":            _profile.get("birth_year"),
+            "rec_group_pace_start":  _rg_ps,
+            "rec_group_pace_end":    _rg_pe,
+            "rec_group_progression": _rg_prog,
+            "recovery_scenario":     scenario_ctx["prompt_text"],
+        }
+        import functools
+        prose, stats2 = await asyncio.get_event_loop().run_in_executor(
+            None, functools.partial(claude_advisor.generate_step2_prose, facts, rec_mode, long))
+        # ИИ-проза поверх посчитанного (фолбэк на шаблон, если модель не ответила)
+        if prose.get("reason"):
+            advice["reason"] = prose["reason"]
+        if long and prose.get("strategy_reason"):
+            advice["strategy_reason"] = prose["strategy_reason"]
 
     # Футер отражает СВОЙ экран — режим/стоимость рекомендации (Шаг 2), не анализа
     if long:
@@ -7428,7 +7458,7 @@ async def test_long_user_callback(update: Update, context: ContextTypes.DEFAULT_
 
 async def _long_ai_compute(db_user_id: int, mode: str, prompt_only: bool = False,
                            analysis: dict | None = None, live: dict | None = None,
-                           status: str = "") -> dict:
+                           status: str = "", recovery: dict | None = None) -> dict:
     """Расчёт тестовой рекомендации лонга через ИИ для ОДНОГО человека, без отправки сообщений
     (07.10.2026, Антон: одна функция для /test_long <id> и прогона по всем).
     analysis / live — можно передать готовые (прогон читает анонс один раз); иначе читаются здесь.
@@ -7465,9 +7495,10 @@ async def _long_ai_compute(db_user_id: int, mode: str, prompt_only: bool = False
     # прошёл — кэш; и тот же сценарий времени (_recovery_scenario) в промт и в шапку сообщения.
     _is_past = _workout_is_past(workout_dict.get("workout_date", ""), workout_dict.get("schedule", "") or "")
     workout_dict["is_past"] = _is_past
-    recovery = None
+    _rec_given = recovery is not None   # боевой путь передаёт уже полученное восстановление — второй раз не ходим
     try:
-        recovery = await _get_unified_recovery(db_user_id, force_fresh=not _is_past)
+        if not _rec_given:
+            recovery = await _get_unified_recovery(db_user_id, force_fresh=not _is_past)
     except Exception as e:
         logger.warning(f"/test_long recovery error for {db_user_id}: {e}")
     scenario_ctx = _recovery_scenario(workout_dict, (recovery or {}).get("data_fetched_at"))
