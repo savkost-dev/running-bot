@@ -3671,6 +3671,15 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             report += "\n❌ Не дошло:\n" + "\n".join(failed[:20])
         await update.message.reply_text(report)
         return
+    # ── фон: своё задание после кнопки «✏️ Своё задание» (admin, 09.10.2026) ──
+    elif context.user_data.get("awaiting_bg_prompt") and user.id in ADMIN_TELEGRAM_IDS:
+        date_str = context.user_data.pop("awaiting_bg_prompt")
+        if text.strip().lower() in ("отмена", "cancel", "/cancel"):
+            await update.message.reply_text("Отменено, фон не трогаю.")
+            return
+        await update.message.reply_text(f"⏳ Рисую фон на {date_str} по твоему заданию, около минуты…")
+        context.application.create_task(bg_make_and_preview(context, date_str, prompt=text.strip()))
+        return
     # ── /msg_list: текст по списку адресатов (admin, 12.09.2026) ──
     elif context.user_data.get("awaiting_msg_list"):
         targets = context.user_data.pop("awaiting_msg_list")
@@ -3804,7 +3813,8 @@ async def bg_make_and_preview(context, date_str: str, shift: int = 0, prompt: st
     context.bot_data.setdefault("bg_prompt", {})[date_str] = prompt
     kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Оставить", callback_data=f"bg:{date_str}:keep"),
                                 InlineKeyboardButton("🔁 Перерисовать", callback_data=f"bg:{date_str}:redo"),
-                                InlineKeyboardButton("🚫 Без фона", callback_data=f"bg:{date_str}:none")]])
+                                InlineKeyboardButton("🚫 Без фона", callback_data=f"bg:{date_str}:none")],
+                               [InlineKeyboardButton("✏️ Своё задание", callback_data=f"bg:{date_str}:edit")]])
     caption = f"{head} · {info}\nСохранено, без ответа останется.\n\n{prompt}"[:1000]
     try:
         with open(path, "rb") as f:
@@ -3840,6 +3850,14 @@ async def bg_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             await query.edit_message_caption(caption=f"🚫 {date_str}: фон убран, карточка выйдет без картинки.")
         except BadRequest:
             pass
+        return
+    if action == "edit":
+        await query.answer()
+        prompt = (context.bot_data.get("bg_prompt") or {}).get(date_str) or ""
+        context.user_data["awaiting_bg_prompt"] = date_str
+        await context.bot.send_message(
+            ADMIN_ID, f"✏️ Задание на {date_str}. Скопируй, поправь и пришли следующим сообщением — нарисую по нему. "
+                      f"«отмена» — ничего не делать.\n\n{prompt}")
         return
     if action == "redo":
         await query.answer("Рисую заново…")
