@@ -35,6 +35,20 @@ import activity_review as ar
 _fmt_pace = ar._pace_formatter
 _fmt_time = ar._fmt_time
 
+
+def _fmt_dur(sec):
+    """09.10.2026 (Антон): короткие отрезки — с десятыми («27.3»), иначе на 150 м целые секунды съедают
+    разницу (0:27 — это и 26.6, и 27.4, в темпе 2:57 против 3:03). От минуты — как раньше, м:сс.
+    Сотые не показываем: длительность круга с часов — нажатие кнопки, точнее десятых она не бывает."""
+    if sec is None:
+        return "—"
+    try:
+        v = float(sec)
+    except (TypeError, ValueError):
+        return "—"
+    return f"{v:.1f}" if v < 59.95 else _fmt_time(v)
+
+
 PROMPT = (
     "Ты тренер бегового клуба. Накануне была тренировка для разных групп по уровню подготовки. "
     "Мне была дана рекомендация с %% подходимости для каждой группы. "
@@ -1008,7 +1022,7 @@ async def build_package(db_user_id: int, selector=None, cut_by_plan: bool = Fals
       f"{'ЧССср':>5} {'ЧССмакс':>7} {'ЧССперед':>8}")
     for r in rows:
         A(f"  {r['label'] or '·':>5} {r['role']:<6} {_num(r['dist']):>4}м "
-          f"{_fmt_time(r['dur']):>6} {_fmt_pace(r['pace']):>6} "
+          f"{_fmt_dur(r['dur']):>6} {_fmt_pace(r['pace']):>6} "
           f"{_num(r['avg_hr']):>5} {_num(r['max_hr']):>7} {_num(r['hr_before']):>8}")
     def _wpace(rr_):
         d = sum(r["dist"] for r in rr_ if r["dist"])
@@ -1731,7 +1745,7 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
                     et = (ar._seg_etalon(m, i) if m["role"] == "work"
                           else (sum(m["bounds"]) / 2.0 if m["bounds"] else None))
                     dev, color = _dev(lap["pace"], et)
-                    row += [_fmt_time(lap["dur"]), _fmt_pace(lap["pace"]), dev]
+                    row += [_fmt_dur(lap["dur"]), _fmt_pace(lap["pace"]), dev]
                     if color:
                         sec_fill[(len(sec_rows) + 1, col + 2)] = _FILL[color]
                 else:
@@ -1760,7 +1774,7 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
                     p, dist = sp[k - 1]
                     dev, color = _dev(p, ar._seg_etalon(metas[st], i))
                     col = 1 + 3 * blk["steps"].index(st)
-                    sub[col:col + 3] = [_fmt_time(p * dist / 1000.0), _fmt_pace(p), dev]
+                    sub[col:col + 3] = [_fmt_dur(p * dist / 1000.0), _fmt_pace(p), dev]
                     if color:
                         sec_fill[(len(sec_rows) + 1, col + 2)] = _FILL[color]
                 sec_rows.append(sub)
@@ -1770,7 +1784,7 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
             dists = [s[st]["dist"] for s in blk["series"] if st in s and s[st]["dist"]]
             # Средний темп — взвешенный: Σвремя / Σдистанция (не среднее темпов).
             wpace = (sum(durs) / (sum(dists) / 1000)) if (durs and dists) else None
-            avg_row += [_fmt_time(sum(durs) / len(durs)) if durs else "—",
+            avg_row += [_fmt_dur(sum(durs) / len(durs)) if durs else "—",
                         _fmt_pace(wpace) if wpace else "—", ""]
         sec_rows.append(avg_row)
         work_lbls = [metas[st]["label"] for st in blk["steps"] if metas[st]["role"] == "work"]

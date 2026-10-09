@@ -839,11 +839,17 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
         if d == 0:
             return "0", None
         sign = "+" if d > 0 else "−"
-        return f"{sign}{abs(d)}", ar._delta_color(abs(d))
+        color = ar._delta_color(abs(d))
+        # 09.10.2026 (Антон): как у интервальной — быстрее цели синие (голубой 5–10, синий >10):
+        # «забегаешь» — не то же, что «не держишь темп»; в пределах ±5 — зелёный
+        if d < 0 and color != "green":
+            color = "skyblue" if color == "gold" else "blue"
+        return f"{sign}{abs(d)}", color
 
     # ── Данные таблицы (зона 2): секции по блокам, строки = серии в хронологии ──
     blocks = _series_model(ordered, plan_steps)
-    _FILL = {"green": "#2e7d32", "gold": "#b8860b", "red": "#c62828"}
+    _FILL = {"green": "#2e7d32", "gold": "#b8860b", "red": "#c62828",
+             "skyblue": "#4a90c8", "blue": "#1a4f9c"}
     sections = []
     for blk in blocks:
         n_series = len(blk["series"])
