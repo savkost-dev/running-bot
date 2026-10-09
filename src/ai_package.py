@@ -1224,24 +1224,96 @@ def _theme_date(wdate) -> date | None:
     return None
 
 
-def _holiday_for(wdate) -> str | None:
-    """Название праздника на дату из assets/holidays.txt или None."""
+def _holiday_parse_line(line: str):
+    """«MM-DD<TAB>Основной | Запасной<TAB>done:2026» -> (key, [варианты], status) или None.
+    Пробел вместо первой табуляции допустим (старые строки)."""
+    line = line.strip()
+    if not line or line.startswith("#"):
+        return None
+    parts = line.split("\t")
+    if len(parts) == 1:
+        parts = line.split(" ", 1)
+    if len(parts) < 2:
+        return None
+    key = parts[0].strip()
+    opts = [x.strip() for x in parts[1].split("|") if x.strip()]
+    status = parts[2].strip() if len(parts) > 2 else ""
+    return key, opts, status
+
+
+def _holiday_entry(wdate):
+    """(варианты, статус) на дату из assets/holidays.txt; ([], "") если нет."""
     d = _theme_date(wdate)
     if not d or not os.path.exists(HOLIDAYS_FILE):
-        return None
+        return [], ""
     key = d.strftime("%m-%d")
     try:
         with open(HOLIDAYS_FILE, encoding="utf-8") as f:
             for line in f:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                parts = line.split("\t", 1) if "\t" in line else line.split(" ", 1)
-                if len(parts) == 2 and parts[0].strip() == key and parts[1].strip():
-                    return parts[1].strip()
+                rec = _holiday_parse_line(line)
+                if rec and rec[0] == key:
+                    return rec[1], rec[2]
     except OSError as e:
         logger.warning(f"card theme: holidays.txt не читается: {e}")
-    return None
+    return [], ""
+
+
+def _holiday_options(wdate) -> list[str]:
+    """Варианты праздника на дату: [основной, запасной, ...] или [].
+    Строка файла: «MM-DD<TAB>Основной | Запасной 1 | Запасной 2<TAB>done:ГГГГ» (09.10.2026, шаг 1
+    автоматизации: основной идёт в шапку, запасные — для выбора админом накануне; третья колонка —
+    выбор сделан, цикл по дате в этом году закончен, строку при обновлении календаря не трогать)."""
+    return _holiday_entry(wdate)[0]
+
+
+def _holiday_done(wdate) -> bool:
+    """Цикл выбора по дате закончен в году даты (статус done:ГГГГ)."""
+    d = _theme_date(wdate)
+    if not d:
+        return False
+    return _holiday_entry(wdate)[1] == f"done:{d.year}"
+
+
+def _holiday_set_choice(wdate, name: str) -> bool:
+    """Записывает выбор админа: name становится основным (первым), в третьей колонке done:ГГГГ.
+    Если строки на дату нет — добавляется в конец. Файл переписывается целиком через временный,
+    комментарии и прочие строки сохраняются. Возвращает True при успехе."""
+    d = _theme_date(wdate)
+    name = (name or "").strip()
+    if not d or not name:
+        return False
+    key = d.strftime("%m-%d")
+    try:
+        lines = open(HOLIDAYS_FILE, encoding="utf-8").read().splitlines() if os.path.exists(HOLIDAYS_FILE) else []
+    except OSError as e:
+        logger.warning(f"card theme: holidays.txt не читается: {e}")
+        return False
+    out, found = [], False
+    for line in lines:
+        rec = _holiday_parse_line(line)
+        if rec and rec[0] == key and not found:
+            opts = [x for x in rec[1] if x != name]
+            out.append(f"{key}\t{' | '.join([name] + opts)}\tdone:{d.year}")
+            found = True
+        else:
+            out.append(line)
+    if not found:
+        out.append(f"{key}\t{name}\tdone:{d.year}")
+    tmp = HOLIDAYS_FILE + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+            f.write("\n".join(out) + "\n")
+        os.replace(tmp, HOLIDAYS_FILE)
+    except OSError as e:
+        logger.warning(f"card theme: holidays.txt не записался: {e}")
+        return False
+    return True
+
+
+def _holiday_for(wdate) -> str | None:
+    """Основной праздник на дату (первый вариант строки) или None."""
+    opts = _holiday_options(wdate)
+    return opts[0] if opts else None
 
 
 def _holiday_line(wdate) -> str | None:
