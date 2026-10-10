@@ -3328,9 +3328,10 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _mark_user_active_if_needed(user.id, user.full_name, user.username)
 
     # 10.10.2026 (Антон): кнопки под строкой ввода — раньше любых ожиданий ввода
-    if text in (RK_WORKOUT, RK_LONG, RK_MENU):
+    if text in (RK_WORKOUT, RK_LONG, RK_MENU, "☰ Меню"):   # «☰ Меню» — старая подпись, клавиатура у людей обновится по /start
         db_user_id = get_or_create_user(user.id, user.full_name, user.username)
-        if text == RK_MENU:
+        await _delete_quietly(context.bot, user.id, update.message.message_id)   # само нажатие в чате не нужно
+        if text in (RK_MENU, "☰ Меню"):
             await _send_main_menu_new(context.bot, user, db_user_id)
             return
         is_long = text == RK_LONG
