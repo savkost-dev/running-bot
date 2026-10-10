@@ -1445,11 +1445,33 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _items = sorted(lr["by_group"].items(),
                         key=lambda kv: float(str(kv[0]).replace(",", "."))
                         if str(kv[0]).replace(",", ".").replace(".", "").isdigit() else 99)
+        _types_line = ""
+        if lr.get("wtype") == "long":
+            # 10.10.2026 (Антон): у лонга группы с прогрессом отдельно («2» и «2+»), быстрые сверху, и типы I–V
+            _recs = get_recommendations_for_date(lr["date"])
+            if any(r.get("long2") for r in _recs):
+                import long2 as _l2
+                _bg: dict[str, int] = {}
+                _bt: dict[str, int] = {}
+                for r in _recs:
+                    g = str(r["recommended_group"] or "—") + ("+" if (r.get("long2") or {}).get("progressive") else "")
+                    _bg[g] = _bg.get(g, 0) + 1
+                    t = _l2.LONG_TYPE_ROMAN.get(str((r.get("long2") or {}).get("type") or "").lower(), "?")
+                    _bt[t] = _bt.get(t, 0) + 1
+
+                def _vk(v):
+                    try:
+                        return (-float(v.rstrip("+").replace(",", ".")), 1 if v.endswith("+") else 0)
+                    except ValueError:
+                        return (99.0, 1)
+                _items = sorted(_bg.items(), key=lambda kv: _vk(kv[0]), reverse=True)
+                _to = list(_l2.LONG_TYPE_ROMAN.values()) + ["?"]
+                _types_line = "Типы: " + " · ".join(f"{t} {n}" for t, n in sorted(_bt.items(), key=lambda kv: _to.index(kv[0]) if kv[0] in _to else 99)) + "\n"
         _mx = max((n for _, n in _items), default=0) or 1
         _w = max((len(f"гр{g}") for g, _ in _items), default=3)
 
         def _tail(g):
-            c = _pfg.get(str(g))
+            c = None if str(g).endswith("+") else _pfg.get(str(g))   # ответы по темпу считаются по группе без «+»
             if not c:
                 return ""
             parts = [f"{e}{c[k]}" for e, k in (("🚀", "faster"), ("🎯", "ok"), ("🐢", "slower")) if c.get(k)]
@@ -1464,7 +1486,7 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reminders = max(lr["subscribed"] - lr["rec_total"], 0)
         reco_line = (f"{lr['wtype']}, {lr['date']}: получателей {lr['subscribed']} = "
                      f"рекомендаций {lr['rec_total']} + напоминаний {reminders}\n"
-                     f"{by_g}")
+                     f"{by_g}{_types_line}")
 
     if _pfd and _pfc:
         _pfn = sum(_pfc.values())
