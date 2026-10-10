@@ -5,6 +5,12 @@
 
 ---
 
+## [0.49.20] 2026-10-10 — /admin_data on|off
+
+### Добавлено
+- **`bot.cmd_admin_data`**, `_admin_data_block_on()` — `bot_settings["admin_data_block"]` (`on`/`off`), по умолчанию `ADMIN_DATA_BLOCK`; `_send_admin_data_block` читает через функцию. Строка в админской справке.
+
+---
 ## [0.49.19] 2026-10-10 — «Как учитывать»: дни в тексте от сегодняшнего дня
 
 ### Изменено

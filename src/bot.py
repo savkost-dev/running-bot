@@ -1319,6 +1319,7 @@ def _build_help_text(is_admin: bool) -> str:
             "/test_workout — тест Шага 2 (рекомендация группы) на твоих данных\n"
             "/long2 — лонг2 (ветка ИИ, тот же движок, что у /long) на своих данных, в базу не пишет: p — промт и данные без ИИ, u — выбрать пользователя, 39 — по id, smart|fast — режим, all [N] — прогон по всем в историю (shadow_long2)\n"
             "/reanalyze — боевой переразбор анонса (запись в базу + эталоны + бриф)\n"
+            "/admin_data on|off — блок «🔬 Данные для рекомендации» после каждой рекомендации\n"
             "/show_analyze — показать последний Шаг 1 из базы\n"
             "/holiday — выбор праздника дня с кнопками (без даты — на завтра; /holiday 1103, 20261103 или 2026-11-03)\n"
             "/bg — нарисовать фон на дату (/bg 1103; p — только задание без картинки; свой текст — рисовать по нему)\n"
@@ -1843,6 +1844,20 @@ def _build_preprocess_keyboard(current: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [btn("deep", "🧠 deep"), btn("smart", "⚡ smart")],
     ])
+
+
+async def cmd_admin_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/admin_data on|off — блок «🔬 Данные для рекомендации» после каждой рекомендации (только админ).
+    Без аргумента — показать текущее. 10.10.2026 (Антон): раньше только флагом в коде и выкладкой."""
+    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+        await update.message.reply_text("Нет доступа.")
+        return
+    from database import set_bot_setting
+    arg = (context.args or [""])[0].lower()
+    if arg in ("on", "off", "вкл", "выкл"):
+        set_bot_setting("admin_data_block", "on" if arg in ("on", "вкл") else "off")
+    state = "включён" if _admin_data_block_on() else "выключен"
+    await update.message.reply_text(f"🔬 Блок «Данные для рекомендации»: {state}. Переключить: /admin_data on | off")
 
 
 async def cmd_preprocess_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3824,7 +3839,15 @@ def _user_has_data(db_user_id: int) -> bool:
 
 # 07.10.2026 (Антон): блок «🔬 Данные для рекомендации» выключен — приходил после каждой рекомендации.
 # Вернуть: ADMIN_DATA_BLOCK = True. Сам блок и вызовы не трогались.
-ADMIN_DATA_BLOCK = True   # 10.10.2026 (Антон): блок возвращён
+ADMIN_DATA_BLOCK = True   # 10.10.2026 (Антон): блок возвращён; с 0.49.20 переключается командой /admin_data (bot_settings)
+
+
+def _admin_data_block_on() -> bool:
+    """Блок «🔬 Данные для рекомендации» после рекомендации: /admin_data on|off, значение в bot_settings;
+    без записи в базе — ADMIN_DATA_BLOCK."""
+    from database import get_bot_setting
+    v = get_bot_setting("admin_data_block")
+    return ADMIN_DATA_BLOCK if v is None else v == "on"
 # 09.10.2026 (Антон): движок лонга для пользователей — кнопка «Long Run», /long, /l_user и субботняя рассылка.
 # "long2" — src/long2.py (_long2_compute: типы I–V, промт PROMPT_LONG2), в бою с 0.47.3;
 # "long1" — прежняя формула: recommend_long + recommendation_to_long_advice + проза Шага 2.
@@ -4067,7 +4090,7 @@ async def _send_admin_data_block(
     + последняя пробежка и дни простоя до даты тренировки (02.10.2026, шаг 1 простоя).
     Вызывается в конце каждой рекомендации (A и B). Только для админа.
     """
-    if not ADMIN_DATA_BLOCK or telegram_id not in ADMIN_TELEGRAM_IDS:
+    if not _admin_data_block_on() or telegram_id not in ADMIN_TELEGRAM_IDS:
         return
     # 15.09.2026 сообщение было отключено заглушкой return; 02.10.2026 (Антон) возвращено.
     try:
@@ -8312,6 +8335,7 @@ def main():
     app.add_handler(CommandHandler("shadow_run", cmd_shadow_run))
     app.add_handler(CommandHandler("resend_evening", cmd_resend_evening))
     app.add_handler(CommandHandler("preprocess_mode", cmd_preprocess_mode))
+    app.add_handler(CommandHandler("admin_data", cmd_admin_data))
     app.add_handler(CommandHandler("test_workout", cmd_test_workout))
     app.add_handler(CommandHandler("long2",    cmd_long2))
     app.add_handler(CommandHandler("reanalyze",    cmd_reanalyze))
