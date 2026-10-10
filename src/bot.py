@@ -1256,7 +1256,9 @@ def _build_mailing_report(date: str, sent: list | None = None) -> str:
             refs = ", ".join(f"@{u}" if u else (n or "—") for n, u in no_rec)
             lines.append(f"📭 Без рекомендации ({len(no_rec)}): {refs}")
     if BROADCAST_REPORT_DETAILED:
-        for g, lst in groups.items():
+        # 11.10.2026 (Антон): у лонга поимённо в том же порядке, что гистограмма — от медленного к быстрому
+        _ordered = sorted(groups.items(), key=lambda kv: _vkey(kv[0])) if is_long2 else list(groups.items())
+        for g, lst in _ordered:
             lines.append(f"\n▸ Группа {g}")
             for r in lst:
                 rs = r["evening_recovery_score"]
