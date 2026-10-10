@@ -395,19 +395,24 @@ def work_table_text(tbl: dict | None, zones: bool = True) -> str:
     пробежку с включениями, и на старт; вместо з4+5 — минуты по всем пяти зонам за день (0/4/40/5/4)."""
     if not tbl:
         return "нет данных (нет главного трекера или сырьё не живое)"
-    hdr = f"{'дата':<8} {'км':>5} {'мин':>4} {'нагр':>5} {'ТЭ':>7}" + (f" {'зоны 1–5':>14}" if zones else "") + "  трен."
+    hdr = f"{'дата':<8} {'км':>5} {'мин':>4} {'нагр':>5} {'ТЭ':>7}" + (f" {'зоны 1–5  з4+5':>19}" if zones else "") + "  трен."
     out = [hdr]
     for r in tbl["rows"]:
         if not r["n"]:
-            out.append(f"{date_ru(r['date']):<8} {'—':>5} {'—':>4} {'—':>5} {'—':>7}" + (f" {'—':>14}" if zones else "") + "  —")
+            out.append(f"{date_ru(r['date']):<8} {'—':>5} {'—':>4} {'—':>5} {'—':>7}" + (f" {'—':>19}" if zones else "") + "  —")
             continue
         te = (f"{r['aer']:.1f}" if r["aer"] is not None else "—") + "/" + (f"{r['ana']:.1f}" if r["ana"] is not None else "—")
         work = ", ".join(dict.fromkeys(r["kinds"])) if r["kinds"] else ""
         work = (work + (", " if work else "") + f"{r['n']} трен.") if r["n"] > 1 else (work or "1")
         load = f"{int(round(r['load']))}" if r["load"] is not None else "—"
-        zs = "/".join(str(v) for v in r["zones_min"]) if r.get("zones_min") else "—"
+        zs = "—"
+        if r.get("zones_min"):
+            # 10.10.2026 (Антон): рядом с минутами — доля зон 4–5 от всего времени в зонах за день,
+            # чтобы включения (17%) и старт (56%) читались сразу
+            _tot = sum(r["zones_min"]); _hi = r["zones_min"][3] + r["zones_min"][4]
+            zs = "/".join(str(v) for v in r["zones_min"]) + (f" {int(round(100 * _hi / _tot))}%" if _tot else "")
         out.append(f"{date_ru(r['date']):<8} {r['km']:>5.1f} {r['min']:>4} {load:>5} {te:>7}"
-                   + (f" {zs:>14}" if zones else "") + f"  {work}")
+                   + (f" {zs:>19}" if zones else "") + f"  {work}")
     return "\n".join(out)
 
 
