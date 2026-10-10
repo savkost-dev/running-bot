@@ -2498,6 +2498,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 profile = get_user_profile(db_user_id)
                 garmin_parts = []
+                # 10.10.2026 (Антон): кнопка перечитывает и снимок Garmin — список тренировок за 14 дней, сон,
+                # готовность, — иначе таблица объёма за 7 дней до вечернего прогрева не видела сегодняшний старт
+                try:
+                    import garmin as _g
+                    if await _g.fetch_raw(db_user_id):
+                        _normalize_after_catch(db_user_id)
+                        garmin_parts.append("тренировки за 14 дней")
+                except Exception as _e:
+                    logger.warning(f"Garmin fetch_raw (button) for {user.id}: {_e}")
                 if not isinstance(vo2max_val, Exception) and vo2max_val is not None:
                     save_vo2max_device(db_user_id, float(vo2max_val), "garmin")
                     if not (profile or {}).get("vo2max_locked"):
