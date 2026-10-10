@@ -5,6 +5,12 @@
 
 ---
 
+## [0.49.12] 2026-10-10 — Постоянные кнопки под строкой ввода
+
+### Добавлено
+- **`bot.REPLY_KB`** (`ReplyKeyboardMarkup`, `resize_keyboard`, `is_persistent`), тексты `RK_WORKOUT/RK_LONG/RK_MENU`; в `text_handler` разбор кнопок до ожиданий ввода (`awaiting_*`); клавиатура с `/start` (отдельным сообщением перед меню), с прогресс-сообщениями `/workout`, `/long`, колбэков `get_workout`/`get_long_run`; в `scheduled_evening._mail_one` одноразовое тихое сообщение при `REPLY_KB_ANNOUNCE = True` — выключить после рассылки 10.10.
+
+---
 ## [0.49.11] 2026-10-10 — Список команд: явный вызов после старта
 
 ### Исправлено
