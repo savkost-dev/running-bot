@@ -5964,13 +5964,6 @@ async def scheduled_evening(context: ContextTypes.DEFAULT_TYPE):
                 await _send_recommendation(telegram_id, name, context, long=is_long, live=live, is_broadcast=True)
                 count += 1
                 sent.append((telegram_id, name, _un))
-                if REPLY_KB_ANNOUNCE:
-                    try:
-                        await context.bot.send_message(
-                            telegram_id, "Теперь под строкой ввода есть кнопки: Тренировка, Long Run, Меню.",
-                            reply_markup=REPLY_KB, disable_notification=True)
-                    except Exception as _e:
-                        logger.warning(f"reply keyboard announce {telegram_id}: {_e}")
                 await _send_notify_hint(context.bot, telegram_id)
                 await asyncio.sleep(0.5)
             except Forbidden:
@@ -8237,11 +8230,10 @@ USER_COMMANDS = [BotCommand(c, d) for c, d in USER_COMMANDS]
 
 # 10.10.2026 (Антон): постоянные кнопки под строкой ввода — то, что нажимают каждую неделю. Нажатие приходит
 # обычным текстом и ловится в text_handler раньше любых ожиданий ввода. Клавиатура прилетает с /start,
-# с сообщениями «🔍 …» и один раз всем в вечерней рассылке (REPLY_KB_ANNOUNCE — выключить после 10.10).
+# с сообщениями «🔍 …»; отдельного анонса в рассылке нет (Антон 10.10: лишнее сообщение).
 RK_WORKOUT, RK_LONG, RK_MENU = "📋 Тренировка", "🕐 Long Run", "☰ Меню"
 REPLY_KB = ReplyKeyboardMarkup([[KeyboardButton(RK_WORKOUT), KeyboardButton(RK_LONG), KeyboardButton(RK_MENU)]],
                                resize_keyboard=True, is_persistent=True)
-REPLY_KB_ANNOUNCE = True
 
 
 def main():
