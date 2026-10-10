@@ -529,7 +529,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     # 10.10.2026: постоянные кнопки под строкой ввода (у сообщения может быть только одна клавиатура,
     # у меню — инлайн, поэтому отдельным коротким сообщением)
-    await update.message.reply_text("Кнопки под строкой ввода: Тренировка, Long Run, Меню.", reply_markup=REPLY_KB)
+    await update.message.reply_text("Кнопки под строкой ввода: Тренировка, Long Run, Главное меню.", reply_markup=REPLY_KB)
     await _show_main_menu(update, user, db_user_id)
 
 
@@ -8231,7 +8231,7 @@ USER_COMMANDS = [BotCommand(c, d) for c, d in USER_COMMANDS]
 # 10.10.2026 (Антон): постоянные кнопки под строкой ввода — то, что нажимают каждую неделю. Нажатие приходит
 # обычным текстом и ловится в text_handler раньше любых ожиданий ввода. Клавиатура прилетает с /start,
 # с сообщениями «🔍 …»; отдельного анонса в рассылке нет (Антон 10.10: лишнее сообщение).
-RK_WORKOUT, RK_LONG, RK_MENU = "📋 Тренировка", "🕐 Long Run", "☰ Меню"
+RK_WORKOUT, RK_LONG, RK_MENU = "📋 Тренировка", "🕐 Long Run", "🏠 Главное меню"   # «Меню» занято кнопкой Telegram
 REPLY_KB = ReplyKeyboardMarkup([[KeyboardButton(RK_WORKOUT), KeyboardButton(RK_LONG), KeyboardButton(RK_MENU)]],
                                resize_keyboard=True, is_persistent=True)
 
