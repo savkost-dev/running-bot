@@ -3780,7 +3780,7 @@ def _user_has_data(db_user_id: int) -> bool:
 
 # 07.10.2026 (Антон): блок «🔬 Данные для рекомендации» выключен — приходил после каждой рекомендации.
 # Вернуть: ADMIN_DATA_BLOCK = True. Сам блок и вызовы не трогались.
-ADMIN_DATA_BLOCK = False
+ADMIN_DATA_BLOCK = True   # 10.10.2026 (Антон): блок возвращён
 # 09.10.2026 (Антон): движок лонга для пользователей — кнопка «Long Run», /long, /l_user и субботняя рассылка.
 # "long2" — src/long2.py (_long2_compute: типы I–V, промт PROMPT_LONG2), в бою с 0.47.3;
 # "long1" — прежняя формула: recommend_long + recommendation_to_long_advice + проза Шага 2.

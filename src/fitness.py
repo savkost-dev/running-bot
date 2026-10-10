@@ -317,7 +317,7 @@ def work_days_table(db_user_id: int, workout_date: str | None = None, days: int 
     for rel in range(0, -days, -1):
         d = (today + timedelta(days=rel)).isoformat()
         rows[d] = {"rel": rel, "date": d, "km": 0.0, "min": 0, "load": None, "aer": None, "ana": None,
-                   "z45_min": None, "n": 0, "labels": [], "kinds": []}
+                   "z45_min": None, "zones_min": None, "n": 0, "labels": [], "kinds": []}
     for it in work.get("items") or []:
         r = rows.get(it.get("date"))
         if not r:
@@ -333,6 +333,9 @@ def work_days_table(db_user_id: int, workout_date: str | None = None, days: int 
         z = it.get("zones_s") or []
         if len(z) >= 5:
             r["z45_min"] = (r["z45_min"] or 0) + int(round(((z[3] or 0) + (z[4] or 0)) / 60))
+            # 10.10.2026 (Антон): минуты по всем пяти зонам за день — сумма по тренировкам
+            prev = r["zones_min"] or [0, 0, 0, 0, 0]
+            r["zones_min"] = [prev[i] + int(round((z[i] or 0) / 60)) for i in range(5)]
         lab = label_ru(it.get("focus"))
         if lab:
             r["labels"].append(lab)
@@ -387,25 +390,24 @@ def _days_word_ru(n: int) -> str:
 
 
 def work_table_text(tbl: dict | None, zones: bool = True) -> str:
-    """Моноширинная таблица: дата км мин нагр ТЭ [з4+5] работа. Пустой день — прочерки. Даты — date_ru."""
+    """Моноширинная таблица: дата км мин нагр ТЭ [зоны 1–5] виды/число тренировок. Пустой день — прочерки.
+    10.10.2026 (Антон): ярлыки часов («темповая», «база»…) убраны — Garmin ставил «темповая» и на лёгкую
+    пробежку с включениями, и на старт; вместо з4+5 — минуты по всем пяти зонам за день (0/4/40/5/4)."""
     if not tbl:
         return "нет данных (нет главного трекера или сырьё не живое)"
-    hdr = f"{'дата':<8} {'км':>5} {'мин':>4} {'нагр':>5} {'ТЭ':>7}" + (f" {'з4+5':>4}" if zones else "") + "  работа"
+    hdr = f"{'дата':<8} {'км':>5} {'мин':>4} {'нагр':>5} {'ТЭ':>7}" + (f" {'зоны 1–5':>14}" if zones else "") + "  трен."
     out = [hdr]
     for r in tbl["rows"]:
         if not r["n"]:
-            out.append(f"{date_ru(r['date']):<8} {'—':>5} {'—':>4} {'—':>5} {'—':>7}" + (f" {'—':>4}" if zones else "") + "  —")
+            out.append(f"{date_ru(r['date']):<8} {'—':>5} {'—':>4} {'—':>5} {'—':>7}" + (f" {'—':>14}" if zones else "") + "  —")
             continue
         te = (f"{r['aer']:.1f}" if r["aer"] is not None else "—") + "/" + (f"{r['ana']:.1f}" if r["ana"] is not None else "—")
-        work = ", ".join(dict.fromkeys(r["labels"])) or "—"
-        if r["kinds"]:
-            work = ", ".join(dict.fromkeys(r["kinds"])) + (f"; {work}" if work != "—" else "")
-        if r["n"] > 1:
-            work += f" ({r['n']} трен.)"
+        work = ", ".join(dict.fromkeys(r["kinds"])) if r["kinds"] else ""
+        work = (work + (", " if work else "") + f"{r['n']} трен.") if r["n"] > 1 else (work or "1")
         load = f"{int(round(r['load']))}" if r["load"] is not None else "—"
-        z45 = f"{r['z45_min']}" if r["z45_min"] is not None else "—"
+        zs = "/".join(str(v) for v in r["zones_min"]) if r.get("zones_min") else "—"
         out.append(f"{date_ru(r['date']):<8} {r['km']:>5.1f} {r['min']:>4} {load:>5} {te:>7}"
-                   + (f" {z45:>4}" if zones else "") + f"  {work}")
+                   + (f" {zs:>14}" if zones else "") + f"  {work}")
     return "\n".join(out)
 
 
