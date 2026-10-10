@@ -8224,7 +8224,7 @@ def main():
             await application.bot.set_my_commands(USER_COMMANDS)
         except Exception as e:
             logger.warning(f"set_my_commands: {e}")
-    app = ApplicationBuilder().token(BOT_TOKEN).concurrent_updates(64).post_init(_set_commands).build()
+    app = ApplicationBuilder().token(BOT_TOKEN).concurrent_updates(64).build()
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("workout", cmd_workout))
@@ -8363,6 +8363,8 @@ def main():
                 await app.updater.start_polling()
                 await app.start()
                 logger.info("✅ Бот запущен!")
+                # post_init у PTB срабатывает только в run_polling/run_webhook, у нас ручной старт — зовём сами
+                await _set_commands(app)
                 try:
                     await stop_event.wait()
                 finally:
