@@ -565,7 +565,7 @@ async def cmd_workout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if target_date:
         msg = await update.message.reply_text(f"🔍 Ищу анонс на {arg}...")
     else:
-        msg = await update.message.reply_text("🔍 Ищу анонс, анализирую и подбираю группу...", reply_markup=REPLY_KB)
+        msg = await update.message.reply_text("🔍 Ищу анонс, анализирую и подбираю группу...")
 
     await _send_recommendation(user.id, user.full_name, context, long=False, msg=msg,
                                target_date=target_date)
@@ -574,7 +574,7 @@ async def cmd_workout(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_long(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db_user_id = _mark_user_active_if_needed(user.id, user.full_name, user.username)
-    msg = await update.message.reply_text("🔍 Подбираю Long Run...", reply_markup=REPLY_KB)
+    msg = await update.message.reply_text("🔍 Подбираю Long Run...")
     await _send_recommendation(user.id, user.full_name, context, long=True, msg=msg)
 
 
@@ -2461,11 +2461,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _send_morning_check(user.id, context, msg)
 
     elif query.data == "get_workout":
-        msg = await context.bot.send_message(user.id, "🔍 Ищу анонс, анализирую и подбираю группу...", reply_markup=REPLY_KB)
+        msg = await context.bot.send_message(user.id, "🔍 Ищу анонс, анализирую и подбираю группу...")
         await _send_recommendation(user.id, user.full_name, context, long=False, msg=msg)
 
     elif query.data == "get_long_run":
-        msg = await context.bot.send_message(user.id, "🔍 Подбираю Long Run...", reply_markup=REPLY_KB)
+        msg = await context.bot.send_message(user.id, "🔍 Подбираю Long Run...")
         await _send_recommendation(user.id, user.full_name, context, long=True, msg=msg)
 
     elif query.data == "refresh_cache":
@@ -3304,8 +3304,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         is_long = text == RK_LONG
         msg = await update.message.reply_text(
-            "🔍 Подбираю Long Run..." if is_long else "🔍 Ищу анонс, анализирую и подбираю группу...",
-            reply_markup=REPLY_KB)
+            "🔍 Подбираю Long Run..." if is_long else "🔍 Ищу анонс, анализирую и подбираю группу...")
         await _send_recommendation(user.id, user.full_name, context, long=is_long, msg=msg)
         return
 
@@ -8229,8 +8228,8 @@ USER_COMMANDS = [
 USER_COMMANDS = [BotCommand(c, d) for c, d in USER_COMMANDS]
 
 # 10.10.2026 (Антон): постоянные кнопки под строкой ввода — то, что нажимают каждую неделю. Нажатие приходит
-# обычным текстом и ловится в text_handler раньше любых ожиданий ввода. Клавиатура прилетает с /start,
-# с сообщениями «🔍 …»; отдельного анонса в рассылке нет (Антон 10.10: лишнее сообщение).
+# обычным текстом и ловится в text_handler раньше любых ожиданий ввода. Клавиатура прилетает только с /start:
+# сообщение с ней Telegram не даёт редактировать (Message can't be edited), а «🔍 Подбираю…» редактируется в рекомендацию.
 RK_WORKOUT, RK_LONG, RK_MENU = "📋 Тренировка", "🕐 Long Run", "🏠 Главное меню"   # «Меню» занято кнопкой Telegram
 REPLY_KB = ReplyKeyboardMarkup([[KeyboardButton(RK_WORKOUT), KeyboardButton(RK_LONG), KeyboardButton(RK_MENU)]],
                                resize_keyboard=True, is_persistent=True)

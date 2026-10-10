@@ -5,6 +5,12 @@
 
 ---
 
+## [0.49.15] 2026-10-10 — Срочно: рекомендация не показывалась после 0.49.12
+
+### Исправлено
+- **`bot`** — `reply_markup=REPLY_KB` убран у всех сообщений «🔍 …» (`cmd_workout`, `cmd_long`, колбэки `get_workout`/`get_long_run`, `text_handler`): `editMessageText` по сообщению с `ReplyKeyboardMarkup` → `BadRequest: Message can’t be edited` (лог 13:09 и 13:13 UTC). Клавиатура — только с `/start`.
+
+---
 ## [0.49.14] 2026-10-10 — «🏠 Главное меню» под строкой ввода
 
 ### Изменено
