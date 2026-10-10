@@ -360,16 +360,44 @@ def _build_main_menu_content(user, db_user_id: int) -> tuple[str, InlineKeyboard
     return text, _build_screen1_keyboard()
 
 
+# 10.10.2026 (Антон): уборка служебных сообщений — старые «Главное меню» не копятся (помним последнее
+# меню на человека и удаляем его, когда пришло новое), заголовок разбора и подсказка про кнопки убираются
+# после отправки ответа. Удалять можно только свои сообщения и не старше 48 ч — ошибки глушим.
+_last_menu_msg: dict[int, int] = {}
+
+
+async def _delete_quietly(bot, chat_id: int, message_id: int | None) -> None:
+    if not message_id:
+        return
+    try:
+        await bot.delete_message(chat_id, message_id)
+    except Exception:
+        pass
+
+
+async def _send_main_menu_new(bot, user, db_user_id: int):
+    """Главное меню новым сообщением; предыдущее меню этого человека удаляется."""
+    text, keyboard = _build_main_menu_content(user, db_user_id)
+    await _delete_quietly(bot, user.id, _last_menu_msg.get(user.id))
+    m = await bot.send_message(user.id, text, reply_markup=keyboard)
+    _last_menu_msg[user.id] = m.message_id
+    return m
+
+
 async def _show_main_menu(query_or_update, user, db_user_id: int):
-    """Показывает Экран 1 редактируя текущее сообщение (для навигационных экранов)."""
+    """Показывает Экран 1 редактируя текущее сообщение (для навигационных экранов) или новым сообщением."""
     text, keyboard = _build_main_menu_content(user, db_user_id)
     if hasattr(query_or_update, 'edit_message_text'):
         try:
             await query_or_update.edit_message_text(text, reply_markup=keyboard)
+            if getattr(query_or_update, "message", None):
+                _last_menu_msg[user.id] = query_or_update.message.message_id
         except Exception:
             pass
     else:
-        await query_or_update.message.reply_text(text, reply_markup=keyboard)
+        await _delete_quietly(query_or_update.get_bot(), user.id, _last_menu_msg.get(user.id))
+        m = await query_or_update.message.reply_text(text, reply_markup=keyboard)
+        _last_menu_msg[user.id] = m.message_id
 
 
 # ── КОМАНДЫ ───────────────────────────────────────────────────
@@ -529,8 +557,13 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     # 10.10.2026: постоянные кнопки под строкой ввода (у сообщения может быть только одна клавиатура,
     # у меню — инлайн, поэтому отдельным коротким сообщением)
-    await update.message.reply_text("Кнопки под строкой ввода: Тренировка, Long Run, Главное меню.", reply_markup=REPLY_KB)
+    _hint = await update.message.reply_text("Кнопки под строкой ввода: Тренировка, Long Run, Главное меню.", reply_markup=REPLY_KB)
     await _show_main_menu(update, user, db_user_id)
+
+    async def _drop_hint():
+        await asyncio.sleep(5)
+        await _delete_quietly(context.bot, user.id, _hint.message_id)   # клавиатура при этом остаётся
+    asyncio.create_task(_drop_hint())
 
 
 def _parse_cmd_date(arg: str) -> str | None:
@@ -2282,8 +2315,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Приходит из кнопок на рекомендации — отправляем НОВЫМ сообщением,
         # чтобы не перезаписывать текст рекомендации.
         db_user_id = get_or_create_user(user.id, user.full_name, user.username)
-        text, keyboard = _build_main_menu_content(user, db_user_id)
-        await context.bot.send_message(user.id, text, reply_markup=keyboard)
+        await _send_main_menu_new(context.bot, user, db_user_id)
 
     elif query.data == "show_settings":
         # Только кнопки меняем, текст оставляем
@@ -3299,8 +3331,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text in (RK_WORKOUT, RK_LONG, RK_MENU):
         db_user_id = get_or_create_user(user.id, user.full_name, user.username)
         if text == RK_MENU:
-            mtext, keyboard = _build_main_menu_content(user, db_user_id)
-            await update.message.reply_text(mtext, reply_markup=keyboard)
+            await _send_main_menu_new(context.bot, user, db_user_id)
             return
         is_long = text == RK_LONG
         msg = await update.message.reply_text(
@@ -7410,6 +7441,7 @@ async def _report_send(context, user_id: int, msg, res: dict, chart_items: list,
     if not menu_sent:
         await context.bot.send_message(
             user_id, "Готово.", reply_markup=menu_btn)
+    await _delete_quietly(context.bot, user_id, getattr(msg, "message_id", None))   # 10.10.2026: заголовок «📊 Тренировка: …» больше не нужен
     for png, _ in chart_items:   # 09.10.2026: PNG разового разбора больше не нужны
         try:
             os.remove(png)
