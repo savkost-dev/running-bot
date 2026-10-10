@@ -557,13 +557,9 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     # 10.10.2026: постоянные кнопки под строкой ввода (у сообщения может быть только одна клавиатура,
     # у меню — инлайн, поэтому отдельным коротким сообщением)
-    _hint = await update.message.reply_text("Кнопки под строкой ввода: Тренировка, Long Run, Главное меню.", reply_markup=REPLY_KB)
+    # сообщение-носитель клавиатуры удалять нельзя: вместе с ним пропадают и кнопки (проверено 10.10)
+    await update.message.reply_text("Кнопки под строкой ввода: Тренировка, Long Run, Главное меню.", reply_markup=REPLY_KB)
     await _show_main_menu(update, user, db_user_id)
-
-    async def _drop_hint():
-        await asyncio.sleep(5)
-        await _delete_quietly(context.bot, user.id, _hint.message_id)   # клавиатура при этом остаётся
-    asyncio.create_task(_drop_hint())
 
 
 def _parse_cmd_date(arg: str) -> str | None:
