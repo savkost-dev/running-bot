@@ -3,7 +3,7 @@ import uuid
 import asyncio
 import logging
 from datetime import datetime, time, timedelta, timezone
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, BotCommand
 from telegram.error import BadRequest, TimedOut, NetworkError, Forbidden
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, CallbackQueryHandler,
@@ -8193,13 +8193,38 @@ async def report_cut_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
                      cut_by_plan=True, cand_cache=cand, simple_override=(mode == "s"))
 
 
+# 10.10.2026 (Антон): команды для кнопки «Меню» Telegram рядом со строкой ввода (set_my_commands при старте).
+# Порядок — по частоте. Админские сюда не входят.
+USER_COMMANDS = [
+    ("workout", "Тренировка: какая группа"),
+    ("long", "Long Run: группа и темп"),
+    ("report", "Разбор тренировки"),
+    ("report_long", "Разбор лонга"),
+    ("morning", "Утро: восстановление"),
+    ("profile", "Профиль: VO2max, порог, цель"),
+    ("mode", "Режим ИИ"),
+    ("status", "Подключённые сервисы"),
+    ("refresh", "Обновить данные"),
+    ("notifications", "Уведомления"),
+    ("feedback", "Обратная связь"),
+    ("help", "Справка"),
+]
+USER_COMMANDS = [BotCommand(c, d) for c, d in USER_COMMANDS]
+
+
 def main():
     init_db()
 
     # 17.08.2026: concurrent_updates — без него PTB обрабатывает апдейты СТРОГО
     # ПО ОДНОМУ: чей-то deep-/workout на 3-7 минут замораживал КОМАНДЫ ВСЕХ
     # (три /stats без ответа + answerCallbackQuery 400 на протухший колбэк в логе).
-    app = ApplicationBuilder().token(BOT_TOKEN).concurrent_updates(64).build()
+    # 10.10.2026 (Антон): список команд у кнопки «Меню» рядом со строкой ввода — один для всех, без админских
+    async def _set_commands(application):
+        try:
+            await application.bot.set_my_commands(USER_COMMANDS)
+        except Exception as e:
+            logger.warning(f"set_my_commands: {e}")
+    app = ApplicationBuilder().token(BOT_TOKEN).concurrent_updates(64).post_init(_set_commands).build()
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("workout", cmd_workout))
