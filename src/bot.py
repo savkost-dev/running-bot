@@ -1242,10 +1242,10 @@ def _build_mailing_report(date: str, sent: list | None = None) -> str:
         for r in recs:
             t = roman.get(str((r.get("long2") or {}).get("type") or "").lower(), "?")
             by_type[t] = by_type.get(t, 0) + 1
-        hist_v = "\n".join(f"{v:<4} {'█' * len(lst)} {len(lst)}" for v, lst in sorted(groups.items(), key=lambda kv: _vkey(kv[0])))
+        hist_v = "\n".join(f"{v:<4} {'█' * len(lst)} {len(lst)}" for v, lst in sorted(groups.items(), key=lambda kv: _vkey(kv[0]), reverse=True))   # 10.10 (Антон): быстрые сверху
         t_order = list(roman.values()) + ["?"]
         hist_t = "\n".join(f"{t:<4} {'█' * n} {n}" for t, n in sorted(by_type.items(), key=lambda kv: t_order.index(kv[0]) if kv[0] in t_order else 99))
-        lines = [f"📊 Варианты (медленный → быстрый):\n<pre>{hist_v}</pre>\nТипы:\n<pre>{hist_t}</pre>"]
+        lines = [f"📊 Варианты (быстрый → медленный):\n<pre>{hist_v}</pre>\nТипы:\n<pre>{hist_t}</pre>"]
     else:
         summary = " · ".join(f"гр{g}: {len(lst)}" for g, lst in groups.items())
         lines = [f"📊 Группы: {summary}"]
@@ -1256,8 +1256,8 @@ def _build_mailing_report(date: str, sent: list | None = None) -> str:
             refs = ", ".join(f"@{u}" if u else (n or "—") for n, u in no_rec)
             lines.append(f"📭 Без рекомендации ({len(no_rec)}): {refs}")
     if BROADCAST_REPORT_DETAILED:
-        # 11.10.2026 (Антон): у лонга поимённо в том же порядке, что гистограмма — от медленного к быстрому
-        _ordered = sorted(groups.items(), key=lambda kv: _vkey(kv[0])) if is_long2 else list(groups.items())
+        # 10.10.2026 (Антон): у лонга поимённо в том же порядке, что гистограмма — быстрые сверху
+        _ordered = sorted(groups.items(), key=lambda kv: _vkey(kv[0]), reverse=True) if is_long2 else list(groups.items())
         for g, lst in _ordered:
             lines.append(f"\n▸ Группа {g}")
             for r in lst:
