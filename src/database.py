@@ -1701,9 +1701,24 @@ def get_recommendations_for_date(workout_date: str) -> list[dict]:
             "groups_pct": _json.loads(r[8]) if r[8] else None,
             # 06.10.2026: простой перед тренировкой, если правило сработало (bot: advice["idle"])
             "idle": _idle_of(r[9]),
+            # 11.10.2026: лонг2 — вариант (ровно/прогресс) и тип длительной для сводки рассылки
+            "long2": _long2_of(r[9]),
         }
         for r in rows
     ]
+
+
+def _long2_of(advice_json):
+    """{progressive: bool, type: str} из advice_json рекомендации лонга2 или None (интервальная / формула)."""
+    if not advice_json:
+        return None
+    try:
+        a = _json.loads(advice_json)
+    except Exception:
+        return None
+    if not isinstance(a, dict) or not a.get("long_type"):
+        return None
+    return {"progressive": a.get("run_strategy") == "progressive", "type": str(a.get("long_type"))}
 
 
 def _idle_of(advice_json):

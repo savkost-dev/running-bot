@@ -1222,10 +1222,33 @@ def _build_mailing_report(date: str, sent: list | None = None) -> str:
     if not recs:
         return ""
     groups: dict[str, list] = {}
+    is_long2 = any(r.get("long2") for r in recs)
     for r in recs:
-        groups.setdefault(str(r["recommended_group"] or "—"), []).append(r)
-    summary = " · ".join(f"гр{g}: {len(lst)}" for g, lst in groups.items())
-    lines = [f"📊 Группы: {summary}"]
+        g = str(r["recommended_group"] or "—")
+        if is_long2 and (r.get("long2") or {}).get("progressive"):
+            g += "+"      # 11.10.2026 (Антон): у лонга группы с прогрессом отдельно — «2» и «2+»
+        groups.setdefault(g, []).append(r)
+    if is_long2:
+        # как в сводке прогона /long2 all: варианты от медленного к быстрому и типы I–V
+        import long2 as _l2
+        roman = _l2.LONG_TYPE_ROMAN
+
+        def _vkey(v):
+            try:
+                return (-float(v.rstrip("+").replace(",", ".")), 1 if v.endswith("+") else 0)
+            except ValueError:
+                return (99.0, 1)
+        by_type: dict[str, int] = {}
+        for r in recs:
+            t = roman.get(str((r.get("long2") or {}).get("type") or "").lower(), "?")
+            by_type[t] = by_type.get(t, 0) + 1
+        hist_v = "\n".join(f"{v:<4} {'█' * len(lst)} {len(lst)}" for v, lst in sorted(groups.items(), key=lambda kv: _vkey(kv[0])))
+        t_order = list(roman.values()) + ["?"]
+        hist_t = "\n".join(f"{t:<4} {'█' * n} {n}" for t, n in sorted(by_type.items(), key=lambda kv: t_order.index(kv[0]) if kv[0] in t_order else 99))
+        lines = [f"📊 Варианты (медленный → быстрый):\n<pre>{hist_v}</pre>\nТипы:\n<pre>{hist_t}</pre>"]
+    else:
+        summary = " · ".join(f"гр{g}: {len(lst)}" for g, lst in groups.items())
+        lines = [f"📊 Группы: {summary}"]
     if sent is not None:
         rec_tids = {r.get("telegram_id") for r in recs}
         no_rec = [(n, u) for tid, n, u in sent if tid not in rec_tids]
