@@ -63,9 +63,14 @@ async def _garmin_candidate(db_user_id, selector, kind=None):
         plan_wkt = _long_template_json(name)
         if plan_wkt:
             plan_steps = ar._flatten_plan_steps(plan_wkt)
+    try:
+        details = await asyncio.to_thread(client.get_activity_details, act_id, 100000, 100000)
+    except Exception:
+        details = None
+    pts = _parse_details(details)
     _drop_extra_first_lap(splits, plan_steps)
-    _assign_button_laps(splits, plan_wkt, plan_steps)
-    # 20.09.2026: Stryd = шагомер (STRIDE_SPEED_DISTANCE) среди датчиков активности (решение Антона).
+    _assign_long_laps(splits, plan_wkt, plan_steps, pts, name)
+    # 20.09.2026: Stryd = шагомер (STRIDE_SPEED_DISTANCE) среди датчиков активности (решение Антона):
     # Со Stryd дистанция точная — дорожка идёт как тренировка со спутниками.
     # Нет ответа Garmin — stryd = None (неизвестно), логика без GPS как раньше.
     try:
@@ -79,16 +84,12 @@ async def _garmin_candidate(db_user_id, selector, kind=None):
     if no_gps:
         n = _apply_plan_distances(splits, plan_steps)
         print(f"/report: Garmin-активность без спутников — плановые дистанции у {n} лэпов")
-    try:
-        details = await asyncio.to_thread(client.get_activity_details, act_id, 100000, 100000)
-    except Exception:
-        details = None
     return {"source": "garmin", "name": name, "act_id": act_id,
             "display_date": act.get("startTimeLocal"), "wdate": wdate, "wgroup": wgroup,
             "wtype_key": (act.get("activityType") or {}).get("typeKey"),
             "no_gps": no_gps, "stryd": stryd, "by_watch_plan": by_watch_plan,
             "by_stryd": no_gps_raw and bool(stryd),
-            "splits": splits, "plan_steps": plan_steps, "pts": _parse_details(details)}
+            "splits": splits, "plan_steps": plan_steps, "pts": pts}
 
 
 async def _strava_candidate(db_user_id, selector, kind=None):
@@ -127,18 +128,18 @@ async def _strava_candidate(db_user_id, selector, kind=None):
     # и только потом накладываем план — как у COROS и кнопочных лэпов Garmin.
     splits = await strava.get_activity_splits(token, act.get("id"), None,
                                               db_user_id=db_user_id)
-    _drop_extra_first_lap(splits, plan_steps)
-    _assign_button_laps(splits, plan_wkt, plan_steps)
     pts = None
-    if _no_gps(act, "strava"):
-        n = _apply_plan_distances(splits, plan_steps)
-        print(f"/report: Strava-активность без спутников — плановые дистанции у {n} лэпов")
-    else:
+    if not _no_gps(act, "strava"):
         try:
             pts = await strava.get_activity_streams(token, act.get("id"), act.get("start_date"))
             print(f"/report: Strava streams act={act.get('id')}: {len(pts) if pts else 0} точек")
         except Exception as e:  # noqa: BLE001
             print(f"/report: Strava streams недоступны: {type(e).__name__}: {e}")
+    _drop_extra_first_lap(splits, plan_steps)
+    _assign_long_laps(splits, plan_wkt, plan_steps, pts, name)
+    if _no_gps(act, "strava"):
+        n = _apply_plan_distances(splits, plan_steps)
+        print(f"/report: Strava-активность без спутников — плановые дистанции у {n} лэпов")
     return {"source": "strava", "name": name, "act_id": act.get("id"),
             "display_date": act.get("start_date_local"), "wdate": wdate, "wgroup": wgroup,
             "no_gps": _no_gps(act, "strava"), "by_watch_plan": False,
@@ -193,7 +194,7 @@ async def _coros_candidate(db_user_id, selector, kind=None):
         print(f"/report: COROS FIT недоступен: {type(e).__name__}: {e}")
     plan_steps = ar._flatten_plan_steps(plan_wkt)
     _drop_extra_first_lap(splits, plan_steps)
-    _assign_button_laps(splits, plan_wkt, plan_steps)
+    _assign_long_laps(splits, plan_wkt, plan_steps, pts, name)
     # display_date — дата и время старта по Москве (startTimestamp в UTC), как startTimeLocal у Garmin
     from datetime import datetime as _dt, timedelta as _td, timezone as _tz
     disp = (_dt.fromtimestamp(rec["start_ts"], _tz(_td(hours=3))).strftime("%Y-%m-%d %H:%M:%S")
@@ -267,31 +268,105 @@ def _assign_button_laps(splits, plan_wkt, plan_steps):
         return
     import strava as _sv
     seq = _sv._expand_plan_roles(plan_wkt)
-    # 11.10.2026 (Антон): лонг без задания в часах — автолапы по 1 км, а шаг эталона один на 100 минут.
-    # Круги короче шага складываются в него, пока не наберётся его длительность (или дистанция);
-    # раньше шаг получал один круг, и из 19 км в разбор попадал 1 км.
-    target_of = {}
-    for st in plan_steps or []:
-        target_of[st["idx"]] = ("time", float(st["time_s"])) if st.get("time_s") else (("dist", float(st["dist"])) if st.get("dist") else None)
-    n = 0
-    for idx, stype in seq:
-        if n >= len(laps):
+    for lap, (idx, stype) in zip(laps, seq):
+        lap["wktStepIndex"] = idx
+        lap["intensityType"] = "REST" if stype in ("recovery", "rest") else "INTERVAL"
+
+
+def _km_laps_from_track(pts) -> list[dict]:
+    """Километры из трека (t_ms, dist_m, speed, hr): круг на каждые 1000 м, остаток от 200 м — последний круг.
+    Формат круга — как lapDTOs Garmin (distance, duration, startTimeGMT, averageHR, maxHR)."""
+    from datetime import datetime, timezone
+    out, seg_hr, t_prev, d_prev = [], [], None, 0.0
+    for t, d, _sp, hr in pts or []:
+        if t is None or d is None:
+            continue
+        if t_prev is None:
+            t_prev, d_prev = t, d
+            continue
+        if hr:
+            seg_hr.append(hr)
+        while d - d_prev >= 1000.0:
+            # момент пересечения отметки — линейно внутри точки
+            d_cut = d_prev + 1000.0
+            t_cut = t
+            dur = (t_cut - t_prev) / 1000.0
+            if dur > 0:
+                out.append({"lapIndex": len(out) + 1, "distance": 1000.0, "duration": dur,
+                            "startTimeGMT": datetime.fromtimestamp(t_prev / 1000, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+                            "averageHR": (sum(seg_hr) / len(seg_hr)) if seg_hr else None,
+                            "maxHR": max(seg_hr) if seg_hr else None})
+            seg_hr, t_prev, d_prev = [], t_cut, d_cut
+    if pts and t_prev is not None:
+        t_last, d_last = None, None
+        for t, d, _sp, _hr in reversed(pts):   # последняя точка с дистанцией и временем
+            if t is not None and d is not None:
+                t_last, d_last = t, d
+                break
+        if d_last is not None and d_last - d_prev >= 200.0 and t_last and t_last > t_prev:
+            out.append({"lapIndex": len(out) + 1, "distance": float(d_last - d_prev), "duration": (t_last - t_prev) / 1000.0,
+                        "startTimeGMT": datetime.fromtimestamp(t_prev / 1000, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+                        "averageHR": (sum(seg_hr) / len(seg_hr)) if seg_hr else None,
+                        "maxHR": max(seg_hr) if seg_hr else None})
+    return out
+
+
+def _assign_long_laps(splits, plan_wkt, plan_steps, pts, name) -> None:
+    """11.10.2026 (Антон): лонг БЕЗ задания в часах. Круги часов — не структура тренировки: лонг — один
+    непрерывный бег, фазы задаёт эталон по времени (ровно — 100 мин, прогресс — 50 + 50). Поэтому:
+    круги часов берём как есть (любые); если кругов не было (вся работа одним куском) — режем по треку
+    на километры; каждый круг относится к фазе по времени своей середины от старта; всё после
+    100 минут — хвост, откидывается.
+    Раз/зам — отдельная опция в имени (DDLong-3_wu): первый круг — разминка, не оценивается.
+    По заданию из часов (у кругов есть wktStepIndex) — ничего не трогаем, там шаги расставили часы."""
+    laps = (splits.get("lapDTOs") or []) if isinstance(splits, dict) else []
+    laps = [l for l in laps if isinstance(l, dict)]
+    if not laps or not plan_steps:
+        return
+    if any(l.get("wktStepIndex") is not None for l in laps):
+        return
+    steps = [s for s in plan_steps if s.get("time_s")]
+    if not steps:                       # эталон не по времени — прежняя раздача по порядку
+        _assign_button_laps(splits, plan_wkt, plan_steps)
+        return
+    bounds, acc = [], 0.0
+    for s in steps:
+        acc += float(s["time_s"])
+        bounds.append((s["idx"], acc))
+    total = acc
+    with_wu = bool(re.search(r"[_-]wu\b", str(name or ""), re.I))
+    warm = None
+    if with_wu and laps:
+        warm = laps[0]
+        laps = laps[1:]
+    # Антон 11.10: были круги в часах — берём их как есть (любые); режем по треку, только если кругов
+    # не было — вся работа одним куском
+    if len(laps) <= 1 and pts:
+        cut = _km_laps_from_track(pts)
+        if cut:
+            if warm is not None:          # разминка = первый круг часов, трек режем после него
+                w_dur = float(warm.get("duration") or 0)
+                skip, el = 0, 0.0
+                for l in cut:
+                    if el + float(l["duration"]) / 2 >= w_dur:
+                        break
+                    el += float(l["duration"]); skip += 1
+                cut = cut[skip:]
+            laps = cut
+    out, el = [], 0.0
+    if warm is not None:
+        warm["wktStepIndex"], warm["intensityType"] = -1, "WARMUP"
+        out.append(warm)
+    for l in laps:
+        dur = float(l.get("duration") or l.get("movingDuration") or 0)
+        mid = el + dur / 2
+        if mid >= total:                # хвост за пределами 100 минут
             break
-        itype = "REST" if stype in ("recovery", "rest") else "INTERVAL"
-        tgt = target_of.get(idx)
-        taken = 0.0
-        while n < len(laps):
-            lap = laps[n]
-            lap["wktStepIndex"] = idx
-            lap["intensityType"] = itype
-            n += 1
-            if not tgt:
-                break
-            kind, total = tgt
-            taken += float(lap.get("duration") or lap.get("movingDuration") or 0) if kind == "time" else float(lap.get("distance") or 0)
-            # шаг закрыт, когда набрана его длительность/дистанция; круг длиннее 60% шага — сам по себе шаг
-            if taken >= total or (taken >= 0.6 * total and taken == (float(lap.get("duration") or 0) if kind == "time" else float(lap.get("distance") or 0))):
-                break
+        idx = next((i for i, bnd in bounds if mid < bnd), bounds[-1][0])
+        l["wktStepIndex"], l["intensityType"] = idx, "INTERVAL"
+        out.append(l)
+        el += dur
+    splits["lapDTOs"] = out
 
 
 def _apply_plan_distances(splits, plan_steps) -> int:
