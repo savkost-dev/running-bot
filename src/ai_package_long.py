@@ -1301,7 +1301,8 @@ async def build_long_package(db_user_id: int, selector=None) -> dict:
     if not cand:
         sel = f" по «{selector}»" if selector else ""
         return {"ok": False, "msg": f"Лонг{sel} не найден (Garmin/COROS/Strava).\n"
-                                     f"Назови тренировку по маске DDLong-группа — например DDLong-3 или DDLong-3p."}
+                                     f"Назови тренировку по маске DDLong-группа — например DDLong-3 или DDLong-3p, "
+                                     f"с разминкой и заминкой — DDLong-3_wu."}
 
     name = cand["name"]
     act_id = cand["act_id"]
