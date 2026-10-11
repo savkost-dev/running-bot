@@ -267,9 +267,31 @@ def _assign_button_laps(splits, plan_wkt, plan_steps):
         return
     import strava as _sv
     seq = _sv._expand_plan_roles(plan_wkt)
-    for lap, (idx, stype) in zip(laps, seq):
-        lap["wktStepIndex"] = idx
-        lap["intensityType"] = "REST" if stype in ("recovery", "rest") else "INTERVAL"
+    # 11.10.2026 (Антон): лонг без задания в часах — автолапы по 1 км, а шаг эталона один на 100 минут.
+    # Круги короче шага складываются в него, пока не наберётся его длительность (или дистанция);
+    # раньше шаг получал один круг, и из 19 км в разбор попадал 1 км.
+    target_of = {}
+    for st in plan_steps or []:
+        target_of[st["idx"]] = ("time", float(st["time_s"])) if st.get("time_s") else (("dist", float(st["dist"])) if st.get("dist") else None)
+    n = 0
+    for idx, stype in seq:
+        if n >= len(laps):
+            break
+        itype = "REST" if stype in ("recovery", "rest") else "INTERVAL"
+        tgt = target_of.get(idx)
+        taken = 0.0
+        while n < len(laps):
+            lap = laps[n]
+            lap["wktStepIndex"] = idx
+            lap["intensityType"] = itype
+            n += 1
+            if not tgt:
+                break
+            kind, total = tgt
+            taken += float(lap.get("duration") or lap.get("movingDuration") or 0) if kind == "time" else float(lap.get("distance") or 0)
+            # шаг закрыт, когда набрана его длительность/дистанция; круг длиннее 60% шага — сам по себе шаг
+            if taken >= total or (taken >= 0.6 * total and taken == (float(lap.get("duration") or 0) if kind == "time" else float(lap.get("distance") or 0))):
+                break
 
 
 def _apply_plan_distances(splits, plan_steps) -> int:
