@@ -877,33 +877,35 @@ def get_activity_users(days: int = 14) -> list:
         ).fetchall()
 
 
-def get_activity_report(days: int = 14) -> tuple:
-    """Использование /report за период: (actions, uniq_users).
-    Учитывает и команду, и нажатия кнопки меню (включая прежние btn:get_report)."""
+def get_activity_report(days: int = 14, commands: tuple = ('/report', 'btn:get_report')) -> tuple:
+    """Использование разбора за период: (actions, uniq_users).
+    По умолчанию — /report (команда и нажатия кнопки меню, включая прежние btn:get_report);
+    для лонга — commands=('/report_long',) (11.10.2026, /activity)."""
+    ph = ",".join("?" * len(commands))
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT COUNT(*), COUNT(DISTINCT user_id) FROM user_activity "
-            "WHERE command IN ('/report', 'btn:get_report') "
-            "AND created_at >= datetime('now', ?)",
-            (f"-{int(days)} days",)
+            f"SELECT COUNT(*), COUNT(DISTINCT user_id) FROM user_activity "
+            f"WHERE command IN ({ph}) AND created_at >= datetime('now', ?)",
+            (*commands, f"-{int(days)} days")
         ).fetchone()
     return (row[0], row[1]) if row else (0, 0)
 
 
-def get_report_users(days: int = 14) -> list:
-    """Кто запускал разбор за период — команда /report и кнопка меню.
+def get_report_users(days: int = 14, commands: tuple = ('/report', 'btn:get_report')) -> list:
+    """Кто запускал разбор за период — команда и кнопка меню (commands — как в get_activity_report).
 
     [(name, username, сколько раз, последняя дата), ...] по убыванию числа запусков.
     """
+    ph = ",".join("?" * len(commands))
     with get_connection() as conn:
         rows = conn.execute(
-            "SELECT COALESCE(u.name, '—'), u.username, COUNT(*), "
-            "MAX(date(a.created_at)) "
-            "FROM user_activity a JOIN users u ON u.id = a.user_id "
-            "WHERE a.command IN ('/report', 'btn:get_report') "
-            "AND a.created_at >= datetime('now', ?) "
-            "GROUP BY a.user_id ORDER BY COUNT(*) DESC",
-            (f"-{int(days)} days",)
+            f"SELECT COALESCE(u.name, '—'), u.username, COUNT(*), "
+            f"MAX(date(a.created_at)) "
+            f"FROM user_activity a JOIN users u ON u.id = a.user_id "
+            f"WHERE a.command IN ({ph}) "
+            f"AND a.created_at >= datetime('now', ?) "
+            f"GROUP BY a.user_id ORDER BY COUNT(*) DESC",
+            (*commands, f"-{int(days)} days")
         ).fetchall()
     return [tuple(r) for r in rows]
 

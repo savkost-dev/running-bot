@@ -7015,6 +7015,12 @@ async def cmd_activity(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     for name, username, cnt, last_d in get_report_users(days):
         nick = f" (@{username})" if username else ""
         lines.append(f"  {name}{nick}: {cnt} · посл. {last_d}")
+    # 11.10.2026 (Антон): такой же блок по разбору лонга (команда и кнопка меню пишутся как /report_long)
+    rl_cnt, rl_uniq = get_activity_report(days, commands=("/report_long",))
+    lines += ["", f"📈 /report_long: {rl_cnt} (юзеров: {rl_uniq})"]
+    for name, username, cnt, last_d in get_report_users(days, commands=("/report_long",)):
+        nick = f" (@{username})" if username else ""
+        lines.append(f"  {name}{nick}: {cnt} · посл. {last_d}")
     who = get_activity_users(days)
     if who:
         lines += ["", f"Кто активен ({len(who)}, по дате последней активности):"]
@@ -7677,7 +7683,8 @@ def _long_title(res: dict) -> str:
         return str(res["name"])
 
 
-async def cmd_report_long(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def cmd_report_long(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                          target_db_user_id: int | None = None) -> None:
     """/report_long — ИИ-разбор ЛОНГА (DDLong-…), пока только admin. С 20.09.2026 — свой пакет, промт,
     карточка и графики (ai_package_long); с 05.10.2026 — свой обработчик, отдельный от cmd_report.
     /report_long — последний лонг; /report_long 0920 | 20260920 | 2026-09-20 — по дате СТАРТА
@@ -7687,9 +7694,11 @@ async def cmd_report_long(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     ПРАВИЛО: у интервалов и лонга свои обработчики и свои копии карточки, графиков и пакета.
     Здесь — только ai_package_long. Меняя подпись функции интервального разбора, копию лонга и этот
     обработчик не трогать (и наоборот). Панели «⚙️ Настроить разбор», нарезки по плану и пропуска
-    кругов у лонга нет. Общее — лишь отправка (_report_text_chunks, _report_ai_chunks, _report_send)."""
+    кругов у лонга нет. Общее — лишь отправка (_report_text_chunks, _report_ai_chunks, _report_send).
+    target_db_user_id — 11.10.2026: /report_long_user (admin) — разбор лонга выбранного пользователя,
+    вывод админу (как target_db_user_id у cmd_report)."""
     chat_id = update.effective_user.id
-    db_user_id = get_or_create_user(update.effective_user.id, update.effective_user.full_name)
+    db_user_id = target_db_user_id or get_or_create_user(update.effective_user.id, update.effective_user.full_name)
     # 05.10.2026: COROS без пароля тоже источник разбора (ai_package._coros_candidate) — раньше проверка
     # пропускала только Garmin и Strava, и пользователь с одним COROS получал отказ.
     if not (get_token(db_user_id, "garmin") or get_token(db_user_id, "coros_mcp")
@@ -8183,6 +8192,41 @@ async def report_user_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     await cmd_report(update, context, target_db_user_id=target, selector_override=sel)
 
 
+async def report_long_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/report_long_user (admin) — разбор лонга выбранного пользователя (11.10.2026, Антон).
+    /report_long_user — последний лонг; /report_long_user 1011 | s | data [дата] — аргументы как у /report_long."""
+    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+        return
+    context.user_data["report_long_user_args"] = list(context.args or [])
+    users = get_users_list_for_b()
+    if not users:
+        await update.message.reply_text("Нет пользователей.")
+        return
+    keyboard = [
+        [InlineKeyboardButton(
+            u["name"] + (f" (@{u['username']})" if u.get("username") else ""),
+            callback_data=f"report_long_user_{u['db_user_id']}"
+        )]
+        for u in users
+    ]
+    arg_s = " ".join(context.args or [])
+    title = (f"Разбор лонга «{arg_s}» — выбери пользователя:" if arg_s
+             else "Выбери пользователя для разбора лонга:")
+    await update.message.reply_text(title, reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+async def report_long_user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Выбор пользователя → разбор его лонга (вывод админу)."""
+    query = update.callback_query
+    if query.from_user.id not in ADMIN_TELEGRAM_IDS:
+        await query.answer("Нет доступа.")
+        return
+    await query.answer()
+    target = int(query.data.rsplit("_", 1)[1])
+    context.args = context.user_data.pop("report_long_user_args", [])
+    await cmd_report_long(update, context, target_db_user_id=target)
+
+
 async def report_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Кнопка меню «Разбор» → тот же разбор, что /report (без аргументов)."""
     query = update.callback_query
@@ -8414,6 +8458,7 @@ def main():
     app.add_handler(CommandHandler("report_p",  cmd_report))
     app.add_handler(CommandHandler("report_long", cmd_report_long))
     app.add_handler(CommandHandler("report_user", report_user_command))
+    app.add_handler(CommandHandler("report_long_user", report_long_user_command))
     app.add_handler(CallbackQueryHandler(msg_user_callback,  pattern=r"^msgu_\d+$"))
     app.add_handler(CallbackQueryHandler(msg_service_callback, pattern=r"^msgsvc_\w+$"))
     app.add_handler(CallbackQueryHandler(profile_user_callback, pattern=r"^profile_user_\d+$"))
@@ -8422,6 +8467,7 @@ def main():
     app.add_handler(CallbackQueryHandler(w_user_callback,   pattern=r"^w_user_\d+$"))
     app.add_handler(CallbackQueryHandler(w_user_light_callback, pattern=r"^wul_\d+$"))
     app.add_handler(CallbackQueryHandler(report_user_callback, pattern=r"^report_user_\d+$"))
+    app.add_handler(CallbackQueryHandler(report_long_user_callback, pattern=r"^report_long_user_\d+$"))
     app.add_handler(CallbackQueryHandler(l_user_callback,   pattern=r"^l_user_\d+$"))
     app.add_handler(CallbackQueryHandler(long2_user_callback, pattern=r"^tlong_\d+$"))
     app.add_handler(CallbackQueryHandler(pb_user_callback,  pattern=r"^pb_user_\d+(_\d{8})?$"))

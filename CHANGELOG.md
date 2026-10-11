@@ -5,6 +5,13 @@
 
 ---
 
+## [0.49.29] 2026-10-11 — /activity: блок по /report_long, /report_long_user
+
+### Добавлено
+- **`cmd_activity`** — блок «📈 /report_long: N (юзеров: M)» с поимённым списком, как у /report. **`database.get_activity_report`, `get_report_users`** — параметр `commands` (по умолчанию прежний `/report` + `btn:get_report`).
+- **`report_long_user_command`, `report_long_user_callback`** (`/report_long_user`, admin) — выбор пользователя кнопками → `cmd_report_long(target_db_user_id=…)`; аргументы команды передаются в разбор. **`cmd_report_long`** — параметр `target_db_user_id`.
+
+---
 ## [0.49.28] 2026-10-11 — Подсказка про DDLong-3_wu
 
 ### Изменено
