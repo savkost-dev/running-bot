@@ -3100,10 +3100,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 else:
                     _failed.append("COROS")
             if _lines:
+                # 13.10.2026 (Антон): на Garmin авто-круг не отключается внутри задания и режет длинные
+                # шаги по километру (Никита Шляпин 13.10) — просим выключить его перед стадионом.
+                _autolap = ("\n\n🔴 <b>Выключи авто-круг (Auto Lap) в настройках бега на часах</b> — "
+                            "иначе длинные отрезки порежутся на километры и разбор собьётся."
+                            if "Garmin" in _targets and "Garmin" not in _failed else "")
                 await context.bot.send_message(
                     user.id,
                     f"✅ <b>Тренировка отправлена в часы!</b>\n\n"
-                    f"⌚ {_wname}\n" + "\n".join(f"• {l}" for l in _lines) +
+                    f"⌚ {_wname}\n" + "\n".join(f"• {l}" for l in _lines) + _autolap +
                     (f"\n\n❌ Не удалось загрузить в {', '.join(_failed)} — попробуй ещё раз через минуту." if _failed else "") +
                     "\n\nСинхронизируй часы — тренировка появится в списке тренировок.",
                     parse_mode="HTML",

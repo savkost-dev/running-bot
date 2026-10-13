@@ -494,6 +494,21 @@ def _is_max_effort(struct: dict) -> bool:
     return re.search(r"\b1\d\d\s?%", txt) is not None
 
 
+KM_SPLIT_MIN_M = 2000.0   # 13.10.2026 (Антон): кратные километру отрезки от 2 км — повторами по 1 км
+
+
+def _km_reps(step: dict) -> int:
+    """13.10.2026 (Антон): рабочий шаг по расстоянию, кратный километру и от KM_SPLIT_MIN_M,
+    собирается группой «k × 1000 м» — часы режут его по километрам сами (и с автокругом, и без),
+    разбор читает как обычные повторы. Возвращает k или 0 (шаг не делится)."""
+    if (step.get('stepType') or {}).get('stepTypeKey') != 'interval':
+        return 0
+    if (step.get('endCondition') or {}).get('conditionTypeKey') != 'distance':
+        return 0
+    d = float(step.get('endConditionValue') or 0)
+    return int(d // 1000.0) if (d >= KM_SPLIT_MIN_M and d % 1000.0 == 0) else 0
+
+
 def build_garmin_from_analysis(analysis: dict, group_num: str, with_warmup: bool = False) -> dict:
     """Build Garmin workout JSON from structured analysis (structure[] + groups[]).
 
@@ -614,9 +629,28 @@ def build_garmin_from_analysis(analysis: dict, group_num: str, with_warmup: bool
         # напр. 4×(800/1600) + финальный 400 — последний 1600 нужен).
         _nxt = structs[_si + 1] if _si + 1 < len(structs) else None
         _next_is_work = bool(_nxt) and _nxt.get('type') == 'repeat'
-        steps.append(_repeat_group(top_order, reps, inner,
-                                   skip_last_rest=(rec_m > 0 and not _next_is_work)))
-        top_order += 1
+        # 13.10.2026 (Антон): блок БЕЗ повторов (непрерывная связка вроде 8 км + 2 км + 2 км) с кратным
+        # километру отрезком от 2 км — не группа ×1, а верхнеуровневые группы «k × 1000 м» на каждый
+        # такой отрезок; остальные шаги связки — обычными верхнеуровневыми. Блоки с повторами
+        # (3 × 3000/400) и связки без кратных отрезков (4600 + 400) — как раньше.
+        if reps == 1 and any(_km_reps(st) for st in inner):
+            if rec_m > 0 and not _next_is_work and inner and \
+                    (inner[-1].get('stepType') or {}).get('stepTypeKey') == 'recovery':
+                inner = inner[:-1]   # хвостовой отдых не нужен, как и skipLastRestStep у группы
+            for st in inner:
+                k = _km_reps(st)
+                if k:
+                    child = dict(st); child['stepOrder'] = 1; child['childStepId'] = 1
+                    child['endConditionValue'] = 1000.0
+                    steps.append(_repeat_group(top_order, k, [child]))
+                else:
+                    st = dict(st); st['stepOrder'] = top_order; st['childStepId'] = None
+                    steps.append(st)
+                top_order += 1
+        else:
+            steps.append(_repeat_group(top_order, reps, inner,
+                                       skip_last_rest=(rec_m > 0 and not _next_is_work)))
+            top_order += 1
 
     d = date.replace('-', '')
     if with_warmup:
