@@ -1147,6 +1147,42 @@ def _block_rest_note(bl: dict, sb: dict | None) -> str:
 RECO_PROMPT_VARIANT = "challenger"  # "champion" — мгновенный откат к боевой версии
 
 
+def _brief_in_b_enabled() -> bool:
+    """13.10.2026 (Антон): раздел «БРИФ» в промте B. Откат: BRIEF_IN_B=0 (или off/false/no) в .env + деплой."""
+    import os as _os
+    return str(_os.getenv("BRIEF_IN_B", "1")).strip().lower() not in ("0", "off", "false", "no")
+
+
+def _brief_prompt_text(analysis: dict | None, numbered: bool = True) -> str:
+    """13.10.2026 (Антон): ОТДЕЛЬНЫЙ раздел «14. БРИФ» в конце промта B — режимы тренировки из анализа
+    анонса (analysis["modes"], те же, что идут брифом в канал), интенсивность относительно зон бегуна,
+    и сверка перед ответом: основная рекомендация согласуется с брифом. Нет режимов в анализе — раздела нет.
+    Повод: 13.10 (8 км + 2 км + 2 км) ИИ восьмерым поставил базу 8 км на ПАНО или быстрее, а бриф говорил
+    «на 10-15 сек/км медленнее ПАНО». Удалить целиком — убрать этот вызов в двух местах ниже."""
+    if not _brief_in_b_enabled():
+        return ""
+    modes = (analysis or {}).get("modes") or []
+    lines = []
+    for m in modes:
+        if not isinstance(m, dict) or not m.get("element") or not m.get("intensity"):
+            continue
+        dist = f" {m['dist']}" if m.get("dist") else ""
+        lines.append(f"— {m['element']}:{dist} — {m['intensity']}")
+    if not lines:
+        return ""
+    head = "\n\n\n14. БРИФ\n\n" if numbered else "\n\nБРИФ\n\n"
+    return (
+        head
+        + "БРИФ — режимы тренировки из анализа анонса, их видят все в канале. Интенсивность дана относительно "
+        "зон бегуна: ПАНО = threshold, МПК = interval.\n"
+        + "\n".join(lines) + "\n"
+        + "Основная рекомендация согласуется с брифом: темп каждого элемента рекомендованной группы попадает "
+        "в интенсивность брифа, пересчитанную в зоны этого бегуна (допуск до 10 сек/км). Перед ответом сверь "
+        "это один раз, коротко; при расхождении на зону и больше выбери группу ближе к брифу и назови в reason, "
+        "что выбор сверен с брифом.\n"
+    )
+
+
 def build_ai_b_prompt(analysis: dict, user_data: dict, zones_map: dict, recovery: dict | None, recovery_scenario_text: str = "", speed_ceilings: list | None = None) -> str:
     """Развилка боевого промта рекомендации: challenger правится, champion заморожен."""
     fn = (build_ai_b_prompt_reco_challenger if RECO_PROMPT_VARIANT == "challenger"
@@ -1437,7 +1473,7 @@ def build_ai_b_prompt_reco_champion(analysis: dict, user_data: dict, zones_map: 
         "При нормальном восстановлении ничего не добавляй. "
         "lowered_by_recovery всегда false, group_if_recovered всегда null.\n"
         "Отвечай только JSON, без лишнего текста."
-    )
+    ) + _brief_prompt_text(analysis, numbered=False)   # 13.10.2026: раздел «БРИФ» (откат BRIEF_IN_B=0)
 
 
 
@@ -1796,6 +1832,7 @@ def build_ai_b_prompt_reco_challenger(analysis: dict, user_data: dict, zones_map
                 ".\n"
             ) if speed_ceilings else ""
         )
+        + _brief_prompt_text(analysis)   # 13.10.2026: «14. БРИФ» последним разделом (откат BRIEF_IN_B=0)
     )
 
 
