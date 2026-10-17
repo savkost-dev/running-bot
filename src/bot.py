@@ -2676,6 +2676,22 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if len(result_lines) == 1:
             result_lines.append("Нет подключённых сервисов.\nПодключи трекер в Настройках → Сервисы.")
+        else:
+            # 17.10.2026 (Антон): кнопка обновляет всю информацию — после записи якорей с трекеров
+            # пересчитать зоны здесь же. Раньше новое VO2max ложилось в профиль, а зоны ждали ночного
+            # пересчёта (только вт/пт/вс): у админа 56.3 с 15.10 дошло до ПАНО лишь 16.10. ANCHORS.md, 11.12.
+            try:
+                import database as _dbz
+                _old_thr = ((_dbz.get_pace_zones_raw(db_user_id) or {}).get("zones") or {}).get("threshold")
+                _zres = zones.recalculate_and_save(db_user_id)
+                if _zres:
+                    _new_thr = (_zres.get("zones") or {}).get("threshold")
+                    result_lines.append(
+                        f"📐 Зоны: ПАНО {_new_thr}/км"
+                        + (f" (было {_old_thr})" if _old_thr and _old_thr != _new_thr else ", без изменений")
+                    )
+            except Exception as e:
+                logger.warning(f"Zones recalc error (refresh button) for {user.id}: {e}")
 
         await query.edit_message_text("\n".join(result_lines), reply_markup=get_main_keyboard())
 
