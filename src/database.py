@@ -943,7 +943,8 @@ def get_bot_stats() -> dict:
             "SELECT COUNT(*) FROM user_tokens WHERE service = 'polar'"
         ).fetchone()[0]
         profile = conn.execute(
-            "SELECT COUNT(*) FROM user_profile WHERE vo2max IS NOT NULL"
+            # 17.10.2026: по новой схеме; старое поле vo2max ночное задание больше не пишет
+            "SELECT COUNT(*) FROM user_profile WHERE vo2max_device IS NOT NULL OR vo2max_manual IS NOT NULL"
         ).fetchone()[0]
         workout_7d, workout_users_7d = conn.execute(
             "SELECT COUNT(*), COUNT(DISTINCT user_id) FROM user_activity "

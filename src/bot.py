@@ -6149,13 +6149,15 @@ async def scheduled_evening(context: ContextTypes.DEFAULT_TYPE):
 
 
 async def scheduled_cache_refresh(context: ContextTypes.DEFAULT_TYPE):
-    """03:45 UTC (06:45 МСК) — обновляет кэш всех сервисов перед утренней рассылкой.
-    Порядок: до scheduled_morning (04:00 UTC / 07:00 МСК).
-    Обновляет: Strava CTL/ATL/TSB, Garmin recovery+VO2max, COROS, Polar.
+    """Пн–сб 02:00 UTC (05:00 МСК), вс 04:15 UTC через scheduled_cache_refresh_sunday — по всем пользователям:
+    VO2max с главного трекера → vo2max_device, пересчёт зон, нормализация единого слоя.
+    Strava не трогает (вебхук activity.create с 08.08.2026). Ночное сырьё — в scheduled_wakeup_poll.
+    17.10.2026 (Антон): ежедневно, а не вт/пт/вс — часы меняют VO2max после пробежки (вт/чт/сб/вс),
+    и четверговое изменение ждало зон до вторника. ANCHORS.md, раздел 7 и 11.12.
     """
-    logger.info("Запускаю обновление кэша всех сервисов (03:45 UTC)...")
+    logger.info("Запускаю обновление VO2max и зон по всем пользователям...")
     users = get_all_users()
-    counts = {"strava": 0, "garmin": 0, "coros": 0, "polar": 0, "whoop": 0, "vo2max": 0, "normalized": 0}
+    counts = {"vo2max": 0, "normalized": 0}
 
     for telegram_id, name, _ in users:
         db_user_id = get_or_create_user(telegram_id, name)
@@ -6171,19 +6173,22 @@ async def scheduled_cache_refresh(context: ContextTypes.DEFAULT_TYPE):
         # ── VO2max из трекера (тихо) ───────────────────────────
         new_vo2max, tracker_key, tracker_name = await _get_vo2max_from_tracker(db_user_id)
         if new_vo2max is not None:
-            save_vo2max_device(db_user_id, float(new_vo2max), tracker_key or "auto")
-            profile = get_user_profile(db_user_id)
-            if not (profile or {}).get("vo2max_locked"):
-                old_vo2max = (profile or {}).get("vo2max")
-                if old_vo2max is None:
-                    save_user_profile(db_user_id, vo2max=new_vo2max, vo2max_source="auto")
-                elif abs(new_vo2max - float(old_vo2max)) >= 2:
-                    save_user_profile(db_user_id, vo2max=new_vo2max, vo2max_source="auto")
-                    counts["vo2max"] += 1
-                    logger.info(
-                        f"VO2max обновлён для {telegram_id}: "
-                        f"{float(old_vo2max):.0f} → {new_vo2max:.0f} ({tracker_name})"
-                    )
+            # 17.10.2026 (Антон): пишем только новую схему (vo2max_device). Старое поле user_profile.vo2max
+            # и порог «от 2 единиц» (с 0.12.2) убраны: профиль при чтении подставляет vo2max_device, порог
+            # ничего не защищал и срабатывал лишь у троих с приоритетом «вручную» каждую ночь (журнал 01–17.10).
+            # Счётчик «VO2max изменён» теперь = реальные изменения на часах. ANCHORS.md, 11.12.
+            try:
+                import database as _dbz
+                _prev = ((_dbz.get_vo2max_resolved(db_user_id) or {}).get("device") or {}).get("value")
+            except Exception:
+                _prev = None
+            if save_vo2max_device(db_user_id, float(new_vo2max), tracker_key or "auto") \
+                    and (_prev is None or abs(float(new_vo2max) - float(_prev)) >= 0.05):
+                counts["vo2max"] += 1
+                logger.info(
+                    f"VO2max с часов для {telegram_id}: "
+                    f"{('—' if _prev is None else f'{float(_prev):.1f}')} → {float(new_vo2max):.1f} ({tracker_name})"
+                )
 
         # ── Персональные темповые зоны (пересчёт после обновления данных) ──
         try:
@@ -6201,66 +6206,7 @@ async def scheduled_cache_refresh(context: ContextTypes.DEFAULT_TYPE):
 
         await asyncio.sleep(1)
 
-    logger.info(
-        f"Кэш обновлён: Strava={counts['strava']}, Garmin={counts['garmin']}, "
-        f"COROS={counts['coros']}, Polar={counts['polar']}, Whoop={counts['whoop']}, "
-        f"VO2max изменён={counts['vo2max']}, normalized={counts['normalized']}"
-    )
-
-
-async def scheduled_data_refresh(context: ContextTypes.DEFAULT_TYPE):
-    """Ежедневно в 03:00 UTC обновляет Strava и Garmin для всех пользователей."""
-    logger.info("Запускаю плановое обновление данных (Strava + Garmin)...")
-    users = get_all_users()
-    strava_ok = garmin_ok = vo2max_ok = 0
-
-    for telegram_id, name, _ in users:
-        db_user_id = get_or_create_user(telegram_id, name)
-
-        # Strava — убрана из расписания 08.08.2026 (вебхук activity.create,
-        # см. oauth_server._strava_activity_ingest)
-
-        # Garmin recovery cache
-        if get_token(db_user_id, "garmin"):
-            prefs = get_preferences(db_user_id)
-            if prefs and prefs.get("use_garmin_recovery", True):
-                result = await _fetch_garmin_recovery(db_user_id)
-                if result:
-                    garmin_ok += 1
-
-            # VO2max — обновляем если >7 дней
-            try:
-                profile = get_user_profile(db_user_id)
-                vo2max_updated = (profile or {}).get("vo2max_updated_at") or ""
-                stale = True
-                if vo2max_updated:
-                    from datetime import datetime as _dt
-                    stale = (_dt.now() - _dt.fromisoformat(vo2max_updated)).days > 7
-                if stale:
-                    from garmin import get_vo2max, get_lactate_threshold
-                    vo2max, lt = await asyncio.gather(
-                        get_vo2max(db_user_id),
-                        get_lactate_threshold(db_user_id),
-                        return_exceptions=True,
-                    )
-                    if not isinstance(vo2max, Exception) and vo2max:
-                        save_vo2max_device(db_user_id, float(vo2max), "garmin")
-                        if not (profile or {}).get("vo2max_locked"):
-                            save_user_profile(db_user_id, vo2max=vo2max, vo2max_source="garmin")
-                            vo2max_ok += 1
-                    if not isinstance(lt, Exception) and lt:
-                        save_lt_device(db_user_id, lt["pace"], lt.get("hr"), "garmin")
-                        if not (profile or {}).get("lactate_locked"):
-                            save_user_profile(db_user_id,
-                                              lactate_threshold_pace=lt["pace"],
-                                              lactate_threshold_hr=lt["hr"],
-                                              lactate_source="auto")
-            except Exception as e:
-                logger.error(f"Garmin VO2max refresh error for {telegram_id}: {e}")
-
-        await asyncio.sleep(1)
-
-    logger.info(f"Обновление завершено: Strava={strava_ok}, Garmin recovery={garmin_ok}, VO2max={vo2max_ok}")
+    logger.info(f"Кэш обновлён: VO2max изменён={counts['vo2max']}, normalized={counts['normalized']}")
 
 
 async def _check_stale_credentials(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -8508,7 +8454,7 @@ def main():
     job_queue.run_daily(scheduled_recovery_prefetch, time=time(hour=16, minute=5))                       # 19:05 МСК — прогрев к рассылке
     job_queue.run_daily(scheduled_evening,       time=time(hour=17, minute=0))                          # 20:00 МСК (вернули 06.09)
     # PTB days: 0=вс, 1=пн … 6=сб → вт/пт = (2, 5), вс = (0,)
-    job_queue.run_daily(scheduled_cache_refresh, time=time(hour=2,  minute=0),  days=(2, 5))            # 05:00 МСК вт/пт
+    job_queue.run_daily(scheduled_cache_refresh, time=time(hour=2,  minute=0),  days=(1, 2, 3, 4, 5, 6))  # 05:00 МСК пн–сб (с 0.50.5 ежедневно; вс — отдельно в 04:15 UTC)
     job_queue.run_daily(scheduled_morning,       time=time(hour=4,  minute=0),  days=(2, 5))            # 07:00 МСК вт/пт
     job_queue.run_daily(scheduled_cache_refresh_sunday, time=time(hour=4, minute=15), days=(0,))        # 07:15 МСК вс
     job_queue.run_daily(scheduled_morning_sunday,       time=time(hour=4, minute=30), days=(0,))        # 07:30 МСК вс
