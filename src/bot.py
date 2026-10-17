@@ -1355,7 +1355,7 @@ def _build_help_text(is_admin: bool) -> str:
             "/admin_data on|off — блок «🔬 Данные для рекомендации» после каждой рекомендации\n"
             "/show_analyze — показать последний Шаг 1 из базы\n"
             "/holiday — выбор праздника дня с кнопками (без даты — на завтра; /holiday 1103, 20261103 или 2026-11-03)\n"
-            "/bg — нарисовать фон на дату (/bg 1103; p — только задание без картинки; свой текст — рисовать по нему)\n"
+            "/bg — фон на дату: /bg 1103 — нарисовать; p — только задание; тема юрский парк — тема одной фразой; show — текущий файл; свой текст — рисовать по нему\n"
             "/b — вариант B для себя\n"
             "/b_user — вариант B для выбранного пользователя\n"
             "/a_user — вариант A для выбранного пользователя\n"
@@ -3946,15 +3946,46 @@ def _bg_kind(date_str: str) -> str:
     return "лонг" if datetime.strptime(date_str, "%Y-%m-%d").weekday() == 6 else "интервалы"
 
 
+def _bg_keyboard(date_str: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[InlineKeyboardButton("✅ Оставить", callback_data=f"bg:{date_str}:keep"),
+                                  InlineKeyboardButton("🔁 Перерисовать", callback_data=f"bg:{date_str}:redo"),
+                                  InlineKeyboardButton("🚫 Без фона", callback_data=f"bg:{date_str}:none")],
+                                 [InlineKeyboardButton("✏️ Своё задание", callback_data=f"bg:{date_str}:edit")]])
+
+
+async def bg_show_current(context, date_str: str) -> None:
+    """/bg дата show — текущий файл фона на дату с теми же кнопками (17.10.2026)."""
+    import ai_package
+    path = ai_package._background_for(date_str)
+    holiday = ai_package._holiday_for(date_str)
+    if not path:
+        await _notify_admin(context.bot, f"🖼 На {date_str} фона нет ({holiday or 'без праздника'}).")
+        return
+    hint = (context.bot_data.get("bg_hint") or {}).get(date_str)
+    caption = (f"🖼 Фон на {date_str} ({_bg_kind(date_str)}) · {holiday or 'без праздника'}"
+               + (f" · тема: {hint}" if hint else "") + f"\nТекущий файл: {os.path.basename(path)}")
+    try:
+        with open(path, "rb") as f:
+            await context.bot.send_photo(ADMIN_ID, photo=f, caption=caption[:1000], reply_markup=_bg_keyboard(date_str))
+    except Exception as e:
+        await _notify_admin(context.bot, f"🖼 {date_str}: файл есть ({path}), но не отправился: {e}")
+
+
 async def bg_make_and_preview(context, date_str: str, shift: int = 0, prompt: str | None = None,
-                              only_prompt: bool = False) -> None:
-    """Задание (DeepSeek или заданное) → картинка → assets/bg/ → превью админу с кнопками."""
+                              only_prompt: bool = False, hint: str | None = None) -> None:
+    """Задание (DeepSeek или заданное) → картинка → assets/bg/ → превью админу с кнопками.
+    hint — тема одной фразой (/bg дата тема …); запоминается на дату, «Перерисовать» её сохраняет."""
     import ai_package
     holiday = ai_package._holiday_for(date_str)
     kind = _bg_kind(date_str)
+    if hint:
+        context.bot_data.setdefault("bg_hint", {})[date_str] = hint
+    else:
+        hint = (context.bot_data.get("bg_hint") or {}).get(date_str)
     if not prompt:
-        prompt = await asyncio.to_thread(ai_package.bg_build_prompt, date_str, holiday, kind, shift)
-    head = f"🖼 Фон на {date_str} ({kind}) · {holiday or 'без праздника'} · стиль {shift + 1}"
+        prompt = await asyncio.to_thread(ai_package.bg_build_prompt, date_str, holiday, kind, shift, "smart", hint)
+    head = (f"🖼 Фон на {date_str} ({kind}) · {holiday or 'без праздника'} · стиль {shift + 1}"
+            + (f" · тема: {hint}" if hint else ""))
     if only_prompt:
         await _notify_admin(context.bot, f"{head}\n\n{prompt}")
         return
@@ -3965,10 +3996,7 @@ async def bg_make_and_preview(context, date_str: str, shift: int = 0, prompt: st
     path = ai_package.bg_save(date_str, data, ext)
     context.bot_data.setdefault("bg_shift", {})[date_str] = shift
     context.bot_data.setdefault("bg_prompt", {})[date_str] = prompt
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Оставить", callback_data=f"bg:{date_str}:keep"),
-                                InlineKeyboardButton("🔁 Перерисовать", callback_data=f"bg:{date_str}:redo"),
-                                InlineKeyboardButton("🚫 Без фона", callback_data=f"bg:{date_str}:none")],
-                               [InlineKeyboardButton("✏️ Своё задание", callback_data=f"bg:{date_str}:edit")]])
+    kb = _bg_keyboard(date_str)
     caption = f"{head} · {info}\nСохранено, без ответа останется.\n\n{prompt}"[:1000]
     try:
         with open(path, "rb") as f:
@@ -4046,10 +4074,21 @@ async def cmd_bg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if parsed:
             date_str = parsed
             args = args[1:]
+    # 17.10.2026: «show» (или «показать») — текущий файл; «тема <фраза>» — тема одной фразой для DeepSeek;
+    # «p» — только задание (можно «p тема …»); иначе весь текст — готовое задание.
+    if args and args[0].lower() in ("показать", "show"):
+        context.application.create_task(bg_show_current(context, date_str))
+        return
     only_prompt = bool(args) and args[0].lower() == "p"
+    if only_prompt:
+        args = args[1:]
+    hint = None
+    if args and args[0].lower() in ("тема", "theme"):
+        hint = " ".join(args[1:]).strip() or None
+        args = []
     custom = None if (only_prompt or not args) else " ".join(args)
     await update.message.reply_text(f"⏳ Фон на {date_str}: " + ("пишу задание…" if only_prompt else "задание и картинка, 1–2 мин…"))
-    context.application.create_task(bg_make_and_preview(context, date_str, prompt=custom, only_prompt=only_prompt))
+    context.application.create_task(bg_make_and_preview(context, date_str, prompt=custom, only_prompt=only_prompt, hint=hint))
 
 
 def _holiday_pick_message(date_str: str):
