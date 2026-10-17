@@ -3946,8 +3946,9 @@ def _bg_kind(date_str: str) -> str:
     return "лонг" if datetime.strptime(date_str, "%Y-%m-%d").weekday() == 6 else "интервалы"
 
 
-def _bg_keyboard(date_str: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[InlineKeyboardButton("✅ Оставить", callback_data=f"bg:{date_str}:keep"),
+def _bg_keyboard(date_str: str, candidate: bool = False) -> InlineKeyboardMarkup:
+    first = "✅ Взять" if candidate else "✅ Оставить"
+    return InlineKeyboardMarkup([[InlineKeyboardButton(first, callback_data=f"bg:{date_str}:keep"),
                                   InlineKeyboardButton("🔁 Перерисовать", callback_data=f"bg:{date_str}:redo"),
                                   InlineKeyboardButton("🚫 Без фона", callback_data=f"bg:{date_str}:none")],
                                  [InlineKeyboardButton("✏️ Своё задание", callback_data=f"bg:{date_str}:edit")]])
@@ -3961,6 +3962,9 @@ async def bg_show_current(context, date_str: str) -> None:
     if not path:
         await _notify_admin(context.bot, f"🖼 На {date_str} фона нет ({holiday or 'без праздника'}).")
         return
+    cand = ai_package.bg_candidate_for(date_str)
+    if cand:
+        await _notify_admin(context.bot, f"🖼 На {date_str} есть и кандидат ({os.path.basename(cand)}) — он не в бою, ждёт «Взять».")
     hint = (context.bot_data.get("bg_hint") or {}).get(date_str)
     caption = (f"🖼 Фон на {date_str} ({_bg_kind(date_str)}) · {holiday or 'без праздника'}"
                + (f" · тема: {hint}" if hint else "") + f"\nТекущий файл: {os.path.basename(path)}")
@@ -3993,11 +3997,15 @@ async def bg_make_and_preview(context, date_str: str, shift: int = 0, prompt: st
     if not data:
         await _notify_admin(context.bot, f"{head}\n❌ Не нарисовалось: {info}\n\nЗадание было:\n{prompt}")
         return
-    path = ai_package.bg_save(date_str, data, ext)
+    # 17.10.2026 (Антон): выбранный фон не затирать — если он есть, новая картинка ждёт кнопки «Взять»
+    has_live = bool(ai_package._background_for(date_str))
+    path = ai_package.bg_save(date_str, data, ext, candidate=has_live)
     context.bot_data.setdefault("bg_shift", {})[date_str] = shift
     context.bot_data.setdefault("bg_prompt", {})[date_str] = prompt
-    kb = _bg_keyboard(date_str)
-    caption = f"{head} · {info}\nСохранено, без ответа останется.\n\n{prompt}"[:1000]
+    kb = _bg_keyboard(date_str, candidate=has_live)
+    status = ("Текущий фон на месте; «Взять» — заменить им." if has_live
+              else "Сохранено, без ответа останется.")
+    caption = f"{head} · {info}\n{status}\n\n{prompt}"[:1000]
     try:
         with open(path, "rb") as f:
             await context.bot.send_photo(ADMIN_ID, photo=f, caption=caption, reply_markup=kb)
@@ -4019,9 +4027,14 @@ async def bg_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await query.answer()
         return
     if action == "keep":
-        await query.answer("Оставляю")
+        promoted = ai_package.bg_promote(date_str) if ai_package.bg_candidate_for(date_str) else None
+        await query.answer("Взял, теперь это фон" if promoted else "Оставляю")
         try:
-            await query.edit_message_reply_markup(reply_markup=None)
+            if promoted:
+                cap = (query.message.caption or "").split("\n", 1)[0]
+                await query.edit_message_caption(caption=f"{cap}\n✅ Взято: теперь это фон на {date_str}.")
+            else:
+                await query.edit_message_reply_markup(reply_markup=None)
         except BadRequest:
             pass
         return

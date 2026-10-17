@@ -1631,13 +1631,15 @@ def bg_generate(prompt: str, provider: str | None = None) -> tuple[bytes | None,
     return None, "", "; ".join(errors)
 
 
-def bg_save(wdate, data: bytes, ext: str) -> str | None:
-    """Сохраняет фон в assets/bg/YYYY-MM-DD.<ext>, другие расширения на эту дату убирает."""
+def bg_save(wdate, data: bytes, ext: str, candidate: bool = False) -> str | None:
+    """Сохраняет фон в assets/bg/YYYY-MM-DD.<ext>, другие расширения на эту дату убирает.
+    candidate=True (17.10.2026, Антон: старый выбор не затирать до выбора нового) — пишет
+    YYYY-MM-DD.new.<ext>; такой файл _background_for не видит, в бой уходит через bg_promote."""
     d = _theme_date(wdate)
     if not d or not data:
         return None
     os.makedirs(BG_DIR, exist_ok=True)
-    stem = d.strftime("%Y-%m-%d")
+    stem = d.strftime("%Y-%m-%d") + (".new" if candidate else "")
     for e in BG_EXTS:
         q = os.path.join(BG_DIR, stem + e)
         if os.path.exists(q) and e != "." + ext:
@@ -1650,17 +1652,48 @@ def bg_save(wdate, data: bytes, ext: str) -> str | None:
     return path
 
 
-def bg_remove(wdate) -> bool:
-    """Убирает фон на дату (все расширения). True, если что-то удалено."""
+def bg_candidate_for(wdate) -> str | None:
+    """Путь к кандидату assets/bg/YYYY-MM-DD.new.* или None."""
+    d = _theme_date(wdate)
+    if not d:
+        return None
+    for e in BG_EXTS:
+        q = os.path.join(BG_DIR, d.strftime("%Y-%m-%d") + ".new" + e)
+        if os.path.exists(q):
+            return q
+    return None
+
+
+def bg_promote(wdate) -> str | None:
+    """Кандидат становится боевым фоном (старый боевой убирается). Возвращает новый путь или None."""
+    cand = bg_candidate_for(wdate)
+    d = _theme_date(wdate)
+    if not (cand and d):
+        return None
+    ext = os.path.splitext(cand)[1]
+    stem = d.strftime("%Y-%m-%d")
+    for e in BG_EXTS:
+        q = os.path.join(BG_DIR, stem + e)
+        if os.path.exists(q):
+            os.remove(q)
+    path = os.path.join(BG_DIR, stem + ext)
+    os.replace(cand, path)
+    return path
+
+
+def bg_remove(wdate, candidate_too: bool = True) -> bool:
+    """Убирает фон на дату (все расширения) и, по умолчанию, кандидата. True, если что-то удалено."""
     d = _theme_date(wdate)
     if not d:
         return False
     removed = False
-    for e in BG_EXTS:
-        q = os.path.join(BG_DIR, d.strftime("%Y-%m-%d") + e)
-        if os.path.exists(q):
-            os.remove(q)
-            removed = True
+    stems = [d.strftime("%Y-%m-%d")] + ([d.strftime("%Y-%m-%d") + ".new"] if candidate_too else [])
+    for stem in stems:
+        for e in BG_EXTS:
+            q = os.path.join(BG_DIR, stem + e)
+            if os.path.exists(q):
+                os.remove(q)
+                removed = True
     return removed
 
 
