@@ -7,6 +7,7 @@ from ai_package import (
     PROMPT,
     CARD_PLATE_ALPHA,
     CARD_ROW_RGBA,
+    card_alphas_for,
     _apply_card_background,
     card_theme_for,
     _age,
@@ -733,10 +734,10 @@ async def build_charts_stacked(splits, plan_steps, name: str, out_dir: str,
                  ha="right", va="bottom")
         if bg_path:
             fig.canvas.draw()   # нужны реальные размеры подписей для tight bbox
-            zones = [{"axes": [ax], "alpha": CARD_PLATE_ALPHA["chart"], "tight": True,
-                      "texts": [fig._suptitle]}]
+            _ca = card_alphas_for(bg_path)["chart"]
+            zones = [{"axes": [ax], "alpha": _ca, "tight": True, "texts": [fig._suptitle]}]
             if has_rest:
-                zones.append({"axes": [ax2], "alpha": CARD_PLATE_ALPHA["chart"], "tight": True})
+                zones.append({"axes": [ax2], "alpha": _ca, "tight": True})
             _apply_card_background(fig, bg_path, zones)
         out_path = os.path.join(out_dir, f"charts_{tag}.png")
         fig.savefig(out_path, dpi=120)
@@ -1184,7 +1185,8 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
         if bg_path:
             # 09.10.2026 (Антон): с фоном строки полупрозрачные, чтобы картинка была видна сквозь
             # таблицу; заливки отклонений (цветные) остаются плотными — это сигнал.
-            zebra, hdr_bg, avg_bg = CARD_ROW_RGBA["row"], CARD_ROW_RGBA["hdr"], CARD_ROW_RGBA["avg"]
+            _al = card_alphas_for(bg_path)
+            zebra, hdr_bg, avg_bg = _al["row"], _al["hdr"], _al["avg"]
         row_text = "#ffffff" if bg_path else th["text"]   # цифры при фоне — чисто белые
         sub_no = "#bbbbbb" if bg_path else "#777777"      # номер куска (1·2) при фоне светлее
         table_axes = []
@@ -1246,10 +1248,11 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
 
         if bg_path:
             # Плашки: шапка+схема, таблицы, итоги — между ними виден фон.
+            _al = card_alphas_for(bg_path)
             _apply_card_background(fig, bg_path, [
-                {"axes": [ax_h, ax_d], "alpha": CARD_PLATE_ALPHA["header"]},
-                {"axes": table_axes, "alpha": CARD_PLATE_ALPHA["table"]},
-                {"axes": [ax_b], "alpha": CARD_PLATE_ALPHA["footer"]}])
+                {"axes": [ax_h, ax_d], "alpha": _al["header"]},
+                {"axes": table_axes, "alpha": _al["table"]},
+                {"axes": [ax_b], "alpha": _al["footer"]}])
 
         out_path = os.path.join(out_dir, f"card_{tag}.png")
         fig.savefig(out_path, dpi=120)

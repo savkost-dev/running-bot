@@ -1360,6 +1360,33 @@ def _background_for(wdate) -> str | None:
     return None
 
 
+def _bg_brightness(path: str) -> float:
+    """Средняя яркость картинки 0..255 (по уменьшенной копии); при ошибке 0 (как тёмная)."""
+    try:
+        from PIL import Image, ImageStat
+        with Image.open(path) as im:
+            return float(ImageStat.Stat(im.convert("L").resize((64, 64))).mean[0])
+    except Exception as e:
+        logger.warning(f"card theme: яркость фона не определилась ({path}): {e}")
+        return 0.0
+
+
+def card_alphas_for(bg_path: str | None) -> dict:
+    """Плотность плашек и строк под этот фон (17.10.2026, Антон: на светлой акварели низ таблицы
+    читался плохо). Тёмный фон (яркость ≤ 90) — константы как были; к яркости 180 плашки и строки
+    плотнее примерно на четверть. Ключи: header/table/footer/chart (alpha) и row/hdr/avg (RGBA)."""
+    b = _bg_brightness(bg_path) if bg_path else 0.0
+    k = max(0.0, min(1.0, (b - 90.0) / 90.0))
+    out = {name: min(0.92, a + k * boost) for name, a, boost in (
+        ("header", CARD_PLATE_ALPHA["header"], 0.20), ("table", CARD_PLATE_ALPHA["table"], 0.25),
+        ("footer", CARD_PLATE_ALPHA["footer"], 0.28), ("chart", CARD_PLATE_ALPHA["chart"], 0.18))}
+    for name, boost in (("row", 0.35), ("hdr", 0.10), ("avg", 0.15)):
+        r, g, bb, a = CARD_ROW_RGBA[name]
+        out[name] = (r, g, bb, min(0.95, a + k * boost))
+    out["brightness"] = b
+    return out
+
+
 def card_theme_for(wdate) -> dict:
     """{holiday: str|None, bg: path|None}; при CARD_THEME=0 оба None."""
     if not _card_theme_enabled():
@@ -1400,6 +1427,7 @@ def _apply_card_background(fig, bg_path: str, zone_axes, pad: float = 0.012) -> 
 
         renderer = None
         inv = fig.transFigure.inverted()
+        rects = []   # [y0, y1, alpha] по зонам
         for zi, zone in enumerate(zone_axes):
             axes = zone.get("axes") or []
             alpha = float(zone.get("alpha", CARD_PLATE_ALPHA["table"]))
@@ -1419,16 +1447,24 @@ def _apply_card_background(fig, bg_path: str, zone_axes, pad: float = 0.012) -> 
             if not boxes:
                 continue
             # 09.10.2026 (Антон): без открытых краёв — плашки на всю ширину, первая до верха,
-            # последняя до низа; картинка видна только в зазорах между зонами и сквозь строки.
-            x0, x1 = -0.02, 1.02
+            # последняя до низа.
             y0 = min(b.y0 for b in boxes) - pad
             y1 = max(b.y1 for b in boxes) + pad
             if zi == 0:
                 y1 = 1.02
             if zi == len(zone_axes) - 1:
                 y0 = -0.02
+            rects.append([y0, y1, alpha])
+        # 17.10.2026 (Антон): полосы на стыках — соседние плашки то накладывались (темнее),
+        # то оставляли щель (светлее). Теперь стык ровно посередине: ни наложения, ни щели.
+        rects.sort(key=lambda r: r[1], reverse=True)   # сверху вниз
+        for upper, lower in zip(rects, rects[1:]):
+            mid = (upper[0] + lower[1]) / 2.0
+            upper[0] = mid
+            lower[1] = mid
+        for y0, y1, alpha in rects:
             fig.patches.append(FancyBboxPatch(
-                (x0, y0), x1 - x0, y1 - y0, boxstyle="square,pad=0",
+                (-0.02, y0), 1.04, y1 - y0, boxstyle="square,pad=0",
                 facecolor=(*CARD_PLATE_RGB, alpha), edgecolor="none", transform=fig.transFigure,
                 zorder=-1, figure=fig))
         return True
@@ -1831,10 +1867,10 @@ async def build_charts_stacked(splits, plan_steps, name: str, out_dir: str,
                  ha="right", va="bottom")
         if bg_path:
             fig.canvas.draw()   # нужны реальные размеры подписей для tight bbox
-            zones = [{"axes": [ax], "alpha": CARD_PLATE_ALPHA["chart"], "tight": True,
-                      "texts": [fig._suptitle]}]
+            _ca = card_alphas_for(bg_path)["chart"]
+            zones = [{"axes": [ax], "alpha": _ca, "tight": True, "texts": [fig._suptitle]}]
             if has_rest:
-                zones.append({"axes": [ax2], "alpha": CARD_PLATE_ALPHA["chart"], "tight": True})
+                zones.append({"axes": [ax2], "alpha": _ca, "tight": True})
             _apply_card_background(fig, bg_path, zones)
 
         out_path = os.path.join(out_dir, f"charts_{tag}.png")
@@ -2222,7 +2258,8 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
         if bg_path:
             # 09.10.2026 (Антон): с фоном строки полупрозрачные, чтобы картинка была видна сквозь
             # таблицу; заливки отклонений (цветные) остаются плотными — это сигнал.
-            zebra, hdr_bg, avg_bg = CARD_ROW_RGBA["row"], CARD_ROW_RGBA["hdr"], CARD_ROW_RGBA["avg"]
+            _al = card_alphas_for(bg_path)
+            zebra, hdr_bg, avg_bg = _al["row"], _al["hdr"], _al["avg"]
         row_text = "#ffffff" if bg_path else th["text"]   # цифры при фоне — чисто белые
         sub_no = "#bbbbbb" if bg_path else "#777777"      # номер куска (1·2) при фоне светлее
         table_axes = []
@@ -2284,10 +2321,11 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
 
         if bg_path:
             # Плашки: шапка+схема, таблицы, итоги — между ними виден фон.
+            _al = card_alphas_for(bg_path)
             _apply_card_background(fig, bg_path, [
-                {"axes": [ax_h, ax_d], "alpha": CARD_PLATE_ALPHA["header"]},
-                {"axes": table_axes, "alpha": CARD_PLATE_ALPHA["table"]},
-                {"axes": [ax_b], "alpha": CARD_PLATE_ALPHA["footer"]}])
+                {"axes": [ax_h, ax_d], "alpha": _al["header"]},
+                {"axes": table_axes, "alpha": _al["table"]},
+                {"axes": [ax_b], "alpha": _al["footer"]}])
 
         out_path = os.path.join(out_dir, f"card_{tag}.png")
         fig.savefig(out_path, dpi=120)
