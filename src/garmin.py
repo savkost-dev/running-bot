@@ -607,6 +607,8 @@ async def get_last_race(db_user_id: int) -> dict | None:
 
     Garmin надёжно определяет тип «гонка» через activityType.typeKey.
     Фильтруем только явные типы — без fallback по дистанции.
+    17.10.2026 (Антон): track_running убран — это интервалы на стадионе, не старт
+    (у Спиридона 500/300 ×10 от 16.10 стали «стартом 8 км» с восстановлением до 19.10).
     """
     client = await _client(db_user_id)
     if not client:
@@ -621,7 +623,7 @@ async def get_last_race(db_user_id: int) -> dict | None:
 
         races = [
             a for a in acts
-            if a.get("activityType", {}).get("typeKey", "") in ("running_race", "track_running")
+            if a.get("activityType", {}).get("typeKey", "") == "running_race"
         ]
         if not races:
             return None
