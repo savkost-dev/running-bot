@@ -96,11 +96,18 @@ def _mark_user_active_if_needed(telegram_id: int, name: str = "", username: str 
     return db_user_id
 
 
-async def _notify_admin(bot, text: str) -> None:
-    """Отправляет уведомление администратору. Тихо игнорирует ошибки."""
+async def _notify_admin(bot, text: str, parse_mode: str | None = None) -> None:
+    """Отправляет уведомление администратору. Тихо игнорирует ошибки.
+    17.10.2026: parse_mode="HTML" — для сводки рассылки с <pre>; если разметка не прошла, шлёт как текст."""
     try:
-        await bot.send_message(ADMIN_ID, text)
+        await bot.send_message(ADMIN_ID, text, parse_mode=parse_mode)
     except Exception as e:
+        if parse_mode:
+            try:
+                await bot.send_message(ADMIN_ID, text)
+                return
+            except Exception as e2:
+                e = e2
         logger.warning(f"Admin notify failed: {e}")
 
 
@@ -1222,6 +1229,7 @@ def _build_mailing_report(date: str, sent: list | None = None) -> str:
     if not recs:
         return ""
     groups: dict[str, list] = {}
+    import html as _html   # 17.10.2026: отчёт уходит как HTML — имена экранируем
     is_long2 = any(r.get("long2") for r in recs)
     for r in recs:
         g = str(r["recommended_group"] or "—")
@@ -1253,7 +1261,7 @@ def _build_mailing_report(date: str, sent: list | None = None) -> str:
         rec_tids = {r.get("telegram_id") for r in recs}
         no_rec = [(n, u) for tid, n, u in sent if tid not in rec_tids]
         if no_rec:
-            refs = ", ".join(f"@{u}" if u else (n or "—") for n, u in no_rec)
+            refs = ", ".join(f"@{u}" if u else _html.escape(n or "—") for n, u in no_rec)
             lines.append(f"📭 Без рекомендации ({len(no_rec)}): {refs}")
     if BROADCAST_REPORT_DETAILED:
         # 10.10.2026 (Антон): у лонга поимённо в том же порядке, что гистограмма — быстрые сверху
@@ -1265,7 +1273,7 @@ def _build_mailing_report(date: str, sent: list | None = None) -> str:
                 mark = "↓" if r["lowered_by_recovery"] else ""
                 nick = f" (@{r['username']})" if r.get("username") else ""
                 pace = {"faster": " 🚀", "ok": " 🎯", "slower": " 🐢"}.get(r.get("pace_answer"), "")
-                lines.append(f"   {r['name']}{nick} (rec={rs if rs is not None else '—'}{mark}){pace}")
+                lines.append(f"   {_html.escape(r['name'] or '')}{nick} (rec={rs if rs is not None else '—'}{mark}){pace}")
     return "\n".join(lines)
 
 
@@ -6121,7 +6129,8 @@ async def scheduled_evening(context: ContextTypes.DEFAULT_TYPE):
     # Отправка: влезает в лимит — одним сообщением; иначе базовое + отчёт отдельно (с разбивкой).
     try:
         if report and len(base) + 2 + len(report) <= 4000:
-            await _notify_admin(context.bot, f"{base}\n\n{report}")
+            # 17.10.2026: отчёт содержит <pre> (гистограммы лонга) — шлём как HTML, в сводке 17.10 теги пришли текстом
+            await _notify_admin(context.bot, f"{base}\n\n{report}", parse_mode="HTML")
         else:
             await _notify_admin(context.bot, base)
             if report:
@@ -6129,12 +6138,12 @@ async def scheduled_evening(context: ContextTypes.DEFAULT_TYPE):
                 clen = 0
                 for ln in report.split("\n"):
                     if chunk and clen + len(ln) + 1 > 4000:
-                        await _notify_admin(context.bot, "\n".join(chunk))
+                        await _notify_admin(context.bot, "\n".join(chunk), parse_mode="HTML")
                         chunk, clen = [], 0
                     chunk.append(ln)
                     clen += len(ln) + 1
                 if chunk:
-                    await _notify_admin(context.bot, "\n".join(chunk))
+                    await _notify_admin(context.bot, "\n".join(chunk), parse_mode="HTML")
     except Exception as e:
         logger.error(f"Отправка отчёта по рассылке: {e}")
 
