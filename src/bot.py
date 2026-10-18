@@ -1312,24 +1312,23 @@ async def cmd_notifications(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def _build_help_text(is_admin: bool) -> str:
+    # 18.10.2026 (Антон): справка почищена и сгруппирована — админская часть была 4117 знаков, за лимитом Telegram
     text = (
         f"Dusty Dumbbells Running Bot  v{VERSION}\n\n"
         "Команды:\n"
         "/start — главное меню\n"
-        "/workout — рекомендация группы для вт/пт тренировки (можно с датой: /workout 0901)\n"
-        "/long — рекомендация для воскресного Long Run\n"
+        "/workout — рекомендация группы на вт/пт (можно с датой: /workout 0901)\n"
+        "/long — рекомендация на воскресный Long Run\n"
         "/morning — утренняя проверка восстановления\n"
-        "/report — разбор прошедшей тренировки: графики и анализ от ИИ\n"
-        "/status — статус подключённых сервисов\n"
-        "/refresh — обновить данные из Strava\n"
-        "/profile — профиль (VO2max, лактатный порог)\n"
+        "/report — разбор прошедшей интервальной: карточка, графики, анализ ИИ\n"
+        "/report_long — разбор длительной (можно с датой старта: /report_long 0920)\n"
+        "/howto — как получить разбор\n"
+        "/profile — профиль: VO2max, лактатный порог, цель\n"
+        "/status — подключённые сервисы\n"
+        "/refresh — обновить данные с трекеров\n"
         "/mode — режим ИИ\n"
         "/notifications — настройки уведомлений\n"
-        "/connect_strava — подключить Strava\n"
-        "/connect_garmin — подключить Garmin Connect\n"
-        "/connect_whoop — подключить Whoop\n"
-        "/connect_coros — подключить COROS\n"
-        "/connect_polar — подключить Polar\n"
+        "/connect_strava, /connect_garmin, /connect_whoop, /connect_coros, /connect_polar — подключить сервис\n"
         "/feedback — обратная связь (проблема / идея)\n"
         "/help — эта справка\n\n"
         "Автоматические уведомления:\n"
@@ -1339,60 +1338,65 @@ def _build_help_text(is_admin: bool) -> str:
     if is_admin:
         text += (
             "\n\n— Администратор —\n"
-            "/stats — статистика пользователей и активности\n"
-            "/users — список всех пользователей\n"
-            "/services — пользователи по подключённым сервисам\n"
-            "/cleanup — убрать за теми, кто заблокировал бота: отзыв Strava/Polar\n"
-            "/prompt — последний промпт к модели\n"
-            "/debug — разбор последней тренировки\n"
-            "/ratings — последние оценки рекомендаций\n"
-            "/feedbacks — последние сообщения обратной связи\n"
-            "/analyze_test — тестовый разбор анонса (без записи в базу)\n"
-            "/preprocess_mode — режим анализа тренировок (deep/smart)\n"
-            "/test_workout — тест Шага 2 (рекомендация группы) на твоих данных\n"
-            "/long2 — лонг2 (ветка ИИ, тот же движок, что у /long) на своих данных, в базу не пишет: p — промт и данные без ИИ, u — выбрать пользователя, 39 — по id, smart|fast — режим, all [N] — прогон по всем в историю (shadow_long2)\n"
-            "/reanalyze — боевой переразбор анонса (запись в базу + эталоны + бриф)\n"
-            "/admin_data on|off — блок «🔬 Данные для рекомендации» после каждой рекомендации\n"
-            "/show_analyze — показать последний Шаг 1 из базы\n"
-            "/holiday — выбор праздника дня с кнопками (без даты — на завтра; /holiday 1103, 20261103 или 2026-11-03)\n"
-            "/bg — фон на дату: /bg 1103 — нарисовать; p — только задание; тема юрский парк — тема одной фразой; show — текущий файл; свой текст — рисовать по нему\n"
-            "/b — вариант B для себя\n"
-            "/b_user — вариант B для выбранного пользователя\n"
-            "/a_user — вариант A для выбранного пользователя\n"
-            "/w_user — реальный путь пользователя (его ai_mode: B или A)\n"
-            "/news — рубрика «Что нового»: что уйдёт пользователям после вечерней рассылки\n"
-            "/w_user_light — то же, но принудительно в лёгком режиме (fast)\n"
-            "/report_user — разбор тренировки выбранного пользователя (/report_user 18886572975 — конкретная по id/маске)\n"
-            "/l_user — лонг для выбранного пользователя\n"
-            "/p_b — промпт варианта B для себя (можно с датой: /p_b 0901)\n"
-            "/p_b_user — промпт варианта B для выбранного пользователя (можно с датой: /p_b_user 0901)\n"
-            "/p_a — промпт варианта A для себя\n"
-            "/p_a_user — промпт варианта A для выбранного пользователя\n"
-            "/p_analyze — промпт Шага 1 (анализ анонса)\n"
-            "/activity — активность по дням и топ действий за 14 дней"
-            "\n/mailing — отчёт по рассылке поимённо (без даты — последняя; /mailing 2026-08-18)"
-            "\n/brief — бриф режимов из кэша (/brief 20260804 — за дату); если режимов нет — кнопка «Сгенерировать режимы» (deep, без полного переанализа)"
-            "\n/brief_p — показать промт режимов целиком (/brief_p 20260904 — за дату), ИИ не зовётся"
-            "\n/rebrief — ПРИНУДИТЕЛЬНО пересобрать режимы заново (/rebrief 20260804), без переанализа анонса"
-            "\n/resend_evening — дослать вечернюю тем, кому не ушла (/resend_evening 20260814 [fast|smart|deep])"
-            "\n/msg_user <id> <текст> — написать юзеру от имени бота"
-            "\n/msg_list @user 128 … — написать по списку (текст — следующим сообщением)"
-            "\n/msg_service — написать всем, у кого подключён выбранный сервис"
-            "\n/profile_user — посмотреть профиль выбранного пользователя"
-            "\n/report — ИИ-анализ последней тренировки (/report DD_20260612 — выбрать)"
-            "\n/report_p — промт разбора целиком (/report_p 0918 — за дату; то же /report data), ИИ не зовётся"
-            "\n/report_long — разбор лонга (/report_long 0920 — за дату старта; s — без ИИ; data — промт и данные)"
-            "\n/shadow_run <дата> [smart|fast] — теневой прогон Шага 2 по всем с зонами, только в историю, никому не шлёт"
-            "\n/shadow_caps — теневое сравнение с потолком скорости и без, результат в файл и сводкой"
+            "Анонс (Шаг 1):\n"
+            "/show_analyze — последний разбор анонса из базы\n"
+            "/reanalyze — переразбор анонса в базу (эталоны + бриф)\n"
+            "/analyze_test — пробный разбор анонса без записи\n"
+            "/preprocess_mode — режим Шага 1 (deep/smart)\n"
+            "/brief [дата] — бриф режимов из кэша; /rebrief — пересобрать; /brief_p — его промт\n"
+            "/p_analyze — промт Шага 1\n\n"
+            "Рекомендация (Шаг 2):\n"
+            "/test_workout — интервальная на своих данных\n"
+            "/b, /b_user — ИИ-путь для себя / для пользователя; /a_user — формулы; /w_user — реальный путь пользователя (/w_user_light — в fast)\n"
+            "/l_user — лонг для пользователя\n"
+            "/long2 [p|u|<id>|smart|fast|all N] — лонг2 без записи: p — промт и данные, u — выбрать, all — теневой прогон по всем\n"
+            "/p_b, /p_b_user, /p_a, /p_a_user — промты Шага 2 (можно с датой: /p_b 0901)\n"
+            "/prompt — последний промт к модели\n"
+            "/admin_data on|off — блок «🔬 Данные для рекомендации»\n"
+            "/shadow_run <дата> [smart|fast] — теневой прогон Шага 2 по всем, только в историю\n\n"
+            "Разбор:\n"
+            "/report_user, /report_long_user — разбор интервальной / лонга выбранного пользователя\n"
+            "/report_p [дата] — промт разбора; /report_long data — промт и данные лонга\n"
+            "/debug — распарсенные данные последней тренировки\n\n"
+            "Рассылка и люди:\n"
+            "/stats, /users, /services, /activity — статистика, пользователи, сервисы, активность за 14 дней\n"
+            "/mailing [дата] — отчёт по рассылке поимённо\n"
+            "/resend_evening <дата> — дослать вечернюю тем, кому не ушла\n"
+            "/news — рубрика «Что нового» после вечерней рассылки\n"
+            "/ratings, /feedbacks — оценки и обратная связь\n"
+            "/profile_user — профиль пользователя\n"
+            "/msg_user <id> <текст>, /msg_list @user 128 …, /msg_service — написать от имени бота\n"
+            "/cleanup — убрать за заблокировавшими бота\n\n"
+            "Карточка:\n"
+            "/holiday [дата] — праздник дня кнопками\n"
+            "/bg [дата] — фон: p — задание; тема <фраза>; show — текущий; свой текст — рисовать по нему"
         )
     return text
+
+
+def _help_chunks(text: str, limit: int = 3900) -> list[str]:
+    """18.10.2026: админская справка перевалила за 4096 знаков Telegram («Message is too long»,
+    /help у админа молчал) — режем по строкам на части; у пользователей одна часть."""
+    chunks, cur = [], ""
+    for ln in text.split("\n"):
+        if cur and len(cur) + len(ln) + 1 > limit:
+            chunks.append(cur)
+            cur = ln
+        else:
+            cur = f"{cur}\n{ln}" if cur else ln
+    if cur:
+        chunks.append(cur)
+    return chunks
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     _mark_user_active_if_needed(user.id, user.full_name, user.username)
     is_admin = user.id in ADMIN_TELEGRAM_IDS
-    await update.message.reply_text(_build_help_text(is_admin), reply_markup=get_main_keyboard())
+    parts = _help_chunks(_build_help_text(is_admin))
+    for i, part in enumerate(parts):
+        await update.message.reply_text(
+            part, reply_markup=get_main_keyboard() if i == len(parts) - 1 else None)
 
 
 def _build_feedback_keyboard() -> InlineKeyboardMarkup:
@@ -3156,7 +3160,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         back_btn = InlineKeyboardMarkup([
             [InlineKeyboardButton("🎬 Видеоинструкция", callback_data="video_manual")],
             [InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")]])
-        await query.edit_message_text(_build_help_text(user.id in ADMIN_TELEGRAM_IDS), reply_markup=back_btn)
+        parts = _help_chunks(_build_help_text(user.id in ADMIN_TELEGRAM_IDS))
+        await query.edit_message_text(parts[0], reply_markup=back_btn if len(parts) == 1 else None)
+        for i, part in enumerate(parts[1:], 1):   # 18.10.2026: админская справка длиннее 4096 — хвост отдельными сообщениями
+            await context.bot.send_message(
+                user.id, part, reply_markup=back_btn if i == len(parts) - 1 else None)
 
     elif query.data == "video_manual":
         # 17.08.2026: раздел видеоинструкции — file_id хранится в bot_settings,
