@@ -1511,6 +1511,7 @@ BG_PROMPT_RULES = (
 )
 BG_KANDINSKY_SIZE = (576, 1024)      # 9:16, стороны кратны 64
 BG_GEMINI_MODEL = "gemini-2.5-flash-image"
+RESTYLE_GEMINI_MODEL = "gemini-3-pro-image"   # 24.10.2026: перерисовка — Pro, лучше держит текст и строки (~13 центов)
 
 
 def bg_style_for(wdate, shift: int = 0) -> str:
@@ -1546,14 +1547,14 @@ def bg_build_prompt(wdate, holiday: str | None, kind: str = "интервалы"
 
 
 def _bg_gemini(prompt: str, image: bytes | None = None, mime: str = "image/png",
-               aspect: str | None = "9:16") -> tuple[bytes | None, str, str]:
+               aspect: str | None = "9:16", model: str | None = None) -> tuple[bytes | None, str, str]:
     """Gemini: (данные, расширение, сообщение). Ключ GEMINI_API_KEY, модель GEMINI_IMAGE_MODEL.
     image — исходная картинка для перерисовки (24.10.2026, /restyle); aspect — формат ответа."""
     import json, base64, requests
     key = os.getenv("GEMINI_API_KEY", "").strip()
     if not key:
         return None, "", "нет GEMINI_API_KEY"
-    model = os.getenv("GEMINI_IMAGE_MODEL", BG_GEMINI_MODEL).strip() or BG_GEMINI_MODEL
+    model = (model or os.getenv("GEMINI_IMAGE_MODEL", BG_GEMINI_MODEL)).strip() or BG_GEMINI_MODEL
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
     parts = []
     if image:
@@ -1644,7 +1645,8 @@ def restyle_card(image: bytes, theme: str, mime: str = "image/png") -> tuple[byt
     prompt = RESTYLE_PROMPT.format(theme_part=theme_part)
     # 24.10.2026 (Антон): короткое задание по его образцу — длинный список условий модель читала как
     # «не трогай картинку» (карточка легла на фото кроксов), а строки всё равно терялись. Формат не навязываем.
-    return _bg_gemini(prompt, image=image, mime=mime, aspect=None)
+    model = os.getenv("GEMINI_RESTYLE_MODEL", RESTYLE_GEMINI_MODEL).strip() or RESTYLE_GEMINI_MODEL
+    return _bg_gemini(prompt, image=image, mime=mime, aspect=None, model=model)
 
 
 def bg_generate(prompt: str, provider: str | None = None) -> tuple[bytes | None, str, str]:

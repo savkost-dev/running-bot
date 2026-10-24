@@ -5,6 +5,13 @@
 
 ---
 
+## [0.50.21] 2026-10-24 — Перерисовка через Gemini 3 Pro Image
+
+### Изменено
+- **`ai_package._bg_gemini(..., model)`**, **`RESTYLE_GEMINI_MODEL = "gemini-3-pro-image"`** (переопределить: `GEMINI_RESTYLE_MODEL` в .env) — `restyle_card` зовёт Pro; фоны (`bg_generate`) остаются на `GEMINI_IMAGE_MODEL`/Flash. Повод: Flash терял строки таблицы и переписывал плашки.
+
+---
+
 ## [0.50.20] 2026-10-24 — Перерисовка: короткое задание, без навязанного формата
 
 ### Изменено
