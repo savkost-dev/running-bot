@@ -1546,7 +1546,7 @@ def bg_build_prompt(wdate, holiday: str | None, kind: str = "интервалы"
 
 
 def _bg_gemini(prompt: str, image: bytes | None = None, mime: str = "image/png",
-               aspect: str = "9:16") -> tuple[bytes | None, str, str]:
+               aspect: str | None = "9:16") -> tuple[bytes | None, str, str]:
     """Gemini: (данные, расширение, сообщение). Ключ GEMINI_API_KEY, модель GEMINI_IMAGE_MODEL.
     image — исходная картинка для перерисовки (24.10.2026, /restyle); aspect — формат ответа."""
     import json, base64, requests
@@ -1559,8 +1559,10 @@ def _bg_gemini(prompt: str, image: bytes | None = None, mime: str = "image/png",
     if image:
         parts.append({"inlineData": {"mimeType": mime, "data": base64.b64encode(image).decode()}})
     parts.append({"text": prompt})
-    body = {"contents": [{"parts": parts}],
-            "generationConfig": {"responseModalities": ["IMAGE"], "imageConfig": {"aspectRatio": aspect}}}
+    gen = {"responseModalities": ["IMAGE"]}
+    if aspect:
+        gen["imageConfig"] = {"aspectRatio": aspect}
+    body = {"contents": [{"parts": parts}], "generationConfig": gen}
     try:
         r = requests.post(url, json=body, timeout=180)
     except Exception as e:
@@ -1628,11 +1630,8 @@ def _bg_kandinsky(prompt: str) -> tuple[bytes | None, str, str]:
 
 
 RESTYLE_PROMPT = (
-    "Перерисуй эту картинку в стиле {theme_part}. Сделай весело: обыграй стереотипы и узнаваемые образы "
-    "этой темы — объёмные элементы, фактуры, декор и цвета в её духе. Но данные должны читаться нормально: "
-    "сохрани весь текст и все числа точь-в-точь, порядок строк и колонок таблицы, цвета ячеек отклонений "
-    "(синий, зелёный, жёлтый, красный) и подпись внизу. Декоративные надписи и логотипы в духе темы допустимы "
-    "на рамке и полях, не поверх данных. Формат и пропорции как у оригинала."
+    "Перерисуй это в стиле {theme_part}. Можно что-то весёлое, но нужно, чтобы данные читались нормально: "
+    "весь текст и все числа оставь точь-в-точь."
 )
 
 
@@ -1641,11 +1640,11 @@ def restyle_card(image: bytes, theme: str, mime: str = "image/png") -> tuple[byt
     Задание — по образцу Антона в Gemini; без темы Gemini берёт праздник из шапки карточки.
     Возвращает (данные, расширение, сообщение)."""
     theme = (theme or "").strip()
-    theme_part = (f"«{theme}»" if theme
-                  else "праздника, который написан в шапке карточки (строка с датой и названием праздника под датой тренировки)")
+    theme_part = f"«{theme}»" if theme else "праздника, который написан в шапке картинки"
     prompt = RESTYLE_PROMPT.format(theme_part=theme_part)
-    # Пропорции карточки ~ 1080×2300 — ближе к 9:16, чем к 3:4; Gemini сам подгонит под оригинал.
-    return _bg_gemini(prompt, image=image, mime=mime, aspect="9:16")
+    # 24.10.2026 (Антон): короткое задание по его образцу — длинный список условий модель читала как
+    # «не трогай картинку» (карточка легла на фото кроксов), а строки всё равно терялись. Формат не навязываем.
+    return _bg_gemini(prompt, image=image, mime=mime, aspect=None)
 
 
 def bg_generate(prompt: str, provider: str | None = None) -> tuple[bytes | None, str, str]:
