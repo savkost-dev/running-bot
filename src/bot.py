@@ -1370,6 +1370,7 @@ def _build_help_text(is_admin: bool) -> str:
             "Карточка:\n"
             "/holiday [дата] — праздник дня кнопками\n"
             "/bg [дата] — фон: p — задание; тема <фраза>; show — текущий; свой текст — рисовать по нему"
+            "\n/restyle [тема] — последний свой разбор (карточка + графики) перерисовать через Gemini, весело и со стереотипами темы (без темы — праздник дня); то же — кнопка «🎨 Перерисовать» под разбором"
         )
     return text
 
@@ -4081,6 +4082,98 @@ async def scheduled_bg_fallback(context: ContextTypes.DEFAULT_TYPE) -> None:
     if ai_package._background_for(tomorrow) or not ai_package._holiday_for(tomorrow):
         return
     await bg_make_and_preview(context, tomorrow)
+
+
+def _restyle_stash(chart_items: list, res: dict) -> str:
+    """Копирует картинки разбора в /tmp/restyle_<key>_<i>.png и пишет /tmp/restyle_<key>.json
+    {files, theme, name}. Тема — праздник на дату тренировки (пусто → Gemini читает шапку карточки)."""
+    import json, shutil, uuid
+    import ai_package
+    key = uuid.uuid4().hex[:8]
+    files = []
+    for i, (png, _cap) in enumerate(chart_items):
+        dst = f"/tmp/restyle_{key}_{i}.png"
+        shutil.copyfile(png, dst)
+        files.append(dst)
+    theme = ai_package._holiday_for(res.get("wdate")) or ""
+    with open(f"/tmp/restyle_{key}.json", "w", encoding="utf-8") as f:
+        json.dump({"files": files, "theme": theme, "name": res.get("name") or ""}, f, ensure_ascii=False)
+    return key
+
+
+async def _restyle_run(context, key: str, theme_override: str = "") -> None:
+    """Набор restyle_<key> → Gemini по каждой картинке → альбом админу."""
+    import json
+    import ai_package
+    try:
+        meta = json.load(open(f"/tmp/restyle_{key}.json", encoding="utf-8"))
+    except Exception:
+        await _notify_admin(context.bot, "🎨 Набор для перерисовки не найден (устарел после перезапуска?). Сделай разбор заново.")
+        return
+    theme = (theme_override or meta.get("theme") or "").strip()
+    shown = theme or "праздник из шапки карточки"
+    outs, errors = [], []
+    for src in meta.get("files") or []:
+        try:
+            data, ext, info = await asyncio.to_thread(ai_package.restyle_card, open(src, "rb").read(), theme)
+        except Exception as e:
+            data, ext, info = None, "", f"{type(e).__name__}: {e}"
+        if not data:
+            errors.append(f"{os.path.basename(src)}: {info}")
+            continue
+        out = src[:-4] + f"_restyle.{ext}"
+        with open(out, "wb") as f:
+            f.write(data)
+        outs.append((out, info))
+    if not outs:
+        await _notify_admin(context.bot, "🎨 Не перерисовалось: " + "; ".join(errors))
+        return
+    fh = [open(o, "rb") for o, _ in outs]
+    try:
+        media = [InputMediaPhoto(f, caption=f"🎨 «{shown}» · {meta.get('name') or ''} · {info}"[:1000])
+                 for f, (_, info) in zip(fh, outs)]
+        if len(media) >= 2:
+            await context.bot.send_media_group(ADMIN_ID, media=media)
+        else:
+            await context.bot.send_photo(ADMIN_ID, photo=fh[0], caption=media[0].caption)
+    except Exception as e:
+        await _notify_admin(context.bot, f"🎨 Готово, но не отправилось: {e}")
+    finally:
+        for f in fh:
+            f.close()
+    if errors:
+        await _notify_admin(context.bot, "🎨 Часть не перерисовалась: " + "; ".join(errors))
+
+
+async def restyle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Кнопка «🎨 Перерисовать (Gemini)» под разбором админа: rst:<key>."""
+    query = update.callback_query
+    if update.effective_user.id not in ADMIN_TELEGRAM_IDS:
+        await query.answer()
+        return
+    key = query.data.split(":", 1)[1]
+    await query.answer("Рисую, до минуты…")
+    context.application.create_task(_restyle_run(context, key))
+
+
+async def cmd_restyle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/restyle [тема] (admin, 24.10.2026) — последний набор картинок разбора админа → Gemini →
+    перерисовка в стиле темы (без темы — праздник на дату тренировки, иначе из шапки карточки).
+    Только в чат админу, файлы фонов и рассылку не трогает. ~4 цента за картинку."""
+    user = update.effective_user
+    if user.id not in ADMIN_TELEGRAM_IDS:
+        return
+    import glob
+    metas = sorted(glob.glob("/tmp/restyle_*.json"), key=os.path.getmtime)
+    if not metas:
+        await update.message.reply_text("Нет готового разбора — сделай разбор, под ним будет кнопка «🎨 Перерисовать».")
+        return
+    key = os.path.basename(metas[-1])[len("restyle_"):-len(".json")]
+    theme = " ".join(context.args or []).strip()
+    if theme.lower().startswith("тема "):
+        theme = theme[5:].strip()
+    await update.message.reply_text(f"⏳ Перерисовываю последний разбор{(' в стиле «' + theme + '»') if theme else ''}, до минуты…")
+    context.application.create_task(_restyle_run(context, key, theme))
 
 
 async def cmd_bg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -7497,7 +7590,7 @@ async def _report_ai_chunks(msg, res: dict, prompt: str, db_user_id: int, title:
 
 async def _report_send(context, user_id: int, msg, res: dict, chart_items: list,
                        ai_chunks, ai_stats, top_rows: list | None = None,
-                       title: str | None = None) -> None:
+                       title: str | None = None, clean_items: list | None = None) -> None:
     """Отправка готового разбора: сперва картинки, затем текст ИИ; кнопки — на последнем сообщении.
     Общая для /report и /report_long. top_rows — дополнительные ряды кнопок сверху
     (у интервального разбора — «⚙️ Настроить разбор»; у лонга их нет)."""
@@ -7514,6 +7607,20 @@ async def _report_send(context, user_id: int, msg, res: dict, chart_items: list,
         menu_btn = InlineKeyboardMarkup([
             [InlineKeyboardButton("⭐ Оценить разбор", callback_data=_rate_cb)],
             [InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu_new")]])
+    # 24.10.2026 (Антон): админу — кнопка «🎨 Перерисовать» под разбором: обе картинки через Gemini
+    # в стиле праздника дня. PNG ниже удаляются, поэтому набор копируется в /tmp/restyle_<key>_*.png.
+    if user_id == ADMIN_ID and chart_items:
+        try:
+            # 24.10.2026: в Gemini уходит чистая пара без ИИ-подложки (clean_items), если её собрали
+            key = _restyle_stash(clean_items or chart_items, res)
+            for png, _ in (clean_items or []):
+                try:
+                    os.remove(png)
+                except OSError:
+                    pass
+            top_rows = list(top_rows or []) + [[InlineKeyboardButton("🎨 Перерисовать (Gemini)", callback_data=f"rst:{key}")]]
+        except Exception as e:
+            logger.warning(f"restyle stash failed: {e}")
     if top_rows:
         menu_btn = InlineKeyboardMarkup(list(top_rows) + list(menu_btn.inline_keyboard))
     btn_on_last_photo = not ai_chunks
@@ -7702,9 +7809,29 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
                    f"{int(res.get('skip_laps') or 0)}:{1 if simple_mode else 0}")
         if len(_cfg_cb.encode()) <= 64:
             top_rows = [[InlineKeyboardButton("⚙️ Настроить разбор", callback_data=_cfg_cb)]]
+    # 24.10.2026 (Антон): админу — чистая пара (без ИИ-подложки) для кнопки «🎨 Перерисовать»
+    clean_items = None
+    if update.effective_user.id in ADMIN_TELEGRAM_IDS and len(chart_items) >= 2:
+        try:
+            from ai_package import build_report_card as _brc, build_charts_stacked as _bcs
+            _ccard = await _brc(
+                res.get("splits"), res.get("plan_steps"), res["name"],
+                res.get("wdate"), res.get("wgroup"), res.get("source"),
+                res.get("s4"), "/tmp", _tag + "c", dark=False,
+                splits400=res.get("splits400"),
+                no_gps=bool(res.get("no_gps")), by_watch_plan=bool(res.get("by_watch_plan")),
+                by_stryd=bool(res.get("by_stryd")), cut_by_plan=bool(res.get("cut_by_plan")),
+                skip_laps=int(res.get("skip_laps") or 0) if skip_laps is not None else 0, plain=True)
+            _cstacked = await _bcs(
+                res.get("splits"), res.get("plan_steps"), res["name"],
+                "/tmp", _tag + "c", dark=False, source=res.get("source") or "",
+                splits_fine=res.get("splits100"))   # без wdate → без фона
+            clean_items = [(p, "") for p in (_ccard, _cstacked) if p]
+        except Exception as e:
+            logger.warning(f"/report clean pair for restyle failed: {e}")
     # Отдаём всё разом: сперва графики, затем текст анализа.
     await _report_send(context, update.effective_user.id, msg, res, chart_items,
-                       ai_chunks, _ai_stats, top_rows=top_rows)
+                       ai_chunks, _ai_stats, top_rows=top_rows, clean_items=clean_items)
 
 
 def _long_title(res: dict) -> str:
@@ -7826,7 +7953,25 @@ async def cmd_report_long(update: Update, context: ContextTypes.DEFAULT_TYPE,
     ai_chunks, _ai_stats = None, None
     if not simple_mode:
         ai_chunks, _ai_stats = await _report_ai_chunks(msg, res, PROMPT_LONG, db_user_id, title=_long_title(res))
-    await _report_send(context, chat_id, msg, res, chart_items, ai_chunks, _ai_stats, title=_long_title(res))
+    clean_items = None   # 24.10.2026: чистая пара без подложки для «🎨 Перерисовать» (админ)
+    if chat_id == ADMIN_ID and len(chart_items) >= 2:
+        try:
+            _ccard = await build_long_card(
+                res.get("splits"), res.get("plan_steps"), res["name"],
+                res.get("wdate"), res.get("wgroup"), res.get("source"),
+                res.get("s4"), "/tmp", _tag + "c", dark=False,
+                splits400=res.get("splits400"),
+                no_gps=bool(res.get("no_gps")), by_watch_plan=bool(res.get("by_watch_plan")),
+                by_stryd=bool(res.get("by_stryd")), plain=True)
+            _cstacked = await build_long_charts_stacked(
+                res.get("splits"), res.get("plan_steps"), res["name"],
+                "/tmp", _tag + "c", dark=False, source=res.get("source") or "",
+                splits_fine=res.get("splits100"))   # без wdate → без фона
+            clean_items = [(p, "") for p in (_ccard, _cstacked) if p]
+        except Exception as e:
+            logger.warning(f"/report_long clean pair for restyle failed: {e}")
+    await _report_send(context, chat_id, msg, res, chart_items, ai_chunks, _ai_stats, title=_long_title(res),
+                       clean_items=clean_items)
 
 
 async def cmd_long2(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -8467,6 +8612,8 @@ def main():
     app.add_handler(CommandHandler("show_analyze",  cmd_show_analyze))
     app.add_handler(CommandHandler("holiday",       cmd_holiday))
     app.add_handler(CommandHandler("bg",            cmd_bg))
+    app.add_handler(CommandHandler("restyle",       cmd_restyle))
+    app.add_handler(CallbackQueryHandler(restyle_callback, pattern=r"^rst:"))
     app.add_handler(CommandHandler("b",         b_self_command))
     app.add_handler(CommandHandler("b_user",    b_command))
     app.add_handler(CommandHandler("a_user",    a_user_command))

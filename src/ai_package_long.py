@@ -77,7 +77,13 @@ async def _garmin_candidate(db_user_id, selector, kind=None):
     try:
         meta = await asyncio.to_thread(client.get_activity, act_id)
         sensors = ((meta or {}).get("metadataDTO") or {}).get("sensors") or []
-        stryd = any(s.get("antplusDeviceType") == "STRIDE_SPEED_DISTANCE" for s in sensors)
+        # 18.10.2026 (Антон): только настоящий Stryd. Нагрудник Garmin HRM-Pro тоже отдаёт тип STRIDE_SPEED_DISTANCE
+        # (manufacturer GARMIN, серийник пульсометра), и его дистанция без GPS шла как «точная»: у Юрия 18.10 круги
+        # 22,0 км при 19,2 км в активности, темпы 4:42/4:23 вместо 5:24/5:02. Обход 33 пользователей Garmin 18.10:
+        # Stryd приходит как manufacturer STRYD (Ольга, Дмитрий, Ионов) или с пустым manufacturer (Антон);
+        # GARMIN — HRM-Pro/HRM-Pro Plus, DYNASTREAM — шагомер Garmin (Рагожин). Пусто = Stryd, иначе только STRYD.
+        stryd = any(s.get("antplusDeviceType") == "STRIDE_SPEED_DISTANCE"
+                    and (s.get("manufacturer") or "").upper() in ("", "STRYD") for s in sensors)
     except Exception:
         stryd = None
     no_gps_raw = _no_gps(act, "garmin")
@@ -916,7 +922,9 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
                             dark: bool = False, splits400=None,
                             no_gps: bool = False, by_watch_plan: bool = False,
                             by_stryd: bool = False, cut_by_plan: bool = False,
-                            skip_laps: int = 0) -> str | None:
+                            skip_laps: int = 0, plain: bool = False) -> str | None:
+    # plain=True (24.10.2026): без фоновой картинки — чистая карточка для перерисовки в Gemini;
+    # строка праздника остаётся.
     # cut_by_plan / skip_laps — 05.10.2026: приняты ради совместимости с подписью интервальной карточки
     # (v0.33–0.34), у лонга НЕ используются: нарезки по плану и пропуска кругов у лонга нет.
     """Вертикальная карточка разбора под телефон (портрет, три зоны сверху вниз):
@@ -933,7 +941,7 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
     # С фоном карточка тёмная. Нет фона — всё как раньше. CARD_THEME=0 — откат.
     theme = card_theme_for(wdate)
     holiday_ln = theme.get("holiday")
-    bg_path = theme.get("bg")
+    bg_path = None if plain else theme.get("bg")
     if bg_path:
         dark = True
 

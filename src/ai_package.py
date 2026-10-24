@@ -757,7 +757,13 @@ async def _garmin_candidate(db_user_id, selector, kind=None):
     try:
         meta = await asyncio.to_thread(client.get_activity, act_id)
         sensors = ((meta or {}).get("metadataDTO") or {}).get("sensors") or []
-        stryd = any(s.get("antplusDeviceType") == "STRIDE_SPEED_DISTANCE" for s in sensors)
+        # 18.10.2026 (Антон): только настоящий Stryd. Нагрудник Garmin HRM-Pro тоже отдаёт тип STRIDE_SPEED_DISTANCE
+        # (manufacturer GARMIN, серийник пульсометра), и его дистанция без GPS шла как «точная»: у Юрия 18.10 круги
+        # 22,0 км при 19,2 км в активности, темпы 4:42/4:23 вместо 5:24/5:02. Обход 33 пользователей Garmin 18.10:
+        # Stryd приходит как manufacturer STRYD (Ольга, Дмитрий, Ионов) или с пустым manufacturer (Антон);
+        # GARMIN — HRM-Pro/HRM-Pro Plus, DYNASTREAM — шагомер Garmin (Рагожин). Пусто = Stryd, иначе только STRYD.
+        stryd = any(s.get("antplusDeviceType") == "STRIDE_SPEED_DISTANCE"
+                    and (s.get("manufacturer") or "").upper() in ("", "STRYD") for s in sensors)
     except Exception:
         stryd = None
     no_gps_raw = _no_gps(act, "garmin")
@@ -1539,16 +1545,22 @@ def bg_build_prompt(wdate, holiday: str | None, kind: str = "интервалы"
     return text
 
 
-def _bg_gemini(prompt: str) -> tuple[bytes | None, str, str]:
-    """Gemini: (данные, расширение, сообщение). Ключ GEMINI_API_KEY, модель GEMINI_IMAGE_MODEL."""
+def _bg_gemini(prompt: str, image: bytes | None = None, mime: str = "image/png",
+               aspect: str = "9:16") -> tuple[bytes | None, str, str]:
+    """Gemini: (данные, расширение, сообщение). Ключ GEMINI_API_KEY, модель GEMINI_IMAGE_MODEL.
+    image — исходная картинка для перерисовки (24.10.2026, /restyle); aspect — формат ответа."""
     import json, base64, requests
     key = os.getenv("GEMINI_API_KEY", "").strip()
     if not key:
         return None, "", "нет GEMINI_API_KEY"
     model = os.getenv("GEMINI_IMAGE_MODEL", BG_GEMINI_MODEL).strip() or BG_GEMINI_MODEL
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
-    body = {"contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"responseModalities": ["IMAGE"], "imageConfig": {"aspectRatio": "9:16"}}}
+    parts = []
+    if image:
+        parts.append({"inlineData": {"mimeType": mime, "data": base64.b64encode(image).decode()}})
+    parts.append({"text": prompt})
+    body = {"contents": [{"parts": parts}],
+            "generationConfig": {"responseModalities": ["IMAGE"], "imageConfig": {"aspectRatio": aspect}}}
     try:
         r = requests.post(url, json=body, timeout=180)
     except Exception as e:
@@ -1613,6 +1625,27 @@ def _bg_kandinsky(prompt: str) -> tuple[bytes | None, str, str]:
         return None, "", "Kandinsky: не дождались за 3 мин"
     except Exception as e:
         return None, "", f"Kandinsky: {type(e).__name__}: {e}"
+
+
+RESTYLE_PROMPT = (
+    "Перерисуй эту картинку в стиле {theme_part}. Сделай весело: обыграй стереотипы и узнаваемые образы "
+    "этой темы — объёмные элементы, фактуры, декор и цвета в её духе. Но данные должны читаться нормально: "
+    "сохрани весь текст и все числа точь-в-точь, порядок строк и колонок таблицы, цвета ячеек отклонений "
+    "(синий, зелёный, жёлтый, красный) и подпись внизу. Декоративные надписи и логотипы в духе темы допустимы "
+    "на рамке и полях, не поверх данных. Формат и пропорции как у оригинала."
+)
+
+
+def restyle_card(image: bytes, theme: str, mime: str = "image/png") -> tuple[bytes | None, str, str]:
+    """Карточка → Gemini → та же карточка в стиле темы (24.10.2026, Антон: «ты посмотри, какая красота»).
+    Задание — по образцу Антона в Gemini; без темы Gemini берёт праздник из шапки карточки.
+    Возвращает (данные, расширение, сообщение)."""
+    theme = (theme or "").strip()
+    theme_part = (f"«{theme}»" if theme
+                  else "праздника, который написан в шапке карточки (строка с датой и названием праздника под датой тренировки)")
+    prompt = RESTYLE_PROMPT.format(theme_part=theme_part)
+    # Пропорции карточки ~ 1080×2300 — ближе к 9:16, чем к 3:4; Gemini сам подгонит под оригинал.
+    return _bg_gemini(prompt, image=image, mime=mime, aspect="9:16")
 
 
 def bg_generate(prompt: str, provider: str | None = None) -> tuple[bytes | None, str, str]:
@@ -2029,7 +2062,9 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
                             dark: bool = False, splits400=None,
                             no_gps: bool = False, by_watch_plan: bool = False,
                             by_stryd: bool = False, cut_by_plan: bool = False,
-                            skip_laps: int = 0) -> str | None:
+                            skip_laps: int = 0, plain: bool = False) -> str | None:
+    # plain=True (24.10.2026): без фоновой картинки — чистая карточка для перерисовки в Gemini;
+    # строка праздника остаётся.
     """Вертикальная карточка разбора под телефон (портрет, три зоны сверху вниз):
     1) шапка — заголовок, название/дата/группа, суть, структура плана;
     2) факт — таблица повторов (зебра, заливка отклонений, строка «ср.»);
@@ -2044,7 +2079,7 @@ async def build_report_card(splits, plan_steps, name: str, wdate, wgroup, source
     # С фоном карточка всегда тёмная (текст светлый поверх плашек). CARD_THEME=0 — откат.
     theme = card_theme_for(wdate)
     holiday_ln = theme.get("holiday")
-    bg_path = theme.get("bg")
+    bg_path = None if plain else theme.get("bg")
     if bg_path:
         dark = True
 
