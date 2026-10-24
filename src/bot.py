@@ -2914,7 +2914,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "fit_dl":
         data = _fit_data.get(user.id)
         if not data:
-            await context.bot.send_message(user.id, "⏱ Данные устарели. Запроси рекомендацию заново (/workout или /long)")
+            await context.bot.send_message(user.id, "⏱ Данные устарели. Запроси рекомендацию заново: /long или /workout")
             return
         try:
             from fit_generator import (
@@ -2954,7 +2954,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         data = _fit_data.get(user.id)
         if not data:
-            await context.bot.send_message(user.id, "⏱ Данные устарели. Запроси рекомендацию заново (/workout или /long)")
+            await context.bot.send_message(user.id, "⏱ Данные устарели. Запроси рекомендацию заново: /long или /workout")
             return
         try:
             from fit_generator import build_garmin_interval_workout, build_garmin_long_run_workout
@@ -3006,7 +3006,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data = _fit_data.get(user.id)
         if not data:
             await context.bot.send_message(
-                user.id, "⏱ Данные устарели. Запроси рекомендацию заново (/workout).",
+                user.id, "⏱ Данные устарели. Запроси рекомендацию заново: /long или /workout.",
                 reply_markup=_add_main_menu_btn(None))
             return
         data["calendar"] = not data.get("calendar", True)
@@ -3021,7 +3021,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data = _fit_data.get(user.id)
         if not data:
             await context.bot.send_message(
-                user.id, "⏱ Данные устарели. Запроси рекомендацию заново (/workout).",
+                user.id, "⏱ Данные устарели. Запроси рекомендацию заново: /long или /workout.",
                 reply_markup=_add_main_menu_btn(None))
             return
         data["warmup"] = not data.get("warmup")
@@ -3060,7 +3060,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not data:
             await context.bot.send_message(
                 user.id,
-                "⏱ Данные устарели. Запроси рекомендацию заново (/workout).",
+                "⏱ Данные устарели. Запроси рекомендацию заново: /long или /workout.",
                 reply_markup=_add_main_menu_btn(None),
             )
             return
@@ -3360,7 +3360,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data = _rating_data.get(user.id)
         if not data:
             await context.bot.send_message(
-                user.id, "⏱ Данные устарели. Запроси рекомендацию заново (/workout или /long)."
+                user.id, "⏱ Данные устарели. Запроси рекомендацию заново: /long или /workout."
             )
             return
         context.user_data["rating_pending"] = dict(data)
@@ -6060,10 +6060,18 @@ async def cmd_resend_evening(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await update.message.reply_text(f"Досылка завершена: отправлено {ok}, ошибок {fail}")
 
 
+# 24.10.2026 (Антон): плашка «Управление рассылкой» после каждого автоматического сообщения выключена —
+# была для тех, кто хотел отключить утро; теперь все в курсе, а она занимает место и отвлекает.
+# Вернуть: NOTIFY_HINT = True. Настройка уведомлений остаётся в меню и по /notifications.
+NOTIFY_HINT = False
+
+
 async def _send_notify_hint(bot, telegram_id: int) -> None:
     """20.08.2026: после каждого АВТОМАТИЧЕСКОГО сообщения — отдельная мини-плашка
     с кнопкой на настройку рассылки: отключение должно быть на виду, а не в меню.
-    Не критична: ошибка плашки не должна ломать саму рассылку."""
+    Не критична: ошибка плашки не должна ломать саму рассылку. С 24.10 — под флагом NOTIFY_HINT."""
+    if not NOTIFY_HINT:
+        return
     try:
         await bot.send_message(
             telegram_id,
